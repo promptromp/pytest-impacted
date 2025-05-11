@@ -60,3 +60,8 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str):
                 resolved_modules.append(module_name)
 
     return resolved_modules
+
+
+def resolve_modules_to_files(modules: list[str]) -> list:
+    """Resolve module names to their corresponding file paths."""
+    return [importlib.import_module(module_path).__file__ for module_path in modules]

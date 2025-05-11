@@ -11,9 +11,7 @@ def find_modified_files_in_repo(repo_dir: str) -> list[str] | None:
     :param path: path to the root of the git repository.
 
     """
-    # Get the path to the package
-    path = Path(repo_dir)
-    repo = Repo(path=path.parent)
+    repo = Repo(path=Path(repo_dir))
 
     if not repo.is_dirty():
         # No changes in the repository and we are working in unstanged mode.
