@@ -1,0 +1,10 @@
+site_name: pytest-affected
+site_description: A pytest plugin that selectively runs tests affected by codechanges via git introspection, ASL parsing, and dependency graph analysis.
+site_author: Adam Ever-Hadani
+
+theme: readthedocs
+
+repo_url: https://github.com/adamhadani/pytest-affected
+
+pages:
+- Home: index.md
