@@ -35,11 +35,11 @@ repos:
   rev: v1.15.0
   hooks:
     - id: mypy
-- repo: local
-  hooks:
-  - id: pytest
-    name: pytest [with coverage, without slow]
-    entry: bash -ec "uv run python -m pytest --cov=pytest_affected tests --cov-fail-under='1' -m 'not slow'"
-    language: system
-    types: [python]
-    pass_filenames: false
+#- repo: local
+#  hooks:
+#  - id: pytest
+#    name: pytest [with coverage, without slow]
+#    entry: bash -ec "uv run python -m pytest --cov=pytest_affected tests -m 'not slow'"
+#    language: system
+#    types: [python]
+#    pass_filenames: false

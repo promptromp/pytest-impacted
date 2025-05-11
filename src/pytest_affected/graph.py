@@ -9,7 +9,7 @@ from pytest_affected.traversal import import_submodules
 from pytest_affected.parsing import is_test_module, parse_module_imports
 
 
-def resolve_affected_tests(modified_modules, digraph):
+def resolve_affected_tests(modified_modules, dep_tree: nx.DiGraph) -> list[str]:
     """Resolve affected tests based on modified modules."""
     affected_tests = []
     for module in modified_modules:
@@ -17,7 +17,7 @@ def resolve_affected_tests(modified_modules, digraph):
         # using the (inverted) directed graph of imports which is the dependency graph.
         dependent_nodes = [
             node
-            for node in nx.dfs_preorder_nodes(digraph, source=module)
+            for node in nx.dfs_preorder_nodes(dep_tree, source=module)
             if is_test_module(node)
         ]
 
@@ -47,7 +47,8 @@ def build_dep_tree(package: str | types.ModuleType) -> nx.DiGraph:
 
     maybe_prune_graph(digraph)
 
-    return digraph
+    # The dependency graph is the reverse of the import graph, so invert it before returning.
+    return inverted(digraph)
 
 
 def maybe_prune_graph(digraph: nx.DiGraph) -> nx.DiGraph:
