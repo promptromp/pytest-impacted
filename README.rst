@@ -24,13 +24,16 @@ This `pytest`_ plugin was generated with `Cookiecutter`_ along with `@hackebrot`
 Features
 --------
 
-* TODO
+* Configurable to meet your demands for both local and CI-driven invocations.
+* Built using a modern, best-of-breed Python stack, using [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/) for
+  Python code ASL, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories.
 
 
 Requirements
 ------------
 
-* TODO
+* All requirements are purely Pythonic and are installed as part of the
+  Installation method described below.
 
 
 Installation
@@ -44,7 +47,9 @@ You can install "pytest-affected" via `pip`_ from `PyPI`_::
 Usage
 -----
 
-* TODO
+Use as a pytest plugin:
+
+  $ pytest -p affected my_package/
 
 Contributing
 ------------
@@ -55,22 +60,3 @@ License
 -------
 
 Distributed under the terms of the `MIT`_ license, "pytest-affected" is free and open source software
-
-
-Issues
-------
-
-If you encounter any problems, please `file an issue`_ along with a detailed description.
-
-.. _`Cookiecutter`: https://github.com/audreyr/cookiecutter
-.. _`@hackebrot`: https://github.com/hackebrot
-.. _`MIT`: https://opensource.org/licenses/MIT
-.. _`BSD-3`: https://opensource.org/licenses/BSD-3-Clause
-.. _`GNU GPL v3.0`: https://www.gnu.org/licenses/gpl-3.0.txt
-.. _`Apache Software License 2.0`: https://www.apache.org/licenses/LICENSE-2.0
-.. _`cookiecutter-pytest-plugin`: https://github.com/pytest-dev/cookiecutter-pytest-plugin
-.. _`file an issue`: https://github.com/adamhadani/pytest-affected/issues
-.. _`pytest`: https://github.com/pytest-dev/pytest
-.. _`tox`: https://tox.readthedocs.io/en/latest/
-.. _`pip`: https://pypi.org/project/pip/
-.. _`PyPI`: https://pypi.org/project
