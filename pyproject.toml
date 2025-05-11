@@ -9,7 +9,7 @@ name = "pytest-affected"
 description = "A pytest plugin that selectively runs tests affected by codechanges via git introspection, ASL parsing, and dependency graph analysis."
 version = "0.1.0"
 readme = "README.rst"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [
     { name = "Adam Ever-Hadani", email = "adamhadani@gmail.com" },
 ]
@@ -24,11 +24,10 @@ classifiers = [
     "Topic :: Software Development :: Testing",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
@@ -39,7 +38,9 @@ dependencies = [
     "gitpython>=3.1.44",
     "pytest>=8.0.0",
 ]
+
 [project.urls]
 Repository = "https://github.com/adamhadani/pytest-affected"
+
 [project.entry-points.pytest11]
 affected = "pytest_affected.plugin"
