@@ -1,0 +1,45 @@
+fail_fast: true
+repos:
+-   repo: local
+    hooks:
+    # do not allow commits with files containing certain blacklisted strings
+    -   id: dontship
+        name: detect blacklisted strings
+        exclude: ^.pre-commit-config.yaml
+        entry: codeartifact
+        language: pygrep
+        types: [text]
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+    - id: check-added-large-files
+    - id: fix-byte-order-marker
+    - id: check-case-conflict
+    - id: check-json
+    - id: check-yaml
+      args: [ --unsafe ]
+    - id: detect-aws-credentials
+      args: [ --allow-missing-credentials ]
+    - id: detect-private-key
+    - id: end-of-file-fixer
+    - id: trailing-whitespace
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.5.0
+  hooks:
+    # Run the linter.
+    - id: ruff
+      args: [ --fix ]
+    # Run the formatter.
+    - id: ruff-format
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.15.0
+  hooks:
+    - id: mypy
+- repo: local
+  hooks:
+  - id: pytest
+    name: pytest [with coverage, without slow]
+    entry: bash -ec "uv run python -m pytest --cov=pytest_affected src/pytest_affected/tests --cov-fail-under='85' -m 'not slow'"
+    language: system
+    types: [python]
+    pass_filenames: false
