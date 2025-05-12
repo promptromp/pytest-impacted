@@ -41,7 +41,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/adamhadani/pytest-affected"
+Repository = "https://github.com/promptromp/pytest-affected"
 
 [project.entry-points.pytest11]
 affected = "pytest_affected.plugin"
