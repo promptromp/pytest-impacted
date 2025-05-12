@@ -9,9 +9,9 @@
 
 A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis.
 
-* Configurable to meet your demands for both local and CI-driven invocations.
+* Configurable to meet your demands for both local and CI-driven invocations. :shipit:
 * Built using a modern, best-of-breed Python stack, using [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/) for
-  Python code AST, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories.
+  Python code AST, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories. :rocket:
 
 ## Installation
 
