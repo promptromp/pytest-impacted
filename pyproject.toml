@@ -38,9 +38,11 @@ dependencies = [
     "networkx>=3.4.2",
     "pytest>=8.0.0",
 ]
+dynamic = ["version"]
 
 [project.urls]
-Repository = "https://github.com/promptromp/pytest-impacted"
+Homepage = "https://github.com/promptromp/pytest-impacted"
+Issues = "https://github.com/promptromp/pytest-impacted/issues"
 
 [project.entry-points.pytest11]
 impacted = "pytest_impacted.plugin"
@@ -48,5 +50,6 @@ impacted = "pytest_impacted.plugin"
 [dependency-groups]
 dev = [
     "coverage>=7.8.0",
+    "mypy>=1.15.0",
     "pytest-cov>=6.1.1",
 ]
