@@ -69,10 +69,9 @@ def pytest_configure(config):
                 "No module specified. Please specify a module using --impacted-module."
             )
 
-        if (
-            config.getoption("impacted_git_mode") == GitMode.BRANCH
-            and not config.getoption("impacted_base_branch")
-        ):
+        if config.getoption(
+            "impacted_git_mode"
+        ) == GitMode.BRANCH and not config.getoption("impacted_base_branch"):
             # If the git mode is branch, we need to check if there is a base branch specified.
             raise UsageError(
                 "No base branch specified. Please specify a base branch using --impacted-base-branch."

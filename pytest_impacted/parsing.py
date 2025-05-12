@@ -11,9 +11,7 @@ def should_silently_ignore_oserror(file_path: str) -> bool:
     # Nb. __init__ files often have zero bytes in which case inspect.getsource()
     # raises an OSError. we ignore those cases as well as any other file thats explicitly
     # zero bytes in size.
-    return any((
-        os.stat(file_path).st_size == 0,
-    ))
+    return any((os.stat(file_path).st_size == 0,))
 
 
 def parse_module_imports(module):
@@ -26,7 +24,9 @@ def parse_module_imports(module):
         if should_silently_ignore_oserror(module.__file__):
             return []
         else:
-            logging.error("Exception raised while trying to get source code for module %s", module)
+            logging.error(
+                "Exception raised while trying to get source code for module %s", module
+            )
             raise
 
     if not source:

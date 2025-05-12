@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 from pytest_impacted import display
 
+
 def make_mock_session():
     mock_terminalreporter = MagicMock()
     mock_pluginmanager = MagicMock()
@@ -20,8 +21,8 @@ def test_notify():
     terminalreporter.write.assert_called_once()
     args, kwargs = terminalreporter.write.call_args
     assert "Hello, world!" in args[0]
-    assert kwargs.get('yellow') is True
-    assert kwargs.get('bold') is True
+    assert kwargs.get("yellow") is True
+    assert kwargs.get("bold") is True
 
 
 def test_warn():
@@ -30,5 +31,5 @@ def test_warn():
     terminalreporter.write.assert_called_once()
     args, kwargs = terminalreporter.write.call_args
     assert "WARNING: Danger!" in args[0]
-    assert kwargs.get('yellow') is True
-    assert kwargs.get('bold') is True 
+    assert kwargs.get("yellow") is True
+    assert kwargs.get("bold") is True

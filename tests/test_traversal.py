@@ -20,7 +20,7 @@ def test_iter_namespace_with_string():
     modules = list(iter_namespace("pytest_impacted"))
     assert len(modules) > 0
     # pkgutil.iter_modules returns ModuleInfo objects, not ModuleType
-    assert all(hasattr(m, 'name') for m in modules)
+    assert all(hasattr(m, "name") for m in modules)
 
 
 def test_iter_namespace_with_module():
@@ -30,7 +30,7 @@ def test_iter_namespace_with_module():
     modules = list(iter_namespace(package))
     assert len(modules) > 0
     # pkgutil.iter_modules returns ModuleInfo objects, not ModuleType
-    assert all(hasattr(m, 'name') for m in modules)
+    assert all(hasattr(m, "name") for m in modules)
 
 
 def test_import_submodules():
@@ -48,7 +48,12 @@ def test_resolve_files_to_modules():
     package_path = Path(importlib.import_module("pytest_impacted").__path__[0])
     test_file = str(package_path / "traversal.py")
     # Simulate the replacement logic
-    module_name = test_file.replace(str(package_path), "").replace("/", ".").replace(".py", "").lstrip(".")
+    module_name = (
+        test_file.replace(str(package_path), "")
+        .replace("/", ".")
+        .replace(".py", "")
+        .lstrip(".")
+    )
     submodules = import_submodules("pytest_impacted")
     modules = resolve_files_to_modules([test_file], "pytest_impacted")
     # The function will only return the module name if it matches a key in submodules
@@ -78,4 +83,4 @@ def test_resolve_modules_to_files_with_invalid_module():
     """Test resolve_modules_to_files with an invalid module."""
     # Test with a non-existent module
     with pytest.raises(ModuleNotFoundError):
-        resolve_modules_to_files(["nonexistent.module"]) 
+        resolve_modules_to_files(["nonexistent.module"])
