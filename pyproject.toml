@@ -5,10 +5,10 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pytest-affected"
-description = "A pytest plugin that selectively runs tests affected by codechanges via git introspection, ASL parsing, and dependency graph analysis."
+name = "pytest-impacted"
+description = "A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis."
 version = "0.1.0"
-readme = "README.rst"
+readme = "README.md"
 requires-python = ">=3.11"
 authors = [
     { name = "PromptRomp", email = "promptromp.contact@gmail.com" },
@@ -40,10 +40,10 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/promptromp/pytest-affected"
+Repository = "https://github.com/promptromp/pytest-impacted"
 
 [project.entry-points.pytest11]
-affected = "pytest_affected.plugin"
+impacted = "pytest_impacted.plugin"
 
 [dependency-groups]
 dev = [

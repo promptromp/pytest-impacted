@@ -5,13 +5,13 @@ import types
 
 import networkx as nx
 
-from pytest_affected.traversal import import_submodules
-from pytest_affected.parsing import is_test_module, parse_module_imports
+from pytest_impacted.traversal import import_submodules
+from pytest_impacted.parsing import is_test_module, parse_module_imports
 
 
-def resolve_affected_tests(modified_modules, dep_tree: nx.DiGraph) -> list[str]:
-    """Resolve affected tests based on modified modules."""
-    affected_tests = []
+def resolve_impacted_tests(modified_modules, dep_tree: nx.DiGraph) -> list[str]:
+    """Resolve impacted tests based on modified modules."""
+    impacted_tests = []
     for module in modified_modules:
         # Find all nodes that depend on the modified module by doing a DFS from the module
         # using the (inverted) directed graph of imports which is the dependency graph.
@@ -21,13 +21,13 @@ def resolve_affected_tests(modified_modules, dep_tree: nx.DiGraph) -> list[str]:
             if is_test_module(node)
         ]
 
-        affected_tests.extend(dependent_nodes)
+        impacted_tests.extend(dependent_nodes)
 
     # Remove duplicates and sort the list for good measure.
     # (although the order of the tests should not matter)
-    affected_tests = sorted(list(set(affected_tests)))
+    impacted_tests = sorted(list(set(impacted_tests)))
 
-    return affected_tests
+    return impacted_tests
 
 
 def build_dep_tree(package: str | types.ModuleType) -> nx.DiGraph:

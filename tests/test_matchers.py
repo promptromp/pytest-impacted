@@ -1,21 +1,21 @@
-"""Unit-tests for the pytest_affected plugin."""
+"""Unit-tests for the matchers module."""
 
-from pytest_affected.matchers import matches_affected_tests
-
-
-def test_matches_affected_tests_positive():
-    """Test that matches_affected_tests returns True for matching paths."""
-    affected = ["foo/bar/test_sample.py", "foo/bar/test_other.py"]
-    assert matches_affected_tests("test_sample.py", affected_tests=affected)
-    assert matches_affected_tests("test_other.py", affected_tests=affected)
+from pytest_impacted.matchers import matches_impacted_tests
 
 
-def test_matches_affected_tests_negative():
-    """Test that matches_affected_tests returns False for non-matching paths."""
-    affected = ["foo/bar/test_sample.py", "foo/bar/test_other.py"]
-    assert not matches_affected_tests("not_a_test.py", affected_tests=affected)
+def test_matches_impacted_tests_positive():
+    """Test that matches_impacted_tests returns True for matching paths."""
+    impacted = ["foo/bar/test_sample.py", "foo/bar/test_other.py"]
+    assert matches_impacted_tests("test_sample.py", impacted_tests=impacted)
+    assert matches_impacted_tests("test_other.py", impacted_tests=impacted)
 
 
-def test_matches_affected_tests_empty():
-    """Test that matches_affected_tests returns False if affected_tests is empty."""
-    assert not matches_affected_tests("test_sample.py", affected_tests=[])
+def test_matches_impacted_tests_negative():
+    """Test that matches_impacted_tests returns False for non-matching paths."""
+    impacted = ["foo/bar/test_sample.py", "foo/bar/test_other.py"]
+    assert not matches_impacted_tests("not_a_test.py", impacted_tests=impacted)
+
+
+def test_matches_impacted_tests_empty():
+    """Test that matches_impacted_tests returns False if impacted_tests is empty."""
+    assert not matches_impacted_tests("test_sample.py", impacted_tests=[])

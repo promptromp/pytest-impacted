@@ -1,4 +1,4 @@
-"""Display and logging utilities for pytest-affected."""
+"""Display and logging utilities."""
 
 
 def notify(message: str, session) -> None:

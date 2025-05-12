@@ -1,3 +1,3 @@
-# Welcome to pytest-affected
+# Welcome to pytest-impacted
 
-A pytest plugin that selectively runs tests affected by codechanges via git introspection, ASL parsing, and dependency graph analysis.
+A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis.

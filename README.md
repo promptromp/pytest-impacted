@@ -1,10 +1,10 @@
-# pytest-affected
+# pytest-impacted
 
-[![PyPI version](https://img.shields.io/pypi/v/pytest-affected.svg)](https://pypi.org/project/pytest-affected)
-[![Python versions](https://img.shields.io/pypi/pyversions/pytest-affected.svg)](https://pypi.org/project/pytest-affected)
-[![See Build Status on GitHub Actions](https://github.com/promptromp/pytest-affected/actions/workflows/main.yml/badge.svg)](https://github.com/promptromp/pytest-affected/actions/workflows/main.yml)
+[![PyPI version](https://img.shields.io/pypi/v/pytest-impacted.svg)](https://pypi.org/project/pytest-impacted)
+[![Python versions](https://img.shields.io/pypi/pyversions/pytest-impacted.svg)](https://pypi.org/project/pytest-impacted)
+[![See Build Status on GitHub Actions](https://github.com/promptromp/pytest-impacted/actions/workflows/main.yml/badge.svg)](https://github.com/promptromp/pytest-impacted/actions/workflows/main.yml)
 
-A pytest plugin that selectively runs tests affected by codechanges via git introspection, ASL parsing, and dependency graph analysis.
+A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis.
 
 ----
 
@@ -25,24 +25,24 @@ This `pytest`plugin was generated with `Cookiecutter`_ along with `@hackebrot`_'
 
 ## Installation
 
-You can install "pytest-affected" via `pip`from `PyPI`:
+You can install "pytest-impacted" via `pip`from `PyPI`:
 
-    $ pip install pytest-affected
+    $ pip install pytest-impacted
 
 ## Usage
 
 Use as a pytest plugin. Examples for invocation:
 
-    $ pytest --affected --affected-git-mode=unstaged
+    $ pytest --impacted --impacted-git-mode=unstaged
 
-This will run all unit-tests affected by changes to files which have unstaged
+This will run all unit-tests impacted by changes to files which have unstaged
 modifications in the current active git repository.
 
-    $ pytest --affected --affected-git-mode=branch --affected-base-branch=main
+    $ pytest --impacted --impacted-git-mode=branch --impacted-base-branch=main
 
-this will run all unit-tests affected by changes to files which have been
+this will run all unit-tests impacted by changes to files which have been
 modified via any existing commits to the current active branch, as compared to
-the base branch passed in the `--affected-base-branch` parameter.
+the base branch passed in the `--impacted-base-branch` parameter.
 
 ## Contributing
 
@@ -51,4 +51,4 @@ the coverage at least stays the same before you submit a pull request.
 
 ## License
 
-Distributed under the terms of the `MIT`_ license, "pytest-affected" is free and open source software
+Distributed under the terms of the `MIT`_ license, "pytest-impacted" is free and open source software
