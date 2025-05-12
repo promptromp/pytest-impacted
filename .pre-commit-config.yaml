@@ -25,7 +25,7 @@ repos:
     - id: end-of-file-fixer
     - id: trailing-whitespace
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.5.0
+  rev: v0.11.9
   hooks:
     # Run the linter.
     - id: ruff
@@ -40,7 +40,7 @@ repos:
   hooks:
   - id: pytest
     name: pytest [with coverage, without slow]
-    entry: bash -ec "uv run python -m pytest --cov=pytest_impacted tests -m 'not slow'"
+    entry: bash -ec "uv run python -m pytest --cov=pytest_impacted --cov-branch tests -m 'not slow'"
     language: system
     types: [python]
     pass_filenames: false

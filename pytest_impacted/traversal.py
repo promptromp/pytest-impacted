@@ -56,6 +56,8 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str):
             module_name = (
                 file.replace(str(path), "").replace("/", ".").replace(".py", "")
             )
+            # Remove leading dot
+            module_name = module_name.lstrip(".")
             if module_name in submodules:
                 resolved_modules.append(module_name)
 

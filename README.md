@@ -23,12 +23,12 @@ You can install "pytest-impacted" via `pip`from `PyPI`:
 
 Use as a pytest plugin. Examples for invocation:
 
-    $ pytest --impacted --impacted-git-mode=unstaged
+    $ pytest --impacted --impacted-git-mode=unstaged --impacted-module=<my_root_module_name>
 
 This will run all unit-tests impacted by changes to files which have unstaged
 modifications in the current active git repository.
 
-    $ pytest --impacted --impacted-git-mode=branch --impacted-base-branch=main
+    $ pytest --impacted --impacted-git-mode=branch --impacted-base-branch=main --impacted-module=<my_root_module_name>
 
 this will run all unit-tests impacted by changes to files which have been
 modified via any existing commits to the current active branch, as compared to
