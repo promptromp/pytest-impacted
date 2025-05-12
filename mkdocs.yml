@@ -1,10 +1,67 @@
 site_name: pytest-impacted
-site_description: A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis.
-site_author: PromptRomp
-
-theme: readthedocs
-
+site_url: https://promptromp.github.io/pytest-impacted
+repo_name: mockstack
 repo_url: https://github.com/promptromp/pytest-impacted
 
-pages:
-- Home: index.md
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/favicon.ico
+  font:
+    text: Merriweather Sans
+    code: Red Hat Mono
+  palette:
+    # Dark Mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Dark mode
+      primary: amber
+      accent: deep purple
+    # Light Mode
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Light mode
+      primary: blue
+      accent: deep orange
+  features:
+    - content.code.copy
+    - navigation.footer
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: README.md
+  - Configuration: configuration.md
+  - Strategies:
+    - BaseStrategy: strategies/base.md
+    - FileFixtures: strategies/filefixtures.md
+    - ProxyRules: strategies/proxyrules.md
+  - LLM Integrations:
+    - Ollama: ollama.md
+
+extra:
+  social:
+    - icon: simple/github
+      link: https://github.com/promptromp/pytest-impacted
+
+copyright: Copyright &copy; 2025 Adam Ever-Hadani
