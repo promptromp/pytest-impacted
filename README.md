@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/pytest-impacted.svg)](https://pypi.org/project/pytest-impacted)
 [![Python versions](https://img.shields.io/pypi/pyversions/pytest-impacted.svg)](https://pypi.org/project/pytest-impacted)
-[![See Build Status on GitHub Actions](https://github.com/promptromp/pytest-impacted/actions/workflows/main.yml/badge.svg)](https://github.com/promptromp/pytest-impacted/actions/workflows/main.yml)
+[![See Build Status on GitHub Actions](https://github.com/promptromp/pytest-impacted/actions/workflows/ci.yml/badge.svg)](https://github.com/promptromp/pytest-impacted/actions/workflows/ci.yml)
 
 A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis.
 
