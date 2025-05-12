@@ -31,9 +31,18 @@ You can install "pytest-affected" via `pip`from `PyPI`:
 
 ## Usage
 
-Use as a pytest plugin:
+Use as a pytest plugin. Examples for invocation:
 
-    $ pytest -p affected my_package/
+    $ pytest --affected --affected-git-mode=unstaged
+
+This will run all unit-tests affected by changes to files which have unstaged
+modifications in the current active git repository.
+
+    $ pytest --affected --affected-git-mode=branch --affected-base-branch=main
+
+this will run all unit-tests affected by changes to files which have been
+modified via any existing commits to the current active branch, as compared to
+the base branch passed in the `--affected-base-branch` parameter.
 
 ## Contributing
 
