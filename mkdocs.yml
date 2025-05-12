@@ -51,13 +51,8 @@ markdown_extensions:
 
 nav:
   - Home: README.md
-  - Configuration: configuration.md
-  - Strategies:
-    - BaseStrategy: strategies/base.md
-    - FileFixtures: strategies/filefixtures.md
-    - ProxyRules: strategies/proxyrules.md
-  - LLM Integrations:
-    - Ollama: ollama.md
+  - Usage: usage.md
+
 
 extra:
   social:
