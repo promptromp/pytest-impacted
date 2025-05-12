@@ -1,6 +1,6 @@
 site_name: pytest-impacted
 site_url: https://promptromp.github.io/pytest-impacted
-repo_name: mockstack
+repo_name: pytest-impacted
 repo_url: https://github.com/promptromp/pytest-impacted
 
 theme:
