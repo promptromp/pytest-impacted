@@ -31,7 +31,6 @@ def pytest_addoption(parser):
         dest="impacted",
         help="Run only tests impacted by the chosen git state.",
     )
-
     group.addoption(
         "--impacted-module",
         action="store",
@@ -39,14 +38,12 @@ def pytest_addoption(parser):
         dest="impacted_module",
         help="Module name to check for impacted tests.",
     )
-
     group.addoption(
         "--impacted-git-mode",
         action="store",
-        default=False,
         dest="impacted_git_mode",
         choices=GitMode.__members__.values(),
-        const=GitMode.UNSTAGED,
+        default=GitMode.UNSTAGED,
         nargs="?",
         help="Git reference for computing impacted files.",
     )
@@ -67,17 +64,16 @@ def pytest_configure(config):
     """
     if config.getoption("impacted"):
         if not config.getoption("impacted_module"):
-            # If the impacted option is set, we need to check if there is a module
-            # specified.
+            # If the impacted option is set, we need to check if there is a module specified.
             raise UsageError(
                 "No module specified. Please specify a module using --impacted-module."
             )
 
-        if config.getoption(
-            "impacted_git_mode"
-        ) == GitMode.BRANCH and not config.getoption("impacted_base_branch"):
-            # If the git mode is branch, we need to check if there is a base branch
-            # specified.
+        if (
+            config.getoption("impacted_git_mode") == GitMode.BRANCH
+            and not config.getoption("impacted_base_branch")
+        ):
+            # If the git mode is branch, we need to check if there is a base branch specified.
             raise UsageError(
                 "No base branch specified. Please specify a base branch using --impacted-base-branch."
             )
@@ -102,6 +98,7 @@ def pytest_collection_modifyitems(session, config, items):
     ns_module = _get_ns_module(config)
     impacted_tests = _get_impacted_tests(config, ns_module=ns_module, session=session)
     if not impacted_tests:
+        # zero out the items list to avoid running any tests.
         items[:] = []
         return
 
