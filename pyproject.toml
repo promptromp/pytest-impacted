@@ -1,13 +1,10 @@
 [build-system]
-requires = [
-  "setuptools>=80.0.0",
-]
+requires = ["setuptools>=80", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytest-impacted"
 description = "A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis."
-version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -53,3 +50,12 @@ dev = [
     "mypy>=1.15.0",
     "pytest-cov>=6.1.1",
 ]
+
+[tool.setuptools_scm]
+# can be empty if no extra settings are needed, presence enables setuptools-scm
+
+[tool.mypy]
+namespace_packages = true
+ignore_missing_imports = true
+
+[tool.ruff.lint]
