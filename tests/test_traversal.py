@@ -1,11 +1,8 @@
 """Tests for the traversal module."""
 
 import importlib
-import os
-import sys
 import types
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
