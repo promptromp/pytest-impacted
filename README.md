@@ -8,8 +8,6 @@ A pytest plugin that selectively runs tests impacted by codechanges via git intr
 
 ----
 
-This `pytest`plugin was generated with `Cookiecutter`_ along with `@hackebrot`_'s `cookiecutter-pytest-plugin`_ template.
-
 
 ## Features
 
@@ -17,11 +15,6 @@ This `pytest`plugin was generated with `Cookiecutter`_ along with `@hackebrot`_'
 * Built using a modern, best-of-breed Python stack, using [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/) for
   Python code AST, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories.
 
-
-## Requirements
-
-* All requirements are purely Pythonic and are installed as part of the
-  Installation method described below.
 
 ## Installation
 
@@ -46,9 +39,6 @@ the base branch passed in the `--impacted-base-branch` parameter.
 
 ## Contributing
 
-Contributions are very welcome. Tests can be run with `tox`_, please ensure
-the coverage at least stays the same before you submit a pull request.
+Contributions are very welcome. Tests can be run with `pytest`:
 
-## License
-
-Distributed under the terms of the `MIT`_ license, "pytest-impacted" is free and open source software
+    uv run pytest tests/
