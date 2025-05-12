@@ -13,6 +13,7 @@ repos:
   rev: v5.0.0
   hooks:
     - id: check-added-large-files
+      args: [ --maxkb=1000 ]
     - id: fix-byte-order-marker
     - id: check-case-conflict
     - id: check-json
