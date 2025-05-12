@@ -13,7 +13,8 @@ authors = [
 maintainers = [
     { name = "PromptRomp", email = "promptromp.contact@gmail.com" },
 ]
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
 classifiers = [
     "Framework :: Pytest",
     "Development Status :: 4 - Beta",
@@ -27,7 +28,6 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
-    "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
     "astroid>=3.3.10",
