@@ -61,6 +61,7 @@ instance/
 docs/_build/
 
 # MkDocs documentation
+docs/README.md
 /site/
 
 # PyBuilder
@@ -71,6 +72,9 @@ target/
 
 # pyenv
 .python-version
+
+# direnv
+.envrc
 
 # MacOS
 .DS_Store
