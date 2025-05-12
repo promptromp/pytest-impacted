@@ -1,6 +1,8 @@
 import pytest
+from pytest import UsageError
 
-from pytest_affected.git import find_modified_files_in_repo
+from pytest_affected.display import notify, warn
+from pytest_affected.git import GitMode, find_modified_files_in_repo
 from pytest_affected.traversal import resolve_files_to_modules, resolve_modules_to_files
 from pytest_affected.graph import build_dep_tree, resolve_affected_tests
 from pytest_affected.matchers import matches_affected_tests
@@ -10,9 +12,9 @@ def _get_ns_module(config) -> str:
     """Get the namespace module from the config."""
     # Get the path to the package
     # rootdir = config.rootdir
+    affected_module = config.getoption("affected_module")
 
-    # TODO: Parse from pytest CLI / config?
-    return "mockstack"
+    return affected_module
 
 
 def pytest_addoption(parser):
@@ -30,8 +32,56 @@ def pytest_addoption(parser):
         help="Run only tests affected by the chosen git state.",
     )
 
+    group.addoption(
+        "--affected-module",
+        action="store",
+        default=None,
+        dest="affected_module",
+        help="Module name to check for affected tests.",
+    )
+
+    group.addoption(
+        "--affected-git-mode",
+        action="store",
+        default=False,
+        dest="affected_git_mode",
+        choices=GitMode.__members__.values(),
+        const=GitMode.UNSTAGED,
+        nargs="?",
+        help="Git reference for computing affected files.",
+    )
+    group.addoption(
+        "--affected-base-branch",
+        action="store",
+        default=None,
+        dest="affected_base_branch",
+        help="Git reference for computing affected files when running in 'branch' git mode.",
+    )
+
 
 def pytest_configure(config):
+    """pytest hook to configure the plugin.
+
+    This is called after the command line options have been parsed.
+
+    """
+    if config.getoption("affected"):
+        if not config.getoption("affected_module"):
+            # If the affected option is set, we need to check if there is a module
+            # specified.
+            raise UsageError(
+                "No module specified. Please specify a module using --affected-module."
+            )
+
+        if config.getoption(
+            "affected_git_mode"
+        ) == GitMode.BRANCH and not config.getoption("affected_base_branch"):
+            # If the git mode is branch, we need to check if there is a base branch
+            # specified.
+            raise UsageError(
+                "No base branch specified. Please specify a base branch using --affected-base-branch."
+            )
+
     config.addinivalue_line(
         "markers",
         "affected(state): mark test as affected by the state of the git repository",
@@ -59,26 +109,37 @@ def pytest_collection_modifyitems(session, config, items):
     for item in items:
         item_path = item.location[0]
         if matches_affected_tests(item_path, affected_tests=affected_tests):
-            _notify(f"matched affected item_path:  {item_path}", session)
+            # notify(f"matched affected item_path:  {item.location}", session)
             item.add_marker(pytest.mark.affected)
             affected_items.append(item)
-
-    items[:] = affected_items
+        else:
+            # Mark the item as skipped if it is not affected. This will be used to
+            # let pytest know to skip the test.
+            item.add_marker(pytest.mark.skip)
 
 
 def _get_affected_tests(config, ns_module, session=None) -> list[str] | None:
     """Get the list of affected tests based on the git state and static analysis."""
-    modified_files = find_modified_files_in_repo(config.rootdir)
+    git_mode = config.getoption("affected_git_mode")
+    base_branch = config.getoption("affected_base_branch")
+    modified_files = find_modified_files_in_repo(
+        config.rootdir, git_mode=git_mode, base_branch=base_branch
+    )
     if not modified_files:
-        _notify(
-            "No modified files found in the repository. Please check your git state and pytest-affected git_mode if you expected otherwise.",
+        notify(
+            "No modified files found in the repository. Please check your git state and the value supplied to --affected-git-mode if you expected otherwise.",
             session,
         )
         return None
 
+    notify(
+        f"Modified files in the repository: {modified_files}",
+        session,
+    )
+
     modified_modules = resolve_files_to_modules(modified_files, ns_module=ns_module)
     if not modified_modules:
-        _notify(
+        notify(
             "No affected Python modules detected. Modified files were: {modified_files}",
             session,
         )
@@ -88,31 +149,23 @@ def _get_affected_tests(config, ns_module, session=None) -> list[str] | None:
 
     affected_test_modules = resolve_affected_tests(modified_modules, dep_tree)
     if not affected_test_modules:
-        _warn(
-            "Not unit-test files affected by the changes could be detected. Modified Python modules were: {modified_modules}",
+        warn(
+            "Not unit-test modules affected by the changes could be detected. Modified Python modules were: {modified_modules}",
             session,
         )
         return None
 
     affected_test_files = resolve_modules_to_files(affected_test_modules)
+    if not affected_test_files:
+        warn(
+            "No unit-test file paths affected by the changes could be found. Affected test modules were: {affected_test_modules}",
+            session,
+        )
+        return None
 
-    print(f"affected_test_files: {affected_test_files}")
+    notify(
+        f"Affected unit-test files in the repository: {affected_test_files}",
+        session,
+    )
+
     return affected_test_files
-
-
-def _notify(message: str, session) -> None:
-    """Print a message to the console."""
-    session.config.pluginmanager.getplugin("terminalreporter").write(
-        f"\n{message}\n",
-        yellow=True,
-        bold=True,
-    )
-
-
-def _warn(message: str, session) -> None:
-    """Print a warning message to the console."""
-    session.config.pluginmanager.getplugin("terminalreporter").write(
-        f"\nWARNING: {message}\n",
-        yellow=True,
-        bold=True,
-    )

@@ -8,7 +8,7 @@ A pytest plugin that selectively runs tests affected by codechanges via git intr
 
 ----
 
-This `pytest`_ plugin was generated with `Cookiecutter`_ along with `@hackebrot`_'s `cookiecutter-pytest-plugin`_ template.
+This `pytest`plugin was generated with `Cookiecutter`_ along with `@hackebrot`_'s `cookiecutter-pytest-plugin`_ template.
 
 
 ## Features
@@ -34,7 +34,6 @@ You can install "pytest-affected" via `pip`from `PyPI`:
 Use as a pytest plugin:
 
     $ pytest -p affected my_package/
-
 
 ## Contributing
 
