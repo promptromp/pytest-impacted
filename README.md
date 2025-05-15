@@ -54,6 +54,11 @@ this will run all unit-tests impacted by changes to files which have been
 modified via any existing commits to the current active branch, as compared to
 the base branch passed in the `--impacted-base-branch` parameter.
 
+As another common use case, In some projects the tests directory exists outside of the namespace package. In those cases you can use the `--impacted-tests-dir` option to make sure those test files are included in the dependency tree and correctly considered for impact analysis:
+
+    $ pytest --impacted --impacted-git-mode=unstaged --impacted-module=<my_root_module_name> --impacted-tests-dir=tests/
+
+
 ## Testing
 
 Invoke unit-tests with:
