@@ -208,3 +208,46 @@ def test_iter_namespace_module_without_path(monkeypatch):
     dummy = Dummy()
     with pytest.raises(ValueError):
         list(iter_namespace(dummy))
+
+
+def test_resolve_files_to_modules_with_tests_package():
+    """Test resolve_files_to_modules with tests_package parameter."""
+    # Create a temporary test package structure for testing
+    with pytest.MonkeyPatch.context() as m:
+        # Mock import_submodules to return known results for both packages
+        def mock_import_submodules(package):
+            if package == "pytest_impacted":
+                return {"traversal": types.ModuleType("traversal")}
+            elif package == "tests":
+                return {
+                    "path.to.tests.test_traversal": types.ModuleType("test_traversal")
+                }
+            return {}
+
+        m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)
+
+        # Mock the package path
+        def mock_import_module(name):
+            if name == "pytest_impacted":
+                module = types.ModuleType("pytest_impacted")
+                module.__path__ = ["/path/to/pytest_impacted"]
+                return module
+            elif name == "tests":
+                module = types.ModuleType("tests")
+                module.__path__ = ["/path/to/tests"]
+                return module
+            return types.ModuleType(name)
+
+        m.setattr(importlib, "import_module", mock_import_module)
+
+        # Test with a file from the main package
+        main_file = "/path/to/pytest_impacted/traversal.py"
+        modules = resolve_files_to_modules([main_file], "pytest_impacted", "tests")
+        assert len(modules) == 1
+        assert modules[0] == "traversal"
+
+        # Test with a file from the tests package
+        test_file = "/path/to/tests/test_traversal.py"
+        modules = resolve_files_to_modules([test_file], "pytest_impacted", "tests")
+        assert len(modules) == 1
+        assert modules[0] == "path.to.tests.test_traversal"
