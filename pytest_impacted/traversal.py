@@ -1,8 +1,10 @@
 """Python package and module traversal utilities."""
 
 import importlib
+import logging
 import pkgutil
 import types
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
 
@@ -22,6 +24,7 @@ def iter_namespace(ns_package: str | types.ModuleType) -> Iterator:
     return pkgutil.iter_modules(ns_package.__path__, ns_package.__name__ + ".")
 
 
+@lru_cache(maxsize=None)
 def import_submodules(package: str | types.ModuleType) -> dict[str, types.ModuleType]:
     """Import all submodules of a module, recursively, including subpackages,
     and return a dict mapping their fully-qualified names to the module object.
@@ -38,26 +41,34 @@ def import_submodules(package: str | types.ModuleType) -> dict[str, types.Module
             try:
                 results[name] = importlib.import_module(name)
             except ModuleNotFoundError:
+                logging.exception(f"Failed to import {name}, skipping")
                 continue
             if hasattr(results[name], "__path__"):
+                # recursively import submodules
                 results.update(import_submodules(name))
     return results
+
+
+def module_name_from_file(file: str, *, base_path: Path) -> str:
+    """Resolve a file path to its corresponding Python module name."""
+    return (
+        file.replace(str(base_path), "")
+        .replace("/", ".")
+        .replace(".py", "")
+        .lstrip(".")
+    )
 
 
 def resolve_files_to_modules(filenames: list[str], ns_module: str):
     """Resolve file paths to their corresponding Python module objects."""
     # Get the path to the package
-    path = Path(importlib.import_module(ns_module).__path__[0])
+    base_path = Path(importlib.import_module(ns_module).__path__[0])
     submodules = import_submodules(ns_module)
     resolved_modules = []
     for file in filenames:
         # Check if the file is a Python module
         if file.endswith(".py"):
-            module_name = (
-                file.replace(str(path), "").replace("/", ".").replace(".py", "")
-            )
-            # Remove leading dot
-            module_name = module_name.lstrip(".")
+            module_name = module_name_from_file(file, base_path=base_path)
             if module_name in submodules:
                 resolved_modules.append(module_name)
 

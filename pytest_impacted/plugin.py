@@ -1,20 +1,15 @@
 import pytest
-from pytest import UsageError
-
+from pytest import Config, Session, UsageError
 from pytest_impacted.display import notify, warn
 from pytest_impacted.git import GitMode, find_modified_files_in_repo
 from pytest_impacted.traversal import resolve_files_to_modules, resolve_modules_to_files
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.matchers import matches_impacted_tests
 
-
-def _get_ns_module(config) -> str:
-    """Get the namespace module from the config."""
-    # Get the path to the package
-    # rootdir = config.rootdir
-    impacted_module = config.getoption("impacted_module")
-
-    return impacted_module
+NO_MODIFIED_FILES_FOUND_MESSAGE = """
+No modified files found in the repository.
+Please check your git state and the value supplied to --impacted-git-mode if you expected otherwise.
+"""
 
 
 def pytest_addoption(parser):
@@ -92,6 +87,7 @@ def pytest_collection_modifyitems(session, config, items):
     """
     impacted = config.getoption("impacted")
     if not impacted:
+        # Plugin was not explicitly enabled, we do not apply our logic.
         return
 
     ns_module = _get_ns_module(config)
@@ -115,7 +111,18 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(pytest.mark.skip)
 
 
-def _get_impacted_tests(config, ns_module, session=None) -> list[str] | None:
+def _get_ns_module(config) -> str:
+    """Get the namespace module from the config."""
+    # Get the path to the package. Since skipping test is a
+    # sensitive business, we ask the user to explicitly specify the module.
+    impacted_module = config.getoption("impacted_module")
+
+    return impacted_module
+
+
+def _get_impacted_tests(
+    config: Config, ns_module: str, session: Session | None = None
+) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis."""
     git_mode = config.getoption("impacted_git_mode")
     base_branch = config.getoption("impacted_base_branch")
@@ -123,10 +130,7 @@ def _get_impacted_tests(config, ns_module, session=None) -> list[str] | None:
         config.rootdir, git_mode=git_mode, base_branch=base_branch
     )
     if not modified_files:
-        notify(
-            "No modified files found in the repository. Please check your git state and the value supplied to --impacted-git-mode if you expected otherwise.",
-            session,
-        )
+        warn(NO_MODIFIED_FILES_FOUND_MESSAGE, session)
         return None
 
     notify(
@@ -136,7 +140,7 @@ def _get_impacted_tests(config, ns_module, session=None) -> list[str] | None:
 
     modified_modules = resolve_files_to_modules(modified_files, ns_module=ns_module)
     if not modified_modules:
-        notify(
+        warn(
             f"No impacted Python modules detected. Modified files were: {modified_files}",
             session,
         )
