@@ -9,10 +9,10 @@ from pytest_impacted.traversal import import_submodules
 from pytest_impacted.parsing import is_test_module, parse_module_imports
 
 
-def resolve_impacted_tests(modified_modules, dep_tree: nx.DiGraph) -> list[str]:
-    """Resolve impacted tests based on modified modules."""
+def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
+    """Resolve impacted tests based on impacted modules."""
     impacted_tests = []
-    for module in modified_modules:
+    for module in impacted_modules:
         # Find all nodes that depend on the modified module by doing a DFS from the module
         # using the (inverted) directed graph of imports which is the dependency graph.
         dependent_nodes = [
@@ -30,12 +30,23 @@ def resolve_impacted_tests(modified_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
-def build_dep_tree(package: str | types.ModuleType) -> nx.DiGraph:
+def build_dep_tree(
+    package: str | types.ModuleType, tests_dir: str | None = None
+) -> nx.DiGraph:
     """Run the script for a given package name."""
     submodules = import_submodules(package)
+
+    if tests_dir:
+        logging.debug("Adding modules from tests_dir: %s", tests_dir)
+        test_submodules = import_submodules(tests_dir)
+        logging.debug("test_submodules: %s", test_submodules)
+        submodules.update(test_submodules)
+
+    logging.debug("Building dependency tree for submodules: %s", submodules)
+
     digraph = nx.DiGraph()
     for name, module in submodules.items():
-        logging.debug("build_dep_tree: processing submodule: %s", name)
+        logging.debug("Processing submodule: %s", name)
         digraph.add_node(name)
         module_imports = parse_module_imports(module)
         for imp in module_imports:
@@ -48,7 +59,20 @@ def build_dep_tree(package: str | types.ModuleType) -> nx.DiGraph:
     maybe_prune_graph(digraph)
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.
-    return inverted(digraph)
+    inverted_digraph = inverted(digraph)
+
+    return inverted_digraph
+
+
+def display_digraph(digraph: nx.DiGraph) -> None:
+    """Display the dependency graph.
+
+    Useful for debugging and verbose output to verify the graph is built correctly.
+
+    """
+    for node in digraph.nodes:
+        edges = list(digraph.successors(node))
+        print(f"{node} -> {edges}")
 
 
 def maybe_prune_graph(digraph: nx.DiGraph) -> nx.DiGraph:
@@ -56,7 +80,7 @@ def maybe_prune_graph(digraph: nx.DiGraph) -> nx.DiGraph:
     for node in list(digraph.nodes):
         if digraph.in_degree(node) == 0 and digraph.out_degree(node) == 0:
             # prune singleton nodes (typically __init__.py files)
-            logging.debug("build_dep_tree: removing singleton node: %s", node)
+            logging.debug("Removing singleton node: %s", node)
             digraph.remove_node(node)
 
     return digraph

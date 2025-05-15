@@ -1,20 +1,8 @@
 import pytest
 from pytest import UsageError
 
-from pytest_impacted.display import notify, warn
-from pytest_impacted.git import GitMode, find_modified_files_in_repo
-from pytest_impacted.traversal import resolve_files_to_modules, resolve_modules_to_files
-from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
-from pytest_impacted.matchers import matches_impacted_tests
-
-
-def _get_ns_module(config) -> str:
-    """Get the namespace module from the config."""
-    # Get the path to the package
-    # rootdir = config.rootdir
-    impacted_module = config.getoption("impacted_module")
-
-    return impacted_module
+from pytest_impacted.api import matches_impacted_tests, get_impacted_tests
+from pytest_impacted.git import GitMode
 
 
 def pytest_addoption(parser):
@@ -53,6 +41,13 @@ def pytest_addoption(parser):
         default=None,
         dest="impacted_base_branch",
         help="Git reference for computing impacted files when running in 'branch' git mode.",
+    )
+    group.addoption(
+        "--impacted-tests-dir",
+        action="store",
+        default=None,
+        dest="impacted_tests_dir",
+        help="Directory containing the unit-test files. If not specified, tests will only be found under namespace module directory.",
     )
 
 
@@ -94,8 +89,20 @@ def pytest_collection_modifyitems(session, config, items):
     if not impacted:
         return
 
-    ns_module = _get_ns_module(config)
-    impacted_tests = _get_impacted_tests(config, ns_module=ns_module, session=session)
+    ns_module = config.getoption("impacted_module")
+    impacted_git_mode = config.getoption("impacted_git_mode")
+    impacted_base_branch = config.getoption("impacted_base_branch")
+    impacted_tests_dir = config.getoption("impacted_tests_dir")
+    root_dir = config.rootdir
+
+    impacted_tests = get_impacted_tests(
+        impacted_git_mode=impacted_git_mode,
+        impacted_base_branch=impacted_base_branch,
+        root_dir=root_dir,
+        ns_module=ns_module,
+        tests_dir=impacted_tests_dir,
+        session=session,
+    )
     if not impacted_tests:
         # skip all tests
         for item in items:
@@ -113,56 +120,3 @@ def pytest_collection_modifyitems(session, config, items):
             # Mark the item as skipped if it is not impacted. This will be used to
             # let pytest know to skip the test.
             item.add_marker(pytest.mark.skip)
-
-
-def _get_impacted_tests(config, ns_module, session=None) -> list[str] | None:
-    """Get the list of impacted tests based on the git state and static analysis."""
-    git_mode = config.getoption("impacted_git_mode")
-    base_branch = config.getoption("impacted_base_branch")
-    modified_files = find_modified_files_in_repo(
-        config.rootdir, git_mode=git_mode, base_branch=base_branch
-    )
-    if not modified_files:
-        notify(
-            "No modified files found in the repository. Please check your git state and the value supplied to --impacted-git-mode if you expected otherwise.",
-            session,
-        )
-        return None
-
-    notify(
-        f"Modified files in the repository: {modified_files}",
-        session,
-    )
-
-    modified_modules = resolve_files_to_modules(modified_files, ns_module=ns_module)
-    if not modified_modules:
-        notify(
-            f"No impacted Python modules detected. Modified files were: {modified_files}",
-            session,
-        )
-        return None
-
-    dep_tree = build_dep_tree(ns_module)
-
-    impacted_test_modules = resolve_impacted_tests(modified_modules, dep_tree)
-    if not impacted_test_modules:
-        warn(
-            f"Not unit-test modules impacted by the changes could be detected. Modified Python modules were: {modified_modules}",
-            session,
-        )
-        return None
-
-    impacted_test_files = resolve_modules_to_files(impacted_test_modules)
-    if not impacted_test_files:
-        warn(
-            f"No unit-test file paths impacted by the changes could be found. impacted test modules were: {impacted_test_modules}",
-            session,
-        )
-        return None
-
-    notify(
-        f"impacted unit-test files in the repository: {impacted_test_files}",
-        session,
-    )
-
-    return impacted_test_files

@@ -1,13 +1,13 @@
 """Python package and module traversal utilities."""
 
 import importlib
+import logging
 import pkgutil
 import types
 from pathlib import Path
-from typing import Iterator
 
 
-def iter_namespace(ns_package: str | types.ModuleType) -> Iterator:
+def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInfo]:
     """iterate over all submodules of a namespace package.
 
     :param ns_package: namespace package (name or actual module)
@@ -15,11 +15,23 @@ def iter_namespace(ns_package: str | types.ModuleType) -> Iterator:
     :rtype: iterable[types.ModuleType]
 
     """
-    if isinstance(ns_package, str):
-        # If the input is a string, materialize it by importing the module first
-        ns_package = importlib.import_module(ns_package)
+    logging.debug("Iterating over namespace for package: %s", ns_package)
 
-    return pkgutil.iter_modules(ns_package.__path__, ns_package.__name__ + ".")
+    match ns_package:
+        case str():
+            path = [ns_package]
+            prefix = f"{ns_package}."
+        case types.ModuleType():
+            path = list(ns_package.__path__)
+            prefix = f"{ns_package.__name__}."
+        case _:
+            raise ValueError(f"Invalid namespace package: {ns_package}")
+
+    module_infos = list(pkgutil.iter_modules(path=path, prefix=prefix))
+
+    logging.debug("Materialized module_infos: %s", module_infos)
+
+    return module_infos
 
 
 def import_submodules(package: str | types.ModuleType) -> dict[str, types.ModuleType]:
@@ -38,8 +50,14 @@ def import_submodules(package: str | types.ModuleType) -> dict[str, types.Module
             try:
                 results[name] = importlib.import_module(name)
             except ModuleNotFoundError:
+                logging.warning(
+                    "Encountered ModuleNotFoundError while trying to import module from name: %s",
+                    name,
+                )
                 continue
+
             if hasattr(results[name], "__path__"):
+                # Recursively import submodules
                 results.update(import_submodules(name))
     return results
 
@@ -54,10 +72,12 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str):
         # Check if the file is a Python module
         if file.endswith(".py"):
             module_name = (
-                file.replace(str(path), "").replace("/", ".").replace(".py", "")
+                file.replace(str(path), "")
+                .replace("/", ".")
+                .replace(".py", "")
+                .lstrip(".")
             )
-            # Remove leading dot
-            module_name = module_name.lstrip(".")
+
             if module_name in submodules:
                 resolved_modules.append(module_name)
 

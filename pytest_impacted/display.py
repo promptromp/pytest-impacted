@@ -1,19 +1,27 @@
 """Display and logging utilities."""
 
+import logging
+
 
 def notify(message: str, session) -> None:
     """Print a message to the console."""
-    session.config.pluginmanager.getplugin("terminalreporter").write(
-        f"\n{message}\n",
-        yellow=True,
-        bold=True,
-    )
+    if session:
+        session.config.pluginmanager.getplugin("terminalreporter").write(
+            f"\n{message}\n",
+            yellow=True,
+            bold=True,
+        )
+    else:
+        logging.info(f"\n{message}\n")
 
 
 def warn(message: str, session) -> None:
     """Print a warning message to the console."""
-    session.config.pluginmanager.getplugin("terminalreporter").write(
-        f"\nWARNING: {message}\n",
-        yellow=True,
-        bold=True,
-    )
+    if session:
+        session.config.pluginmanager.getplugin("terminalreporter").write(
+            f"\nWARNING: {message}\n",
+            yellow=True,
+            bold=True,
+        )
+    else:
+        logging.warning(f"\nWARNING: {message}\n")

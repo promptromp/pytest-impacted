@@ -31,9 +31,11 @@ classifiers = [
 ]
 dependencies = [
     "astroid>=3.3.10",
+    "click>=8.2.0",
     "gitpython>=3.1.44",
     "networkx>=3.4.2",
     "pytest>=8.0.0",
+    "rich>=14.0.0",
 ]
 dynamic = ["version"]
 
@@ -43,6 +45,9 @@ Issues = "https://github.com/promptromp/pytest-impacted/issues"
 
 [project.entry-points.pytest11]
 impacted = "pytest_impacted.plugin"
+
+[project.scripts]
+impacted-tests = "pytest_impacted.cli:impacted_tests_cli"
 
 [dependency-groups]
 dev = [
