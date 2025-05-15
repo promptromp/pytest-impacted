@@ -65,7 +65,7 @@ def import_submodules(package: str | types.ModuleType) -> dict[str, types.Module
             try:
                 results[name] = importlib.import_module(name)
             except ModuleNotFoundError:
-                logging.warning(
+                logging.exception(
                     "Encountered ModuleNotFoundError while trying to import module from name: %s",
                     name,
                 )
