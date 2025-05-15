@@ -40,10 +40,8 @@ def parse_module_imports(module):
     for node in tree.body:
         if isinstance(node, astroid.Import):
             for name in node.names:
-                logging.debug("parse_module_imports: adding Import: %s", name[0])
                 imports.append(name[0])
         elif isinstance(node, astroid.ImportFrom):
-            logging.debug("parse_module_imports: adding ImportFrom: %s", node.modname)
             imports.append(node.modname)
 
     return imports
@@ -57,13 +55,24 @@ def is_test_module(module_name):
     static analysis (AST) to determine if the module is a test module.
 
     """
-    if module_name.startswith("test_"):
-        return True
+    module_name_chunks = module_name.split(".")
 
-    elif module_name.endswith("_test"):
-        return True
+    match module_name_chunks:
+        case _ if module_name_chunks[-1].startswith("test_"):
+            is_test = True
 
-    elif ".tests." in module_name:
-        return True
+        case _ if module_name_chunks[-1].endswith("_test"):
+            is_test = True
 
-    return False
+        case _ if "test" in module_name_chunks:
+            is_test = True
+
+        case _ if "tests" in module_name_chunks:
+            is_test = True
+
+        case _:
+            is_test = False
+
+    logging.debug("Module %s is a test module: %s", module_name, is_test)
+
+    return is_test

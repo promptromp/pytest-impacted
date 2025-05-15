@@ -1,6 +1,6 @@
 """Unit-tests for the matchers module."""
 
-from pytest_impacted.matchers import matches_impacted_tests
+from pytest_impacted.api import matches_impacted_tests
 
 
 def test_matches_impacted_tests_positive():
