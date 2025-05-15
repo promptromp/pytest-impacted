@@ -62,7 +62,9 @@ def get_impacted_tests(
         session,
     )
 
-    impacted_modules = resolve_files_to_modules(impacted_files, ns_module=ns_module)
+    impacted_modules = resolve_files_to_modules(
+        impacted_files, ns_module=ns_module, tests_package=tests_package
+    )
     if not impacted_modules:
         notify(
             f"No impacted Python modules detected. Impacted files were: {impacted_files}",
