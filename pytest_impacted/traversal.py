@@ -4,7 +4,13 @@ import importlib
 import logging
 import pkgutil
 import types
+from functools import lru_cache
 from pathlib import Path
+
+
+def package_name_to_path(package_name: str) -> str:
+    """Convert a package name to a path."""
+    return package_name.replace(".", "/")
 
 
 def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInfo]:
@@ -19,7 +25,7 @@ def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInf
 
     match ns_package:
         case str():
-            path = [ns_package]
+            path = [package_name_to_path(ns_package)]
             prefix = f"{ns_package}."
         case types.ModuleType():
             path = list(ns_package.__path__)
@@ -34,6 +40,7 @@ def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInf
     return module_infos
 
 
+@lru_cache
 def import_submodules(package: str | types.ModuleType) -> dict[str, types.ModuleType]:
     """Import all submodules of a module, recursively, including subpackages,
     and return a dict mapping their fully-qualified names to the module object.
@@ -59,6 +66,7 @@ def import_submodules(package: str | types.ModuleType) -> dict[str, types.Module
             if hasattr(results[name], "__path__"):
                 # Recursively import submodules
                 results.update(import_submodules(name))
+
     return results
 
 
