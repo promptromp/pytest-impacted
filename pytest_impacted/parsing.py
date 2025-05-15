@@ -40,10 +40,8 @@ def parse_module_imports(module):
     for node in tree.body:
         if isinstance(node, astroid.Import):
             for name in node.names:
-                logging.debug("Adding Import: %s", name[0])
                 imports.append(name[0])
         elif isinstance(node, astroid.ImportFrom):
-            logging.debug("Adding ImportFrom: %s", node.modname)
             imports.append(node.modname)
 
     return imports

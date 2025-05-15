@@ -28,6 +28,7 @@ def test_iter_namespace_with_string():
     # Test with a known package
     modules = list(iter_namespace("pytest_impacted"))
     assert len(modules) > 0
+
     # pkgutil.iter_modules returns ModuleInfo objects, not ModuleType
     assert all(hasattr(m, "name") for m in modules)
 

@@ -13,6 +13,14 @@ def package_name_to_path(package_name: str) -> str:
     return package_name.replace(".", "/")
 
 
+def path_to_package_name(path: Path | str) -> str:
+    """Convert a path to a package name."""
+    if not isinstance(path, Path):
+        path = Path(path)
+
+    return importlib.import_module(path.name).__name__
+
+
 def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInfo]:
     """iterate over all submodules of a namespace package.
 

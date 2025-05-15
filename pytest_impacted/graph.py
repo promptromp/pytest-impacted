@@ -31,15 +31,14 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
 
 
 def build_dep_tree(
-    package: str | types.ModuleType, tests_dir: str | None = None
+    package: str | types.ModuleType, tests_package: str | types.ModuleType | None = None
 ) -> nx.DiGraph:
     """Run the script for a given package name."""
     submodules = import_submodules(package)
 
-    if tests_dir:
-        logging.debug("Adding modules from tests_dir: %s", tests_dir)
-        test_submodules = import_submodules(tests_dir)
-        logging.debug("test_submodules: %s", test_submodules)
+    if tests_package:
+        logging.debug("Adding modules from tests_package: %s", tests_package)
+        test_submodules = import_submodules(tests_package)
         submodules.update(test_submodules)
 
     logging.debug("Building dependency tree for submodules: %s", submodules)
