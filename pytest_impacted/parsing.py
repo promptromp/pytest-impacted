@@ -6,14 +6,6 @@ import os
 import astroid
 
 
-def should_silently_ignore_oserror(file_path: str) -> bool:
-    """Check if the file should be silently ignored."""
-    # Nb. __init__ files often have zero bytes in which case inspect.getsource()
-    # raises an OSError. we ignore those cases as well as any other file thats explicitly
-    # zero bytes in size.
-    return any((os.stat(file_path).st_size == 0,))
-
-
 def parse_module_imports(module):
     """Parse the module to find all import statements."""
     # Get the source code of the module
@@ -67,3 +59,11 @@ def is_test_module(module_name):
         return True
 
     return False
+
+
+def should_silently_ignore_oserror(file_path: str) -> bool:
+    """Check if the file should be silently ignored."""
+    # Nb. __init__ files often have zero bytes in which case inspect.getsource()
+    # raises an OSError. we ignore those cases as well as any other file thats explicitly
+    # zero bytes in size.
+    return any((os.stat(file_path).st_size == 0,))
