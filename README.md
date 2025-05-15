@@ -14,6 +14,8 @@ A pytest plugin that selectively runs tests impacted by codechanges via git intr
   Python code AST, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories. :rocket:
 * Modular codebase with high unit-test coverage to ensure solid, reliable performance in CI and production environments. :muscle:
 
+**NOTE - This project is still currently in alpha development phase. Do not use it in mission critical applications without close supervision of its output and performance. Please report bugs via the Issues tab.**
+
 ## Overview
 
 Sometimes code repositories can become encumbered with a large codebase and a large unit-test codebase to match. In those cases often CI builds become slow and painful due to the need to run all the unit-tests on every CI build. Existing solutions include parallelizing or splitting the tests (e.g. via [pytest-split](https://pypi.org/project/pytest-split/) or [pytest-xdist](https://github.com/pytest-dev/pytest-xdist)), however these often run into trouble too when tests rely on resources such as databases that cannot be easily "shared" between concurrent runs. Moreover, when using solutions such as pytest-split or pytest-xdist, even with multiple database instances, it is often the case that each thread / split of tests takes a long time to run, on top of the overhead introduced by spawning N many databases.
