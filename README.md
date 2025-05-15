@@ -14,7 +14,8 @@ A pytest plugin that selectively runs tests impacted by codechanges via git intr
   Python code AST, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories. :rocket:
 * Modular codebase with high unit-test coverage to ensure solid, reliable performance in CI and production environments. :muscle:
 
-**NOTE - This project is still currently in alpha development phase. Do not use it in mission critical applications without close supervision of its output and performance. Please report bugs via the Issues tab.**
+> [!CAUTION]
+> This project is still currently in alpha development phase. Do not use it in mission critical applications without close supervision of its output and performance. Please report bugs via the Issues tab.
 
 ## Overview
 
