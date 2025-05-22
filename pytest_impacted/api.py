@@ -48,11 +48,14 @@ def get_impacted_tests(
         tests_package = path_to_package_name(tests_dir)
 
     impacted_files = find_impacted_files_in_repo(
-        root_dir, git_mode=git_mode, base_branch=base_branch
+        root_dir,
+        git_mode=git_mode,
+        base_branch=base_branch,
     )
     if not impacted_files:
         notify(
-            "No modified files found in the repository. Please check your git state and the value supplied to --impacted-git-mode if you expected otherwise.",
+            "No modified files found in the repository. "
+            + "Please check your git state and the value supplied to --impacted-git-mode if you expected otherwise.",
             session,
         )
         return None

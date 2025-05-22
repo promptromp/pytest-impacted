@@ -39,10 +39,10 @@ def test_find_impacted_files_in_repo_unstaged_clean(mock_repo):
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_dirty(mock_repo):
-    diff_result = [
-        MagicMock(a_path="file1.py", b_path=None),
-        MagicMock(a_path=None, b_path="file2.py"),
-    ]
+    # Create mock diff objects with change_type attribute
+    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
+    diff2 = MagicMock(a_path=None, b_path="file2.py", change_type="A")
+    diff_result = [diff1, diff2]
     mock_repo.return_value = DummyRepo(dirty=True, diff_result=diff_result)
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert set(result) == {"file1.py", "file2.py"}
@@ -50,10 +50,10 @@ def test_find_impacted_files_in_repo_unstaged_dirty(mock_repo):
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_dirty_with_untracked_files(mock_repo):
-    diff_result = [
-        MagicMock(a_path="file1.py", b_path=None),
-        MagicMock(a_path=None, b_path="file2.py"),
-    ]
+    # Create mock diff objects with change_type attribute
+    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
+    diff2 = MagicMock(a_path=None, b_path="file2.py", change_type="A")
+    diff_result = [diff1, diff2]
     mock_repo.return_value = DummyRepo(
         dirty=True, diff_result=diff_result, untracked_files=["file3.py", "file4.py"]
     )
@@ -89,18 +89,11 @@ def test_find_impacted_files_in_repo_branch_none(mock_repo):
 def test_describe_index_diffs(mock_print):
     """Test the describe_index_diffs function."""
 
-    # Create mock Diff objects
-    # Diff objects have various attributes, but str(diff) is what's used.
-    # We can mock the __str__ method or create objects that have a __str__ method.
-    class MockDiff:
-        def __init__(self, diff_str):
-            self.diff_str = diff_str
-
-        def __str__(self):
-            return self.diff_str
-
-    diff1 = MockDiff("diff_content_1")
-    diff2 = MockDiff("diff_content_2")
+    # Create mock Diff objects with change_type attribute
+    diff1 = MagicMock(change_type="M")
+    diff1.__str__ = MagicMock(return_value="diff_content_1")
+    diff2 = MagicMock(change_type="A")
+    diff2.__str__ = MagicMock(return_value="diff_content_2")
     diffs = [diff1, diff2]
 
     git.describe_index_diffs(diffs)

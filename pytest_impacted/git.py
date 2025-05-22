@@ -56,6 +56,21 @@ class ChangeSet:
         return "\n".join(str(change) for change in self.changes)
 
     @classmethod
+    def from_diff_objs(cls, diffs: list[Diff]) -> "ChangeSet":
+        """Create a ChangeSet from a list of git diff objects."""
+        # Nb. a_path would be None if this is a new file in which case
+        # we use the `b_path` argument to get its name and consider it
+        # modified.
+        changes = [
+            Change.from_git_diff_name_status(
+                status=diff.change_type,
+                name=diff.a_path if diff.a_path is not None else diff.b_path,
+            )
+            for diff in diffs
+        ]
+        return cls(changes)
+
+    @classmethod
     def from_git_diff_name_status_output(cls, diffs_str: str) -> "ChangeSet":
         """Create a ChangeSet from a list of git diffs.
 
@@ -135,19 +150,21 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
         return None
 
     diffs = repo.index.diff(None)
+    change_set = ChangeSet.from_diff_objs(diffs)
 
-    # Nb. a_path would be None if this is a new file in which case
-    # we use the `b_path` argument to get its name and consider it
-    # modified.
+    print(f"** change_set:\n{change_set}")
+
     impacted_files = [
-        item.a_path if item.a_path is not None else item.b_path for item in diffs
+        item.name
+        for item in change_set.changes
+        if item.status in (GitStatus.MODIFIED, GitStatus.ADDED)
     ]
 
     # Nb. we also include untracked files as they are also
     # potentially impactful for unit-test coverage.
     impacted_files.extend(repo.untracked_files)
 
-    return without_nones(impacted_files) or None
+    return impacted_files or None
 
 
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:
