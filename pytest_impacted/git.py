@@ -16,34 +16,58 @@ class GitMode(StrEnum):
 
 
 class GitStatus(StrEnum):
-    """Git statuses."""
+    """Git statuses.
+
+    Reference: `man git-diff`
+
+    """
 
     ADDED = "A"
-    MODIFIED = "M"
+    COPIED = "C"
     DELETED = "D"
-    UNTRACKED = "??"
-    MODIFIED_IN_BOTH_STAGES = "MM"
-    ADDED_THEN_MODIFIED = "AM"
+    MODIFIED = "M"
+    RENAMED = "R"
+    TYPE_CHANGE = "T"
+    UNMERGED = "U"
+    UNKNOWN = "X"
+    PAIRING_BROKEN = "B"
 
 
 class Change:
     """A change to a git repository file."""
 
-    def __init__(self, name: str, status: GitStatus):
-        self.name = name
+    def __init__(
+        self,
+        a_path: str | None = None,
+        b_path: str | None = None,
+        status: GitStatus | None = None,
+    ):
+        self.a_path = a_path
+        self.b_path = b_path
         self.status = status
 
     def __str__(self) -> str:
         return f"{self.status}\t{self.name}"
 
+    @property
+    def name(self) -> str | None:
+        """The name of the file."""
+        return self.a_path if self.a_path is not None else self.b_path
+
     @classmethod
-    def from_git_diff_name_status(cls, *, name: str, status: str) -> "Change":
+    def from_git_diff_name_status(
+        cls, *, name: str | None, status: str | None
+    ) -> "Change":
         """Create a Change from a git diff.
 
         Input is the output of `git diff --name-status`.
 
         """
-        return cls(name=name, status=GitStatus(status))
+        return cls(
+            a_path=name,
+            b_path=None,
+            status=GitStatus(status) if status is not None else None,
+        )
 
 
 class ChangeSet:
@@ -152,8 +176,6 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     diffs = repo.index.diff(None)
     change_set = ChangeSet.from_diff_objs(diffs)
 
-    print(f"** change_set:\n{change_set}")
-
     impacted_files = [
         item.name
         for item in change_set.changes
@@ -164,7 +186,7 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     # potentially impactful for unit-test coverage.
     impacted_files.extend(repo.untracked_files)
 
-    return impacted_files or None
+    return without_nones(impacted_files) or None
 
 
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:
@@ -180,11 +202,11 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | 
         if item.status in (GitStatus.MODIFIED, GitStatus.ADDED)
     ]
 
-    return impacted_files or None
+    return without_nones(impacted_files) or None
 
 
 def deleted_files_from_diff(change_set: ChangeSet) -> list[str]:
     """Get a list of deleted files from git diffs."""
-    return [
-        item.name for item in change_set.changes if item.status == GitStatus.DELETED
-    ]
+    return without_nones(
+        [item.name for item in change_set.changes if item.status == GitStatus.DELETED]
+    )
