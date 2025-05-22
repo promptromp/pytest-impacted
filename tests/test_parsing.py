@@ -66,6 +66,46 @@ def test_parse_module_imports_oserror():
             parsing.parse_module_imports(mock_module)
 
 
+def test_parse_module_imports_from_statements():
+    """Test parse_module_imports with various from-import statement scenarios."""
+    # Test importing a module
+    mock_source = """
+        from pathlib import Path
+        from typing import List, Dict
+        from os import path
+        from sys import modules
+    """
+
+    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert set(imports) == {"pathlib", "typing", "os.path", "sys"}
+
+    # Test importing non-module items
+    mock_source = """
+        from datetime import datetime
+        from collections import defaultdict
+        from unittest.mock import patch
+    """
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert set(imports) == {"datetime", "collections", "unittest.mock"}
+
+    # Test mixed imports
+    mock_source = """
+        import os
+        from pathlib import Path
+        from typing import List, Dict
+        from unittest.mock import patch
+    """
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert set(imports) == {"os", "pathlib", "typing", "unittest.mock"}
+
+
 @pytest.mark.parametrize(
     "module_name,expected",
     [
