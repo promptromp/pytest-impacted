@@ -33,6 +33,9 @@ class Change:
         self.name = name
         self.status = status
 
+    def __str__(self) -> str:
+        return f"{self.status}\t{self.name}"
+
     @classmethod
     def from_git_diff_name_status(cls, *, name: str, status: str) -> "Change":
         """Create a Change from a git diff.
@@ -48,6 +51,9 @@ class ChangeSet:
 
     def __init__(self, changes: list[Change]):
         self.changes = changes
+
+    def __str__(self) -> str:
+        return "\n".join(str(change) for change in self.changes)
 
     @classmethod
     def from_git_diff_name_status_output(cls, diffs_str: str) -> "ChangeSet":
@@ -147,7 +153,8 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:
     """Get the impacted files when in the BRANCH git mode."""
 
-    diffs = repo.git.diff(repo.commit(), name_status=True)
+    current_branch = repo.head.reference
+    diffs = repo.git.diff(base_branch, current_branch, name_status=True)
     change_set = ChangeSet.from_git_diff_name_status_output(diffs)
 
     impacted_files = [

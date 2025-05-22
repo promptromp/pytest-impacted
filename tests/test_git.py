@@ -12,6 +12,7 @@ class DummyRepo:
         diff_result=None,
         diff_branch_result=None,
         untracked_files=None,
+        current_branch="feature/some-feature-branch",
     ):
         self._dirty = dirty
         self._diff_result = diff_result or []
@@ -22,6 +23,8 @@ class DummyRepo:
         self.git = MagicMock()
         self.git.diff = MagicMock(return_value=self._diff_branch_result)
         self.commit = MagicMock()
+        self.head = MagicMock()
+        self.head.reference = current_branch
 
     def is_dirty(self):
         return self._dirty
