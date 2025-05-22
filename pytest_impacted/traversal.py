@@ -106,9 +106,8 @@ def resolve_files_to_modules(
                 resolved_modules.append(module_name)
             else:
                 logging.warning(
-                    "Module %s not found in submodules: %s",
+                    "Module %s not found in submodules",
                     module_name,
-                    submodules,
                 )
 
     return resolved_modules

@@ -21,6 +21,7 @@ class DummyRepo:
         self.index.diff = MagicMock(return_value=self._diff_result)
         self.git = MagicMock()
         self.git.diff = MagicMock(return_value=self._diff_branch_result)
+        self.commit = MagicMock()
 
     def is_dirty(self):
         return self._dirty
@@ -67,7 +68,7 @@ def test_find_impacted_files_in_repo_unstaged_dirty_no_changes(mock_repo):
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_branch(mock_repo):
-    diff_branch_result = "file3.py\nfile4.py\n"
+    diff_branch_result = "M\tfile3.py\nA\tfile4.py\n"
     mock_repo.return_value = DummyRepo(diff_branch_result=diff_branch_result)
     result = git.find_impacted_files_in_repo(".", git.GitMode.BRANCH, "main")
     assert set(result) == {"file3.py", "file4.py"}

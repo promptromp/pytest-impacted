@@ -3,6 +3,7 @@
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
 from git import Repo
 from git.diff import Diff
 
@@ -12,6 +13,62 @@ class GitMode(StrEnum):
 
     UNSTAGED = "unstaged"
     BRANCH = "branch"
+
+
+class GitStatus(StrEnum):
+    """Git statuses."""
+
+    ADDED = "A"
+    MODIFIED = "M"
+    DELETED = "D"
+    UNTRACKED = "??"
+    MODIFIED_IN_BOTH_STAGES = "MM"
+    ADDED_THEN_MODIFIED = "AM"
+
+
+class Change:
+    """A change to a git repository file."""
+
+    def __init__(self, name: str, status: GitStatus):
+        self.name = name
+        self.status = status
+
+    @classmethod
+    def from_git_diff_name_status(cls, *, name: str, status: str) -> "Change":
+        """Create a Change from a git diff.
+
+        Input is the output of `git diff --name-status`.
+
+        """
+        return cls(name=name, status=GitStatus(status))
+
+
+class ChangeSet:
+    """A set of changes to files in a git repository."""
+
+    def __init__(self, changes: list[Change]):
+        self.changes = changes
+
+    @classmethod
+    def from_git_diff_name_status_output(cls, diffs_str: str) -> "ChangeSet":
+        """Create a ChangeSet from a list of git diffs.
+
+        Input is the output of `git diff --name-status`.
+
+        Example input format:
+        ```
+        M\tsetup.py
+        D\tsetup.cfg
+        ```
+
+        """
+        diffs = [line.split("\t", 1) for line in diffs_str.splitlines()]
+
+        changes = [
+            Change.from_git_diff_name_status(status=status, name=name)
+            for (status, name) in diffs
+        ]
+        return cls(changes)
 
 
 def without_nones(items: list[Any | None]) -> list[Any]:
@@ -67,16 +124,17 @@ def find_impacted_files_in_repo(
 
 def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     """Get the impacted files when in the UNSTAGED git mode."""
-    # Nb. a_path would be None if this is a new file in which case
-    # we use the `b_path` argument to get its name and consider it
-    # modified.
     if not repo.is_dirty():
         # No changes in the repository and we are working in unstanged mode, nack.
         return None
 
+    diffs = repo.index.diff(None)
+
+    # Nb. a_path would be None if this is a new file in which case
+    # we use the `b_path` argument to get its name and consider it
+    # modified.
     impacted_files = [
-        item.a_path if item.a_path is not None else item.b_path
-        for item in repo.index.diff(None)
+        item.a_path if item.a_path is not None else item.b_path for item in diffs
     ]
 
     # Nb. we also include untracked files as they are also
@@ -88,8 +146,21 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
 
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:
     """Get the impacted files when in the BRANCH git mode."""
+
+    diffs = repo.git.diff(repo.commit(), name_status=True)
+    change_set = ChangeSet.from_git_diff_name_status_output(diffs)
+
     impacted_files = [
-        item for item in repo.git.diff(base_branch, name_only=True).splitlines()
+        item.name
+        for item in change_set.changes
+        if item.status in (GitStatus.MODIFIED, GitStatus.ADDED)
     ]
 
-    return without_nones(impacted_files) or None
+    return impacted_files or None
+
+
+def deleted_files_from_diff(change_set: ChangeSet) -> list[str]:
+    """Get a list of deleted files from git diffs."""
+    return [
+        item.name for item in change_set.changes if item.status == GitStatus.DELETED
+    ]
