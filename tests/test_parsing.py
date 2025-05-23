@@ -136,3 +136,20 @@ def test_is_test_module(module_name, expected):
         expected: The expected result (True if it should be considered a test module)
     """
     assert parsing.is_test_module(module_name) is expected
+
+
+@pytest.mark.parametrize(
+    "module_path,package,expected",
+    [
+        (".parsing", "pytest_impacted", True),
+        ("tests.test_parsing", "tests", True),
+        ("pytest_impacted.nonexistent", "pytest_impacted", False),
+        ("pytest_impacted.nonexistent.module", "pytest_impacted", False),
+        ("os", None, True),
+        ("sys", None, True),
+        ("nonexistent.module", None, False),
+    ],
+)
+def test_is_module_path(module_path, package, expected):
+    """Test is_module_path with various import scenarios."""
+    assert parsing.is_module_path(module_path, package=package) is expected
