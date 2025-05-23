@@ -1,0 +1,27 @@
+You are an expert in Python, and unit-testing frameworks such as pytest and python's standard library unittest module.
+
+Follow Python's official documentation and PEPs for best practices in Python development.
+
+
+## Project Description
+
+This is a repository that exposes a pytest plugin called `pytest-impact` which uses a combination of static analysis, git repository introspection, and dependency analysis via graph algorithms to estimate which unit-tests are affected ("impacted") by changes to the codebase as reflected via the git repository state.
+
+
+## Virtual Environment and Package Dependency Management
+
+We use `uv` for managing virtualenv and package dependencies. Dependencies can be added using the command-line:
+
+    uv add <package_name>
+
+and venv can be synced to the lockfile created by `uv` using:
+
+    uv sync
+
+## Unit-tests
+
+unit-tests can be run using the command-line:
+
+    uv run pytest
+
+All unit-test files go under the top-level ./tests/ sub-directory.

@@ -66,6 +66,46 @@ def test_parse_module_imports_oserror():
             parsing.parse_module_imports(mock_module)
 
 
+def test_parse_module_imports_from_statements():
+    """Test parse_module_imports with various from-import statement scenarios."""
+    # Test importing a module
+    mock_source = """
+        from pathlib import Path
+        from typing import List, Dict
+        from os import path
+        from sys import modules
+    """
+
+    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert set(imports) == {"pathlib", "typing", "os.path", "sys"}
+
+    # Test importing non-module items
+    mock_source = """
+        from datetime import datetime
+        from collections import defaultdict
+        from unittest.mock import patch
+    """
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert set(imports) == {"datetime", "collections", "unittest.mock"}
+
+    # Test mixed imports
+    mock_source = """
+        import os
+        from pathlib import Path
+        from typing import List, Dict
+        from unittest.mock import patch
+    """
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert set(imports) == {"os", "pathlib", "typing", "unittest.mock"}
+
+
 @pytest.mark.parametrize(
     "module_name,expected",
     [
@@ -96,3 +136,20 @@ def test_is_test_module(module_name, expected):
         expected: The expected result (True if it should be considered a test module)
     """
     assert parsing.is_test_module(module_name) is expected
+
+
+@pytest.mark.parametrize(
+    "module_path,package,expected",
+    [
+        (".parsing", "pytest_impacted", True),
+        ("tests.test_parsing", "tests", True),
+        ("pytest_impacted.nonexistent", "pytest_impacted", False),
+        ("pytest_impacted.nonexistent.module", "pytest_impacted", False),
+        ("os", None, True),
+        ("sys", None, True),
+        ("nonexistent.module", None, False),
+    ],
+)
+def test_is_module_path(module_path, package, expected):
+    """Test is_module_path with various import scenarios."""
+    assert parsing.is_module_path(module_path, package=package) is expected

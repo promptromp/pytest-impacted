@@ -159,13 +159,15 @@ def pytest_collection_modifyitems(session, config, items):
 def get_option_from_config(config: Config, name: str) -> str | None:
     """Get an option from the config.
 
-    If the option is not set, return the default value from the ini file if present.
+    If the option is not set via command line, return the default value
+    from the ini configuration file (e.g. pytest.ini, pyproject.toml) if present.
 
     """
     return config.getoption(name) or config.getini(name)
 
 
 def validate_config(config: Config):
+    """Validate the configuration options"""
     get_option = partial(get_option_from_config, config)
     if get_option("impacted"):
         if not get_option("impacted_module"):
