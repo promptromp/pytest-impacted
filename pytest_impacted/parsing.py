@@ -49,7 +49,7 @@ def parse_module_imports(module: types.ModuleType) -> list[str]:
             # if x.y is a module path or if y is a function/class/variable.
             for name, *_ in node.names:
                 full_name = f"{node.modname}.{name}"
-                if is_module_path(full_name):
+                if is_module_path(full_name, package=module.__name__):
                     imports.add(full_name)
                 else:
                     imports.add(node.modname)
@@ -57,20 +57,28 @@ def parse_module_imports(module: types.ModuleType) -> list[str]:
     return list(imports)
 
 
-def is_module_path(module_path: str) -> bool:
+def is_module_path(module_path: str, package: str | None = None) -> bool:
     """
     Checks if a given string represents a valid module path.
 
     Args:
         module_path: The string representing the module path (e.g., "pkg.foo.bar").
+        package: The package to search for the module in. used for relative imports.
 
     Returns:
         True if the path points to a module, False otherwise.
     """
     try:
-        spec = importlib.util.find_spec(module_path)
+        spec = importlib.util.find_spec(module_path, package=package)
         return spec is not None
     except ModuleNotFoundError:
+        return False
+    except ImportError:
+        logging.exception(
+            "ImportError while trying to find spec for module %s in package %s",
+            module_path,
+            package,
+        )
         return False
 
 
