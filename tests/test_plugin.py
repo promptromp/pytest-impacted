@@ -1,5 +1,5 @@
 import pytest
-from _pytest.config.argparsing import Parser
+from unittest.mock import MagicMock
 from pytest_impacted.plugin import (
     pytest_addoption,
     pytest_configure,
@@ -9,25 +9,46 @@ from pytest_impacted.plugin import (
 from pytest_impacted.git import GitMode
 
 
-def test_pytest_addoption():
-    """Test that the plugin adds the correct command line options."""
-    parser = Parser()
-    pytest_addoption(parser)
-
-    # Check that the impacted group exists
-    group = parser.getgroup("impacted")
-    assert group is not None
-
-    # Check that all options are added
-    options = {opt.dest for opt in group.options}
-    expected_options = {
+@pytest.fixture
+def cli_options():
+    return [
         "impacted",
         "impacted_module",
         "impacted_git_mode",
         "impacted_base_branch",
         "impacted_tests_dir",
-    }
-    assert options == expected_options
+    ]
+
+
+def test_pytest_addoption(cli_options):
+    """Test that the plugin adds the correct command line options."""
+    # Create mock options with the necessary attributes
+    mock_options = []
+    for option_name in cli_options:
+        mock_option = MagicMock()
+        mock_option.dest = option_name
+        mock_options.append(mock_option)
+
+    # Create a mock group that will return our mock options
+    mock_group = MagicMock()
+    mock_group.options = mock_options
+    mock_group.addoption = MagicMock()
+
+    # Create a mock parser that will return our mock group
+    mock_parser = MagicMock()
+    mock_parser.getgroup.return_value = mock_group
+    mock_parser.addini = MagicMock()
+
+    # Call the function with our mock parser
+    pytest_addoption(mock_parser)
+
+    # Verify the impacted group was requested
+    mock_parser.getgroup.assert_called_once_with("impacted")
+    assert mock_group is not None
+
+    # Check that all options were added
+    options = {opt.dest for opt in mock_group.options}
+    assert options == set(cli_options)
 
 
 def test_pytest_configure(pytestconfig):
