@@ -74,8 +74,20 @@ class Change:
         """Create a Change from a git diff.
 
         Input is the output of `git diff --name-status`.
+        For rename and copy operations, the name will contain both source and destination
+        paths separated by a tab.
 
         """
+        if status is not None and status.startswith(("R", "C")):
+            # For rename/copy operations, split the name into source and destination
+            if name is not None and "\t" in name:
+                a_path, b_path = name.split("\t", 1)
+                return cls(
+                    a_path=a_path,
+                    b_path=b_path,
+                    status=GitStatus.from_git_diff_name_status(status),
+                )
+
         return cls(
             a_path=name,
             b_path=None,

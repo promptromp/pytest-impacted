@@ -125,3 +125,50 @@ def test_without_nones():
     assert git.without_nones([None, None, None]) == []
     assert git.without_nones([1, 2, 3]) == [1, 2, 3]
     assert git.without_nones([]) == []
+
+
+def test_git_status_from_git_diff_name_status():
+    """Test GitStatus.from_git_diff_name_status with various status codes."""
+    # Test basic status codes
+    assert git.GitStatus.from_git_diff_name_status("A") == git.GitStatus.ADDED
+    assert git.GitStatus.from_git_diff_name_status("M") == git.GitStatus.MODIFIED
+    assert git.GitStatus.from_git_diff_name_status("D") == git.GitStatus.DELETED
+
+    # Test rename with similarity score
+    assert git.GitStatus.from_git_diff_name_status("R100") == git.GitStatus.RENAMED
+    assert git.GitStatus.from_git_diff_name_status("R75") == git.GitStatus.RENAMED
+
+    # Test copy with similarity score
+    assert git.GitStatus.from_git_diff_name_status("C100") == git.GitStatus.COPIED
+    assert git.GitStatus.from_git_diff_name_status("C85") == git.GitStatus.COPIED
+
+
+def test_changeset_from_git_diff_name_status_with_scores():
+    """Test ChangeSet.from_git_diff_name_status_output with rename and copy scores."""
+    diff_output = """M\tmodified.py
+R100\told_name.py\tnew_name.py
+C85\toriginal.py\tcopy.py
+D\tdeleted.py"""
+
+    change_set = git.ChangeSet.from_git_diff_name_status_output(diff_output)
+    changes = change_set.changes
+
+    assert len(changes) == 4
+
+    # Verify modified file
+    assert changes[0].status == git.GitStatus.MODIFIED
+    assert changes[0].name == "modified.py"
+
+    # Verify renamed file
+    assert changes[1].status == git.GitStatus.RENAMED
+    assert changes[1].a_path == "old_name.py"
+    assert changes[1].b_path == "new_name.py"
+
+    # Verify copied file
+    assert changes[2].status == git.GitStatus.COPIED
+    assert changes[2].a_path == "original.py"
+    assert changes[2].b_path == "copy.py"
+
+    # Verify deleted file
+    assert changes[3].status == git.GitStatus.DELETED
+    assert changes[3].name == "deleted.py"
