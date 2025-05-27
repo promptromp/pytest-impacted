@@ -32,6 +32,19 @@ class GitStatus(StrEnum):
     UNKNOWN = "X"
     PAIRING_BROKEN = "B"
 
+    @classmethod
+    def from_git_diff_name_status(cls, status: str) -> "GitStatus":
+        """Create a GitStatus from a git diff name status."""
+        match status:
+            case _ as status if status.startswith("R") and status[1:].isdigit():
+                # git diff --name-status output may report <X><score> for renamed files
+                return cls.RENAMED
+            case _ as status if status.startswith("C") and status[1:].isdigit():
+                # git diff --name-status output may report <X><score> for copied files
+                return cls.COPIED
+            case _:
+                return cls(status)
+
 
 class Change:
     """A change to a git repository file."""
@@ -66,7 +79,9 @@ class Change:
         return cls(
             a_path=name,
             b_path=None,
-            status=GitStatus(status) if status is not None else None,
+            status=GitStatus.from_git_diff_name_status(status)
+            if status is not None
+            else None,
         )
 
 
