@@ -4,7 +4,10 @@ permissions:
   contents: read
   pull-requests: write
 
-on: push
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 jobs:
   build:
@@ -31,7 +34,9 @@ jobs:
   publish-to-pypi:
     name: >-
       Publish Python distribution to PyPI
-    if: startsWith(github.ref, 'refs/tags/') # only publish to PyPI on tag pushes
+    if: |
+      startsWith(github.ref, 'refs/tags/') ||
+      github.event.workflow_run.conclusion == 'success'
     needs:
       - build
     runs-on: ubuntu-latest
@@ -87,7 +92,9 @@ jobs:
 
   publish-to-testpypi:
     name: Publish Python distribution to TestPyPI
-    if: startsWith(github.ref, 'refs/tags/') # only publish to PyPI on tag pushes
+    if: |
+      startsWith(github.ref, 'refs/tags/') ||
+      github.event.workflow_run.conclusion == 'success'
     needs:
       - build
     runs-on: ubuntu-latest
