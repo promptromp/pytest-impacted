@@ -30,6 +30,14 @@ class DummyRepo:
         return self._dirty
 
 
+@patch("pytest_impacted.git.GIT_AVAILABLE", False)
+def test_find_impacted_files_in_repo_git_not_available():
+    """Test find_impacted_files_in_repo when git is not available."""
+    with pytest.warns(UserWarning, match="Git functionality is disabled"):
+        result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+    assert result is None
+
+
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_clean(mock_repo):
     mock_repo.return_value = DummyRepo(dirty=False)
