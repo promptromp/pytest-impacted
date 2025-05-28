@@ -3,9 +3,19 @@
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+import warnings
 
-from git import Repo
-from git.diff import Diff
+try:
+    from git import Repo
+    from git.diff import Diff
+
+    GIT_AVAILABLE = True
+except ImportError:
+    GIT_AVAILABLE = False
+    warnings.warn(
+        "GitPython package is not available. Git-related functionality will be disabled. "
+        "To enable git functionality, install GitPython and ensure git CLI is available."
+    )
 
 
 class GitMode(StrEnum):
@@ -172,6 +182,13 @@ def find_impacted_files_in_repo(
     :param base_branch: the base branch to compare against.
 
     """
+    if not GIT_AVAILABLE:
+        warnings.warn(
+            "Git functionality is disabled because GitPython is not available. "
+            "To enable git functionality, install GitPython and ensure git CLI is available."
+        )
+        return None
+
     repo = Repo(path=Path(repo_dir))
 
     match git_mode:
