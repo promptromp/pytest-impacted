@@ -1,17 +1,17 @@
 """Matchers used for pattern matching and unit-tests."""
 
-import sys
 import logging
+import sys
 from pathlib import Path
 
 from pytest_impacted.display import notify, warn
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
+from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.traversal import (
     path_to_package_name,
     resolve_files_to_modules,
     resolve_modules_to_files,
 )
-from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 
 
 def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
@@ -41,9 +41,7 @@ def get_impacted_tests(
         # so that we can import the tests_dir as a module.
         tests_dir_path = Path(tests_dir).resolve().parent
         if str(tests_dir_path) not in sys.path:
-            logging.debug(
-                "Adding tests_dir parent directory to sys.path: %s", tests_dir_path
-            )
+            logging.debug("Adding tests_dir parent directory to sys.path: %s", tests_dir_path)
             sys.path.insert(0, str(tests_dir_path))
         tests_package = path_to_package_name(tests_dir)
 
@@ -65,9 +63,7 @@ def get_impacted_tests(
         session,
     )
 
-    impacted_modules = resolve_files_to_modules(
-        impacted_files, ns_module=ns_module, tests_package=tests_package
-    )
+    impacted_modules = resolve_files_to_modules(impacted_files, ns_module=ns_module, tests_package=tests_package)
     if not impacted_modules:
         notify(
             f"No impacted Python modules detected. Impacted files were: {impacted_files}",
@@ -80,7 +76,8 @@ def get_impacted_tests(
     impacted_test_modules = resolve_impacted_tests(impacted_modules, dep_tree)
     if not impacted_test_modules:
         warn(
-            f"No unit-test modules impacted by the changes could be detected. Impacted Python modules were: {impacted_modules}",
+            "No unit-test modules impacted by the changes could be detected. "
+            + f"Impacted Python modules were: {impacted_modules}",
             session,
         )
         return None
@@ -88,7 +85,8 @@ def get_impacted_tests(
     impacted_test_files = resolve_modules_to_files(impacted_test_modules)
     if not impacted_test_files:
         warn(
-            f"No unit-test file paths impacted by the changes could be found. impacted test modules were: {impacted_test_modules}",
+            "No unit-test file paths impacted by the changes could be found. "
+            + f"impacted test modules were: {impacted_test_modules}",
             session,
         )
         return None

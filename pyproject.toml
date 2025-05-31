@@ -64,4 +64,13 @@ dev = [
 namespace_packages = true
 ignore_missing_imports = true
 
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+
 [tool.ruff.lint]
+# Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes by default.
+select = ["E", "F", "I"]

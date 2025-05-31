@@ -5,8 +5,8 @@ import types
 
 import networkx as nx
 
-from pytest_impacted.traversal import import_submodules
 from pytest_impacted.parsing import is_test_module, parse_module_imports
+from pytest_impacted.traversal import import_submodules
 
 
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
@@ -15,11 +15,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     for module in impacted_modules:
         # Find all nodes that depend on the modified module by doing a DFS from the module
         # using the (inverted) directed graph of imports which is the dependency graph.
-        dependent_nodes = [
-            node
-            for node in nx.dfs_preorder_nodes(dep_tree, source=module)
-            if is_test_module(node)
-        ]
+        dependent_nodes = [node for node in nx.dfs_preorder_nodes(dep_tree, source=module) if is_test_module(node)]
 
         impacted_tests.extend(dependent_nodes)
 
@@ -30,9 +26,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
-def build_dep_tree(
-    package: str | types.ModuleType, tests_package: str | types.ModuleType | None = None
-) -> nx.DiGraph:
+def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.ModuleType | None = None) -> nx.DiGraph:
     """Run the script for a given package name."""
     submodules = import_submodules(package)
 

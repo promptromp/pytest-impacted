@@ -1,7 +1,9 @@
 """CLI entrypoints for pytest-impacted."""
 
-import click
 import logging
+import sys
+
+import click
 from rich.logging import RichHandler
 
 from pytest_impacted.api import get_impacted_tests
@@ -15,6 +17,7 @@ def configure_logging(verbose: bool) -> None:
         format="%(funcName)-20s | %(message)s",
         datefmt="[%x]",
         handlers=[RichHandler(rich_tracebacks=True, markup=True)],
+        stream=sys.stderr,
     )
 
 
@@ -36,17 +39,20 @@ def configure_logging(verbose: bool) -> None:
 @click.option(
     "--tests-dir",
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    help="Directory containing the unit-test files. If not specified, tests will only be found under namespace module directory.",
+    help=(
+        "Directory containing the unit-test files. If not specified, "
+        + "tests will only be found under namespace module directory."
+    ),
 )
 @click.option("--verbose", is_flag=True, help="Verbose output.")
 def impacted_tests_cli(git_mode, base_branch, root_dir, ns_module, tests_dir, verbose):
     """CLI entrypoint for impacted-tests console script."""
-    click.echo("impacted-tests")
-    click.secho("  git-mode: {}".format(git_mode), fg="blue", bold=True)
-    click.secho("  base-branch: {}".format(base_branch), fg="blue", bold=True)
-    click.secho("  root-dir: {}".format(root_dir), fg="blue", bold=True)
-    click.secho("  ns-module: {}".format(ns_module), fg="blue", bold=True)
-    click.secho("  tests-dir: {}".format(tests_dir), fg="blue", bold=True)
+    click.echo("impacted-tests", err=True)
+    click.secho("  git-mode: {}".format(git_mode), fg="blue", bold=True, err=True)
+    click.secho("  base-branch: {}".format(base_branch), fg="blue", bold=True, err=True)
+    click.secho("  root-dir: {}".format(root_dir), fg="blue", bold=True, err=True)
+    click.secho("  ns-module: {}".format(ns_module), fg="blue", bold=True, err=True)
+    click.secho("  tests-dir: {}".format(tests_dir), fg="blue", bold=True, err=True)
 
     configure_logging(verbose=verbose)
 
@@ -58,4 +64,8 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, ns_module, tests_dir, ve
         tests_dir=tests_dir,
     )
 
-    click.secho("impacted tests: {}".format(impacted_tests), fg="blue", bold=True)
+    if impacted_tests:
+        for impacted_test in impacted_tests:
+            print(impacted_test)
+    else:
+        click.secho("No impacted tests found.", fg="red", bold=True, err=True)

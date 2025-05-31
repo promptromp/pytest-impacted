@@ -3,7 +3,7 @@ from functools import partial
 import pytest
 from pytest import Config, Parser, UsageError
 
-from pytest_impacted.api import matches_impacted_tests, get_impacted_tests
+from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 
 
@@ -73,7 +73,10 @@ def pytest_addoption(parser: Parser):
         action="store",
         default=None,
         dest="impacted_tests_dir",
-        help="Directory containing the unit-test files. If not specified, tests will only be found under namespace module directory.",
+        help=(
+            "Directory containing the unit-test files. If not specified, "
+            + "tests will only be found under namespace module directory."
+        ),
     )
     parser.addini(
         "impacted_tests_dir",
@@ -172,19 +175,11 @@ def validate_config(config: Config):
     if get_option("impacted"):
         if not get_option("impacted_module"):
             # If the impacted option is set, we need to check if there is a module specified.
-            raise UsageError(
-                "No module specified. Please specify a module using --impacted-module."
-            )
+            raise UsageError("No module specified. Please specify a module using --impacted-module.")
         if not get_option("impacted_git_mode"):
             # If the impacted option is set, we need to check if there is a git mode specified.
-            raise UsageError(
-                "No git mode specified. Please specify a git mode using --impacted-git-mode."
-            )
+            raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
 
-        if get_option("impacted_git_mode") == GitMode.BRANCH and not get_option(
-            "impacted_base_branch"
-        ):
+        if get_option("impacted_git_mode") == GitMode.BRANCH and not get_option("impacted_base_branch"):
             # If the git mode is branch, we need to check if there is a base branch specified.
-            raise UsageError(
-                "No base branch specified. Please specify a base branch using --impacted-base-branch."
-            )
+            raise UsageError("No base branch specified. Please specify a base branch using --impacted-base-branch.")

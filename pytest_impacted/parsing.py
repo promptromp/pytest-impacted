@@ -27,9 +27,7 @@ def parse_module_imports(module: types.ModuleType) -> list[str]:
         if module.__file__ and should_silently_ignore_oserror(module.__file__):
             return []
         else:
-            logging.error(
-                "Exception raised while trying to get source code for module %s", module
-            )
+            logging.error("Exception raised while trying to get source code for module %s", module)
             raise
 
     if not source:
