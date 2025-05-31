@@ -68,7 +68,7 @@ class TestImpactedTestsCLI:
                     "main",
                     "--root-dir",
                     ".",
-                    "--ns-module",
+                    "--module",
                     "test_ns",
                     "--verbose",
                 ],
@@ -80,7 +80,7 @@ class TestImpactedTestsCLI:
                 impacted_git_mode=GitMode.UNSTAGED,
                 impacted_base_branch="main",
                 root_dir=".",
-                ns_module="test_ns",
+                module="test_ns",
                 tests_dir=None,
             )
 
@@ -108,7 +108,7 @@ class TestImpactedTestsCLI:
                     "develop",
                     "--root-dir",
                     ".",
-                    "--ns-module",
+                    "--module",
                     "test_ns",
                     "--tests-dir",
                     "tests",
@@ -120,7 +120,7 @@ class TestImpactedTestsCLI:
                 impacted_git_mode=GitMode.BRANCH,
                 impacted_base_branch="develop",
                 root_dir=".",
-                ns_module="test_ns",
+                module="test_ns",
                 tests_dir="tests",
             )
 
@@ -135,7 +135,7 @@ class TestImpactedTestsCLI:
 
             result = self.runner.invoke(
                 impacted_tests_cli,
-                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--ns-module", "test_ns"],
+                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
             )
 
             assert result.exit_code == 0
@@ -152,7 +152,7 @@ class TestImpactedTestsCLI:
 
             result = self.runner.invoke(
                 impacted_tests_cli,
-                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--ns-module", "test_ns"],
+                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
             )
 
             assert result.exit_code == 0
@@ -169,7 +169,7 @@ class TestImpactedTestsCLI:
                 "main",
                 "--root-dir",
                 ".",
-                # Missing --ns-module
+                # Missing --module
             ],
         )
 
@@ -183,7 +183,7 @@ class TestImpactedTestsCLI:
 
             result = self.runner.invoke(
                 impacted_tests_cli,
-                ["--git-mode", "invalid_mode", "--base-branch", "main", "--root-dir", ".", "--ns-module", "test_ns"],
+                ["--git-mode", "invalid_mode", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
             )
 
             assert result.exit_code != 0
@@ -201,14 +201,14 @@ class TestImpactedTestsCLI:
                 "main",
                 "--root-dir",
                 "/nonexistent/path",
-                "--ns-module",
+                "--module",
                 "test_ns",
             ],
         )
 
         assert result.exit_code != 0
 
-    def test_cli_nonexistent_ns_module(self):
+    def test_cli_nonexistent_module(self):
         """Test CLI fails with non-existent namespace module."""
         result = self.runner.invoke(
             impacted_tests_cli,
@@ -219,7 +219,7 @@ class TestImpactedTestsCLI:
                 "main",
                 "--root-dir",
                 ".",
-                "--ns-module",
+                "--module",
                 "/nonexistent/module",
             ],
         )
@@ -240,7 +240,7 @@ class TestImpactedTestsCLI:
                     "main",
                     "--root-dir",
                     ".",
-                    "--ns-module",
+                    "--module",
                     "test_ns",
                     "--tests-dir",
                     "/nonexistent/tests",
@@ -258,7 +258,7 @@ class TestImpactedTestsCLI:
         with self.runner.isolated_filesystem():
             Path("test_ns").mkdir()
 
-            result = self.runner.invoke(impacted_tests_cli, ["--ns-module", "test_ns"])
+            result = self.runner.invoke(impacted_tests_cli, ["--module", "test_ns"])
 
             assert result.exit_code == 0
             mock_configure_logging.assert_called_once_with(verbose=False)
@@ -266,7 +266,7 @@ class TestImpactedTestsCLI:
                 impacted_git_mode=GitMode.UNSTAGED,  # default
                 impacted_base_branch="main",  # default
                 root_dir=".",  # default
-                ns_module="test_ns",
+                module="test_ns",
                 tests_dir=None,  # default
             )
 
@@ -289,7 +289,7 @@ class TestImpactedTestsCLI:
                     "develop",
                     "--root-dir",
                     ".",
-                    "--ns-module",
+                    "--module",
                     "test_ns",
                     "--tests-dir",
                     "tests",
@@ -301,4 +301,4 @@ class TestImpactedTestsCLI:
             assert "impacted-tests" in result.output
             assert "git-mode: branch" in result.output
             assert "base-branch: develop" in result.output
-            assert "ns-module: test_ns" in result.output
+            assert "module: test_ns" in result.output

@@ -71,7 +71,7 @@ When using this plugin in CI, it is sometimes desirable to generate the list of 
 and then invoke running these in a separate step later in the CI pipeline. This can be achieved with the `impacted-tests` CLI included with the plugin, which supports the same arguments
 as the plugin itself:
 
-    $ impacted-tests --ns-module=<my_root_module_name> --git-mode=branch --base-branch=main > impacted_tests.txt
+    $ impacted-tests --module=<my_root_module_name> --git-mode=branch --base-branch=main > impacted_tests.txt
 
 In some later step of your CI can then run:
 

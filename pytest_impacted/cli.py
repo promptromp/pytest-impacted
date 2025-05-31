@@ -32,7 +32,7 @@ def configure_logging(verbose: bool) -> None:
     help="Root directory for project repository.",
 )
 @click.option(
-    "--ns-module",
+    "--module",
     required=True,
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help="Namespace (top-level) module for package we are testing.",
@@ -46,13 +46,13 @@ def configure_logging(verbose: bool) -> None:
     ),
 )
 @click.option("--verbose", is_flag=True, help="Verbose output.")
-def impacted_tests_cli(git_mode, base_branch, root_dir, ns_module, tests_dir, verbose):
+def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbose):
     """CLI entrypoint for impacted-tests console script."""
     click.echo("impacted-tests", err=True)
-    click.secho("  git-mode: {}".format(git_mode), fg="blue", bold=True, err=True)
     click.secho("  base-branch: {}".format(base_branch), fg="blue", bold=True, err=True)
+    click.secho("  git-mode: {}".format(git_mode), fg="blue", bold=True, err=True)
+    click.secho("  module: {}".format(module), fg="blue", bold=True, err=True)
     click.secho("  root-dir: {}".format(root_dir), fg="blue", bold=True, err=True)
-    click.secho("  ns-module: {}".format(ns_module), fg="blue", bold=True, err=True)
     click.secho("  tests-dir: {}".format(tests_dir), fg="blue", bold=True, err=True)
 
     configure_logging(verbose=verbose)
@@ -61,7 +61,7 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, ns_module, tests_dir, ve
         impacted_git_mode=git_mode,
         impacted_base_branch=base_branch,
         root_dir=root_dir,
-        ns_module=ns_module,
+        module=module,
         tests_dir=tests_dir,
     )
 
