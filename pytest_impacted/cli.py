@@ -1,9 +1,9 @@
 """CLI entrypoints for pytest-impacted."""
 
 import logging
-import sys
 
 import click
+from rich.console import Console
 from rich.logging import RichHandler
 
 from pytest_impacted.api import get_impacted_tests
@@ -12,12 +12,13 @@ from pytest_impacted.git import GitMode
 
 def configure_logging(verbose: bool) -> None:
     """Configure logging for the CLIs."""
+    # Default to using stderr for logs as we want stdout for pipe-able output.
+    console = Console(stderr=True)
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(funcName)-20s | %(message)s",
         datefmt="[%x]",
-        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
-        stream=sys.stderr,
+        handlers=[RichHandler(console=console, markup=True, rich_tracebacks=True)],
     )
 
 
