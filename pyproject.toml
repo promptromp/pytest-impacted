@@ -72,5 +72,15 @@ target-version = "py311"
 quote-style = "double"
 
 [tool.ruff.lint]
-# Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes by default.
-select = ["E", "F", "I"]
+ignore = [
+  "T201",
+]
+
+select = [
+    "B",  # flake8-bugbear
+    "E",  # pycodestyle
+    "F",  # Pyflakes
+    "I",  # isort
+    "PERF",  # perflint
+    "T",  # flake8-debugger
+]

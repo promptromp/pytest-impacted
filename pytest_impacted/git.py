@@ -14,7 +14,8 @@ except ImportError:
     GIT_AVAILABLE = False
     warnings.warn(
         "GitPython package is not available. Git-related functionality will be disabled. "
-        "To enable git functionality, install GitPython and ensure git CLI is available."
+        "To enable git functionality, install GitPython and ensure git CLI is available.",
+        stacklevel=2,
     )
 
 
@@ -176,7 +177,8 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     if not GIT_AVAILABLE:
         warnings.warn(
             "Git functionality is disabled because GitPython is not available. "
-            "To enable git functionality, install GitPython and ensure git CLI is available."
+            "To enable git functionality, install GitPython and ensure git CLI is available.",
+            stacklevel=2,
         )
         return None
 
