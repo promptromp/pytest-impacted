@@ -61,7 +61,7 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbo
         impacted_git_mode=git_mode,
         impacted_base_branch=base_branch,
         root_dir=root_dir,
-        module=module,
+        ns_module=module,
         tests_dir=tests_dir,
     )
 

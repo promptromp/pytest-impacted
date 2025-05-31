@@ -80,7 +80,7 @@ class TestImpactedTestsCLI:
                 impacted_git_mode=GitMode.UNSTAGED,
                 impacted_base_branch="main",
                 root_dir=".",
-                module="test_ns",
+                ns_module="test_ns",
                 tests_dir=None,
             )
 
@@ -120,7 +120,7 @@ class TestImpactedTestsCLI:
                 impacted_git_mode=GitMode.BRANCH,
                 impacted_base_branch="develop",
                 root_dir=".",
-                module="test_ns",
+                ns_module="test_ns",
                 tests_dir="tests",
             )
 
@@ -266,7 +266,7 @@ class TestImpactedTestsCLI:
                 impacted_git_mode=GitMode.UNSTAGED,  # default
                 impacted_base_branch="main",  # default
                 root_dir=".",  # default
-                module="test_ns",
+                ns_module="test_ns",
                 tests_dir=None,  # default
             )
 
