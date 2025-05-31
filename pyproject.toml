@@ -73,10 +73,11 @@ quote-style = "double"
 
 [tool.ruff.lint]
 ignore = [
-  "T201",
+    "T201",  # allow print statement
 ]
 
 select = [
+    "A",  # flake8-builtins
     "B",  # flake8-bugbear
     "E",  # pycodestyle
     "F",  # Pyflakes
