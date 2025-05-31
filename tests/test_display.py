@@ -1,6 +1,8 @@
 """Unit tests for the display module."""
 
-from unittest.mock import MagicMock
+import logging
+from unittest.mock import MagicMock, patch
+
 from pytest_impacted import display
 
 
@@ -33,3 +35,17 @@ def test_warn():
     assert "WARNING: Danger!" in args[0]
     assert kwargs.get("yellow") is True
     assert kwargs.get("bold") is True
+
+
+def test_notify_without_session():
+    """Test notify function when session is None."""
+    with patch.object(logging, "info") as mock_info:
+        display.notify("Hello, world!", None)
+        mock_info.assert_called_once_with("\n%s\n", "Hello, world!")
+
+
+def test_warn_without_session():
+    """Test warn function when session is None."""
+    with patch.object(logging, "warning") as mock_warning:
+        display.warn("Danger!", None)
+        mock_warning.assert_called_once_with("\nWARNING: %s\n", "Danger!")

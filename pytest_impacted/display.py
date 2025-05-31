@@ -12,7 +12,7 @@ def notify(message: str, session) -> None:
             bold=True,
         )
     else:
-        logging.info(f"\n{message}\n")
+        logging.info("\n%s\n", message)
 
 
 def warn(message: str, session) -> None:
@@ -24,4 +24,4 @@ def warn(message: str, session) -> None:
             bold=True,
         )
     else:
-        logging.warning(f"\nWARNING: {message}\n")
+        logging.warning("\nWARNING: %s\n", message)

@@ -41,6 +41,8 @@ You can install "pytest-impacted" via `pip`from `PyPI`:
 
 ## Usage
 
+### Local unstaged changes
+
 Use as a pytest plugin. Examples for invocation:
 
     $ pytest --impacted --impacted-git-mode=unstaged --impacted-module=<my_root_module_name>
@@ -48,16 +50,32 @@ Use as a pytest plugin. Examples for invocation:
 This will run all unit-tests impacted by changes to files which have unstaged
 modifications in the current active git repository.
 
+
+### Changes committed to current git branch
+
     $ pytest --impacted --impacted-git-mode=branch --impacted-base-branch=main --impacted-module=<my_root_module_name>
 
 this will run all unit-tests impacted by changes to files which have been
 modified via any existing commits to the current active branch, as compared to
 the base branch passed in the `--impacted-base-branch` parameter.
 
+### External tests directory
+
 As another common use case, In some projects the tests directory exists outside of the namespace package. In those cases you can use the `--impacted-tests-dir` option to make sure those test files are included in the dependency tree and correctly considered for impact analysis:
 
     $ pytest --impacted --impacted-git-mode=unstaged --impacted-module=<my_root_module_name> --impacted-tests-dir=tests/
 
+### CI Integration
+
+When using this plugin in CI, it is sometimes desirable to generate the list of impacted test files in one stage where we have access to the git CLI (and perhaps required credentials),
+and then invoke running these in a separate step later in the CI pipeline. This can be achieved with the `impacted-tests` CLI included with the plugin, which supports the same arguments
+as the plugin itself:
+
+    $ impacted-tests --module=<my_root_module_name> --git-mode=branch --base-branch=main > impacted_tests.txt
+
+In some later step of your CI can then run:
+
+    $ pytest @impacted_tests.txt
 
 ## Testing
 

@@ -78,9 +78,7 @@ def import_submodules(package: str | types.ModuleType) -> dict[str, types.Module
     return results
 
 
-def resolve_files_to_modules(
-    filenames: list[str], ns_module: str, tests_package: str | None = None
-):
+def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package: str | None = None):
     """Resolve file paths to their corresponding Python module objects."""
     # Get the path to the package
     path = Path(importlib.import_module(ns_module).__path__[0])
@@ -95,12 +93,7 @@ def resolve_files_to_modules(
         # Check if the file is a Python module
         if file.endswith(".py"):
             # TODO: Refactor this to use the path_to_package_name function ideally.
-            module_name = (
-                file.replace(str(path), "")
-                .replace("/", ".")
-                .replace(".py", "")
-                .lstrip(".")
-            )
+            module_name = file.replace(str(path), "").replace("/", ".").replace(".py", "").lstrip(".")
 
             if module_name in submodules:
                 resolved_modules.append(module_name)
