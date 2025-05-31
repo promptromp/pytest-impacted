@@ -41,11 +41,11 @@ def test_notify_without_session():
     """Test notify function when session is None."""
     with patch.object(logging, "info") as mock_info:
         display.notify("Hello, world!", None)
-        mock_info.assert_called_once_with("\nHello, world!\n")
+        mock_info.assert_called_once_with("\n%s\n", "Hello, world!")
 
 
 def test_warn_without_session():
     """Test warn function when session is None."""
     with patch.object(logging, "warning") as mock_warning:
         display.warn("Danger!", None)
-        mock_warning.assert_called_once_with("\nWARNING: Danger!\n")
+        mock_warning.assert_called_once_with("\nWARNING: %s\n", "Danger!")

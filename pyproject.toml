@@ -81,6 +81,7 @@ select = [
     "B",  # flake8-bugbear
     "E",  # pycodestyle
     "F",  # Pyflakes
+    "G",  # flake8-logging-format
     "I",  # isort
     "PERF",  # perflint
     "T",  # flake8-debugger
