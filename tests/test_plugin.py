@@ -1,12 +1,14 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
+from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
     pytest_addoption,
     pytest_configure,
     pytest_report_header,
     validate_config,
 )
-from pytest_impacted.git import GitMode
 
 
 @pytest.fixture
@@ -57,10 +59,7 @@ def test_pytest_configure(pytestconfig):
 
     # Check that the marker is added
     markers = pytestconfig.getini("markers")
-    assert (
-        "impacted(state): mark test as impacted by the state of the git repository"
-        in markers
-    )
+    assert "impacted(state): mark test as impacted by the state of the git repository" in markers
 
 
 def test_pytest_report_header(pytestconfig):

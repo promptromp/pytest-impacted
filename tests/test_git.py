@@ -1,8 +1,10 @@
 """Unit tests for the git module."""
 
-from unittest.mock import patch, MagicMock
-from pytest_impacted import git
+from unittest.mock import MagicMock, patch
+
 import pytest
+
+from pytest_impacted import git
 
 
 class DummyRepo:
@@ -62,9 +64,7 @@ def test_find_impacted_files_in_repo_unstaged_dirty_with_untracked_files(mock_re
     diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
     diff2 = MagicMock(a_path=None, b_path="file2.py", change_type="A")
     diff_result = [diff1, diff2]
-    mock_repo.return_value = DummyRepo(
-        dirty=True, diff_result=diff_result, untracked_files=["file3.py", "file4.py"]
-    )
+    mock_repo.return_value = DummyRepo(dirty=True, diff_result=diff_result, untracked_files=["file3.py", "file4.py"])
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert set(result) == {"file1.py", "file2.py", "file3.py", "file4.py"}
 

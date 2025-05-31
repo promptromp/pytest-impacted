@@ -1,11 +1,11 @@
 """Tests for the traversal module."""
 
 import importlib
+import pkgutil
 import types
 from pathlib import Path
 
 import pytest
-import pkgutil
 
 from pytest_impacted.traversal import (
     import_submodules,
@@ -63,12 +63,7 @@ def test_resolve_files_to_modules():
     package_path = Path(importlib.import_module("pytest_impacted").__path__[0])
     test_file = str(package_path / "traversal.py")
     # Simulate the replacement logic
-    module_name = (
-        test_file.replace(str(package_path), "")
-        .replace("/", ".")
-        .replace(".py", "")
-        .lstrip(".")
-    )
+    module_name = test_file.replace(str(package_path), "").replace("/", ".").replace(".py", "").lstrip(".")
     submodules = import_submodules("pytest_impacted")
     modules = resolve_files_to_modules([test_file], "pytest_impacted")
     # The function will only return the module name if it matches a key in submodules
@@ -219,9 +214,7 @@ def test_resolve_files_to_modules_with_tests_package():
             if package == "pytest_impacted":
                 return {"traversal": types.ModuleType("traversal")}
             elif package == "tests":
-                return {
-                    "path.to.tests.test_traversal": types.ModuleType("test_traversal")
-                }
+                return {"path.to.tests.test_traversal": types.ModuleType("test_traversal")}
             return {}
 
         m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)

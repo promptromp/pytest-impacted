@@ -1,8 +1,10 @@
 """Unit tests for the graph module."""
 
-import pytest
+from unittest.mock import MagicMock, patch
+
 import networkx as nx
-from unittest.mock import patch, MagicMock
+import pytest
+
 from pytest_impacted import graph
 
 

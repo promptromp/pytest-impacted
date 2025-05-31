@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from pytest_impacted.api import matches_impacted_tests, get_impacted_tests
+from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 
 
@@ -39,9 +39,7 @@ def test_matches_impacted_tests_exact_match():
 
 def test_matches_impacted_tests_substring_not_suffix():
     item_path = "test_example.py"  # item_path is just 'test_example.py'
-    impacted_tests = [
-        "project/module/tests/test_example.pyc"
-    ]  # .pyc instead of .py, so not a suffix
+    impacted_tests = ["project/module/tests/test_example.pyc"]  # .pyc instead of .py, so not a suffix
     assert not matches_impacted_tests(item_path, impacted_tests=impacted_tests)
 
 
@@ -62,6 +60,4 @@ def test_get_impacted_tests_no_impacted_files(mock_find_impacted_files):
         tests_dir="tests",
     )
     assert result is None
-    mock_find_impacted_files.assert_called_once_with(
-        Path("."), git_mode=GitMode.UNSTAGED, base_branch="main"
-    )
+    mock_find_impacted_files.assert_called_once_with(Path("."), git_mode=GitMode.UNSTAGED, base_branch="main")

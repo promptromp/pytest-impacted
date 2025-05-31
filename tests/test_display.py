@@ -1,6 +1,7 @@
 """Unit tests for the display module."""
 
 from unittest.mock import MagicMock
+
 from pytest_impacted import display
 
 

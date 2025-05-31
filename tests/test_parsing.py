@@ -1,8 +1,10 @@
 """Unit tests for the parsing module."""
 
 import tempfile
-import pytest
 from unittest.mock import patch
+
+import pytest
+
 from pytest_impacted import parsing
 
 
