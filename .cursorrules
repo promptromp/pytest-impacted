@@ -10,7 +10,9 @@ This is a repository that exposes a pytest plugin called `pytest-impact` which u
 
 ## Virtual Environment and Package Dependency Management
 
-We use `uv` for managing virtualenv and package dependencies. Dependencies can be added using the command-line:
+We use `uv` for managing virtualenv and package dependencies. All commands below should be run from the repository directory root.
+
+Dependencies can be added using the command-line:
 
     uv add <package_name>
 
