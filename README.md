@@ -59,6 +59,12 @@ this will run all unit-tests impacted by changes to files which have been
 modified via any existing commits to the current active branch, as compared to
 the base branch passed in the `--impacted-base-branch` parameter.
 
+As an added bonus, note that you can pass git expressions to the base branch parameter as would be permissible when using git diff - e.g.:
+
+ $ pytest --impacted --impacted-git-mode=branch --impacted-base-branch="HEAD~4" --impacted-module=<my_root_module_name>
+
+This can be useful in some scenarios as well.
+
 ### External tests directory
 
 As another common use case, In some projects the tests directory exists outside of the namespace package. In those cases you can use the `--impacted-tests-dir` option to make sure those test files are included in the dependency tree and correctly considered for impact analysis:
