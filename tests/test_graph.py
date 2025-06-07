@@ -28,22 +28,29 @@ def sample_dep_tree():
     return digraph
 
 
-def test_resolve_impacted_tests(sample_dep_tree):
-    """Test resolving impacted tests from modified modules."""
-    # Test single module modification
-    modified_modules = ["module_d"]
-    impacted = graph.resolve_impacted_tests(modified_modules, sample_dep_tree)
-    assert set(impacted) == {"test_module1", "test_module2"}
+@pytest.mark.parametrize(
+    "modified_modules,expected_impacted",
+    [
+        # Test single module modification
+        (["module_d"], {"test_module1", "test_module2"}),
+        # Test multiple module modifications
+        (["module_b", "module_c"], {"test_module1", "test_module2"}),
+        # Test no impact
+        (["module_e"], {"test_module2"}),
+        # Test dangling node (module not in dependency tree)
+        (["dangling_module"], set()),
+    ],
+)
+def test_resolve_impacted_tests(sample_dep_tree, modified_modules, expected_impacted):
+    """Test resolving impacted tests from modified modules.
 
-    # Test multiple module modifications
-    modified_modules = ["module_b", "module_c"]
+    Args:
+        sample_dep_tree: Fixture providing a sample dependency tree
+        modified_modules: List of modules that were modified
+        expected_impacted: Set of test modules expected to be impacted
+    """
     impacted = graph.resolve_impacted_tests(modified_modules, sample_dep_tree)
-    assert set(impacted) == {"test_module1", "test_module2"}
-
-    # Test no impact
-    modified_modules = ["module_e"]
-    impacted = graph.resolve_impacted_tests(modified_modules, sample_dep_tree)
-    assert set(impacted) == {"test_module2"}
+    assert set(impacted) == expected_impacted
 
 
 def test_build_dep_tree():

@@ -10,11 +10,25 @@ from pytest_impacted.traversal import import_submodules
 
 
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
-    """Resolve impacted tests based on impacted modules."""
+    """Resolve impacted tests based on impacted modules.
+
+    The current logic is to do a DFS from the impacted module to find all nodes that depend on it.
+    We then check if these nodes are test modules.
+    We return the list of test modules that are impacted.
+
+    """
     impacted_tests = []
     for module in impacted_modules:
-        # Find all nodes that depend on the modified module by doing a DFS from the module
-        # using the (inverted) directed graph of imports which is the dependency graph.
+        if module not in dep_tree.nodes:
+            # This could happen if a module file was modified but is a "dangling node" in the dependency tree.
+            # This is likely because the module is not imported by any other module.
+            logging.warning(
+                "Module %s is marked as impacted was not found in dependency tree, "
+                "likely pruned because it is a dangling node. Skipping.",
+                module,
+            )
+            continue
+
         dependent_nodes = [node for node in nx.dfs_preorder_nodes(dep_tree, source=module) if is_test_module(node)]
 
         impacted_tests.extend(dependent_nodes)
