@@ -17,8 +17,10 @@ repos:
     - id: fix-byte-order-marker
     - id: check-case-conflict
     - id: check-json
+    - id: check-toml
     - id: check-yaml
       args: [ --unsafe ]
+    - id: debug-statements
     - id: detect-aws-credentials
       args: [ --allow-missing-credentials ]
     - id: detect-private-key
