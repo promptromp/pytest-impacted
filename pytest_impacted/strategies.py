@@ -94,12 +94,29 @@ class PytestImpactStrategy(ImpactStrategy):
         impacted_tests = []
 
         for conftest_file in conftest_files:
-            conftest_path = Path(conftest_file)
-            if not conftest_path.is_absolute():
-                conftest_path = root_dir / conftest_path
+            # Handle different path types - ensure we get a proper pathlib.Path
+            try:
+                if hasattr(conftest_file, "strpath"):
+                    # This is likely a py.path.local.LocalPath object
+                    conftest_path = Path(conftest_file.strpath)
+                elif hasattr(conftest_file, "__fspath__"):
+                    # This has a filesystem path protocol
+                    conftest_path = Path(conftest_file.__fspath__())
+                else:
+                    # Fallback to string conversion
+                    conftest_path = Path(str(conftest_file))
 
-            # Find the directory containing the conftest.py
-            conftest_dir = conftest_path.parent
+                if not conftest_path.is_absolute():
+                    conftest_path = Path(root_dir) / conftest_path
+
+                # Ensure conftest_path is definitely a pathlib.Path
+                conftest_path = Path(conftest_path)
+
+                # Find the directory containing the conftest.py
+                conftest_dir = conftest_path.parent
+            except Exception:
+                # If all else fails, skip this conftest file
+                continue
 
             # Find all test modules in subdirectories that could be affected
             for test_module in dep_tree.nodes:
@@ -117,13 +134,17 @@ class PytestImpactStrategy(ImpactStrategy):
 
         # Try to find the actual file path for this test module
         module_path = "/".join(module_parts)
+        # Ensure root_dir is a proper Path object
+        root_path = Path(root_dir)
         possible_paths = [
-            root_dir / (module_path + ".py"),
-            root_dir / module_path / "__init__.py",
+            root_path / (module_path + ".py"),
+            root_path / module_path / "__init__.py",
         ]
 
         # If tests_package is separate, also check there
         for path in possible_paths:
+            # Ensure path is also a proper Path object
+            path = Path(path)
             if path.exists():
                 try:
                     # Check if the test file is in the same directory or a subdirectory
