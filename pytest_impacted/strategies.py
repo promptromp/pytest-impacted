@@ -11,6 +11,16 @@ from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
 
 
+def default_strategy_provider() -> "ImpactStrategy":
+    """Provide the default impact strategy."""
+    return CompositeImpactStrategy(
+        [
+            ASTImpactStrategy(),
+            PytestImpactStrategy(),
+        ]
+    )
+
+
 @lru_cache(maxsize=8)
 def _cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
