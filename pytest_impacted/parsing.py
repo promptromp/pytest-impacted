@@ -5,8 +5,46 @@ import inspect
 import logging
 import os
 import types
+from pathlib import Path
+from typing import Any
 
 import astroid
+
+
+def normalize_path(path_like: Any) -> Path:
+    """Normalize various path-like objects to pathlib.Path.
+
+    Handles different path types that might be returned by GitPython:
+    - Regular strings
+    - pathlib.Path objects
+    - py.path.local.LocalPath objects (with .strpath attribute)
+    - Objects implementing the filesystem path protocol (__fspath__)
+
+    Args:
+        path_like: A path-like object of various types
+
+    Returns:
+        A pathlib.Path object
+
+    Raises:
+        ValueError: If the path cannot be normalized
+    """
+    if isinstance(path_like, Path):
+        return path_like
+
+    if hasattr(path_like, "strpath"):
+        # py.path.local.LocalPath object
+        return Path(path_like.strpath)
+
+    if hasattr(path_like, "__fspath__"):
+        # Objects implementing filesystem path protocol
+        return Path(path_like.__fspath__())
+
+    # Fallback: try string conversion
+    try:
+        return Path(str(path_like))
+    except Exception as e:
+        raise ValueError(f"Cannot normalize path-like object {path_like!r} of type {type(path_like)}") from e
 
 
 def should_silently_ignore_oserror(file_path: str) -> bool:

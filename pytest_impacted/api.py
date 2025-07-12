@@ -6,7 +6,12 @@ from pathlib import Path
 
 from pytest_impacted.display import notify, warn
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
-from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
+from pytest_impacted.strategies import (
+    ASTImpactStrategy,
+    CompositeImpactStrategy,
+    ImpactStrategy,
+    PytestImpactStrategy,
+)
 from pytest_impacted.traversal import (
     path_to_package_name,
     resolve_files_to_modules,
@@ -30,10 +35,20 @@ def get_impacted_tests(
     ns_module: str,
     tests_dir: str | None = None,
     session=None,
+    strategy: ImpactStrategy | None = None,
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis."""
     git_mode = impacted_git_mode
     base_branch = impacted_base_branch
+
+    # Use default strategy if none provided
+    if strategy is None:
+        strategy = CompositeImpactStrategy(
+            [
+                ASTImpactStrategy(),
+                PytestImpactStrategy(),
+            ]
+        )
 
     tests_package = None
     if tests_dir:
@@ -71,9 +86,16 @@ def get_impacted_tests(
         )
         return None
 
-    dep_tree = build_dep_tree(ns_module, tests_package=tests_package)
+    # Use the strategy to find impacted test modules
+    impacted_test_modules = strategy.find_impacted_tests(
+        changed_files=impacted_files,
+        impacted_modules=impacted_modules,
+        ns_module=ns_module,
+        tests_package=tests_package,
+        root_dir=root_dir,
+        session=session,
+    )
 
-    impacted_test_modules = resolve_impacted_tests(impacted_modules, dep_tree)
     if not impacted_test_modules:
         warn(
             "No unit-test modules impacted by the changes could be detected. "
