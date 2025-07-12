@@ -1,6 +1,7 @@
 """Impact analysis strategies."""
 
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,35 @@ import networkx as nx
 
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module
+
+
+@lru_cache(maxsize=8)
+def _cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> nx.DiGraph:
+    """Cached version of build_dep_tree to avoid redundant graph construction.
+
+    Args:
+        ns_module: The namespace module being analyzed
+        tests_package: Optional tests package name
+
+    Returns:
+        NetworkX dependency graph
+
+    Note:
+        Using LRU cache with maxsize=8 to cache recent dependency trees while
+        preventing unbounded memory growth. This optimizes the common case where
+        the same ns_module/tests_package combination is used repeatedly within
+        a single pytest run.
+    """
+    return build_dep_tree(ns_module, tests_package=tests_package)
+
+
+def clear_dep_tree_cache() -> None:
+    """Clear the dependency tree cache.
+
+    This is useful for testing or when you want to ensure fresh analysis
+    after code changes during development.
+    """
+    _cached_build_dep_tree.cache_clear()
 
 
 class ImpactStrategy(ABC):
@@ -52,7 +82,7 @@ class ASTImpactStrategy(ImpactStrategy):
         session: Any = None,
     ) -> list[str]:
         """Find impacted tests using AST dependency graph analysis."""
-        dep_tree = build_dep_tree(ns_module, tests_package=tests_package)
+        dep_tree = _cached_build_dep_tree(ns_module, tests_package=tests_package)
         return resolve_impacted_tests(impacted_modules, dep_tree)
 
 
@@ -70,7 +100,7 @@ class PytestImpactStrategy(ImpactStrategy):
     ) -> list[str]:
         """Find impacted tests including pytest-specific dependencies."""
         # Start with AST-based analysis
-        dep_tree = build_dep_tree(ns_module, tests_package=tests_package)
+        dep_tree = _cached_build_dep_tree(ns_module, tests_package=tests_package)
         impacted_tests = resolve_impacted_tests(impacted_modules, dep_tree)
 
         # Add conftest.py impact analysis

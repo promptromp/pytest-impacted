@@ -10,7 +10,7 @@ from pytest_impacted.strategies import (
 class TestASTImpactStrategy:
     """Test the AST-based impact strategy."""
 
-    @patch("pytest_impacted.strategies.build_dep_tree")
+    @patch("pytest_impacted.strategies._cached_build_dep_tree")
     @patch("pytest_impacted.strategies.resolve_impacted_tests")
     def test_find_impacted_tests(self, mock_resolve, mock_build_tree):
         """Test that AST strategy calls the correct functions."""

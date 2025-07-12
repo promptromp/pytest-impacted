@@ -20,7 +20,7 @@ class TestIntegration:
     def test_pytest_strategy_includes_ast_results(self):
         """Test that PytestImpactStrategy includes AST results."""
         with (
-            patch("pytest_impacted.strategies.build_dep_tree") as mock_build_tree,
+            patch("pytest_impacted.strategies._cached_build_dep_tree") as mock_build_tree,
             patch("pytest_impacted.strategies.resolve_impacted_tests") as mock_resolve,
         ):
             mock_dep_tree = MagicMock()
@@ -65,7 +65,7 @@ class TestIntegration:
         test_file.touch()
 
         with (
-            patch("pytest_impacted.strategies.build_dep_tree") as mock_build_tree,
+            patch("pytest_impacted.strategies._cached_build_dep_tree") as mock_build_tree,
             patch("pytest_impacted.strategies.resolve_impacted_tests") as mock_resolve,
             patch("pytest_impacted.strategies.is_test_module") as mock_is_test,
         ):
@@ -110,7 +110,7 @@ class TestIntegration:
         conftest_file.touch()
 
         with (
-            patch("pytest_impacted.strategies.build_dep_tree") as mock_build_tree,
+            patch("pytest_impacted.strategies._cached_build_dep_tree") as mock_build_tree,
             patch("pytest_impacted.strategies.resolve_impacted_tests") as mock_resolve,
             patch("pytest_impacted.strategies.is_test_module") as mock_is_test,
         ):

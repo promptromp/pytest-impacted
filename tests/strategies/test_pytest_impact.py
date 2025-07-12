@@ -17,7 +17,7 @@ class TestPytestImpactStrategy:
         self.temp_dir = tempfile.mkdtemp()
         self.root_dir = Path(self.temp_dir)
 
-    @patch("pytest_impacted.strategies.build_dep_tree")
+    @patch("pytest_impacted.strategies._cached_build_dep_tree")
     @patch("pytest_impacted.strategies.resolve_impacted_tests")
     @patch("pytest_impacted.strategies.is_test_module")
     def test_find_impacted_tests_no_conftest(self, mock_is_test, mock_resolve, mock_build_tree):
@@ -41,7 +41,7 @@ class TestPytestImpactStrategy:
         mock_build_tree.assert_called_once()
         mock_resolve.assert_called_once()
 
-    @patch("pytest_impacted.strategies.build_dep_tree")
+    @patch("pytest_impacted.strategies._cached_build_dep_tree")
     @patch("pytest_impacted.strategies.resolve_impacted_tests")
     @patch("pytest_impacted.strategies.is_test_module")
     def test_find_impacted_tests_with_conftest(self, mock_is_test, mock_resolve, mock_build_tree):
