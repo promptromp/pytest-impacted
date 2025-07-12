@@ -66,15 +66,11 @@ def test_get_impacted_tests_no_impacted_files(mock_find_impacted_files):
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_modules")
-@patch("pytest_impacted.api.build_dep_tree")
-@patch("pytest_impacted.api.resolve_impacted_tests")
 @patch("pytest_impacted.api.resolve_modules_to_files")
 @patch("pytest_impacted.api.path_to_package_name")
 def test_get_impacted_tests_success_with_tests_dir(
     mock_path_to_package_name,
     mock_resolve_modules_to_files,
-    mock_resolve_impacted_tests,
-    mock_build_dep_tree,
     mock_resolve_files_to_modules,
     mock_find_impacted_files,
 ):
@@ -82,10 +78,12 @@ def test_get_impacted_tests_success_with_tests_dir(
     # Setup mocks
     mock_find_impacted_files.return_value = ["file1.py", "file2.py"]
     mock_resolve_files_to_modules.return_value = ["module1", "module2"]
-    mock_build_dep_tree.return_value = MagicMock()
-    mock_resolve_impacted_tests.return_value = ["test_module1", "test_module2"]
     mock_resolve_modules_to_files.return_value = ["test_file1.py", "test_file2.py"]
     mock_path_to_package_name.return_value = "tests"
+
+    # Create a mock strategy that returns our expected test modules
+    mock_strategy = MagicMock()
+    mock_strategy.find_impacted_tests.return_value = ["test_module1", "test_module2"]
 
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
@@ -93,6 +91,7 @@ def test_get_impacted_tests_success_with_tests_dir(
         root_dir=Path("."),
         ns_module="project_ns",
         tests_dir="tests",
+        strategy=mock_strategy,
     )
 
     assert result == ["test_file1.py", "test_file2.py"]
@@ -121,25 +120,24 @@ def test_get_impacted_tests_no_impacted_modules(
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_modules")
-@patch("pytest_impacted.api.build_dep_tree")
-@patch("pytest_impacted.api.resolve_impacted_tests")
 def test_get_impacted_tests_no_impacted_test_modules(
-    mock_resolve_impacted_tests,
-    mock_build_dep_tree,
     mock_resolve_files_to_modules,
     mock_find_impacted_files,
 ):
     """Test get_impacted_tests when no impacted test modules are found."""
     mock_find_impacted_files.return_value = ["file1.py"]
     mock_resolve_files_to_modules.return_value = ["module1"]
-    mock_build_dep_tree.return_value = MagicMock()
-    mock_resolve_impacted_tests.return_value = []
+
+    # Create a mock strategy that returns no test modules
+    mock_strategy = MagicMock()
+    mock_strategy.find_impacted_tests.return_value = []
 
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
         impacted_base_branch="main",
         root_dir=Path("."),
         ns_module="project_ns",
+        strategy=mock_strategy,
     )
 
     assert result is None
@@ -147,28 +145,27 @@ def test_get_impacted_tests_no_impacted_test_modules(
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_modules")
-@patch("pytest_impacted.api.build_dep_tree")
-@patch("pytest_impacted.api.resolve_impacted_tests")
 @patch("pytest_impacted.api.resolve_modules_to_files")
 def test_get_impacted_tests_no_impacted_test_files(
     mock_resolve_modules_to_files,
-    mock_resolve_impacted_tests,
-    mock_build_dep_tree,
     mock_resolve_files_to_modules,
     mock_find_impacted_files,
 ):
     """Test get_impacted_tests when no impacted test files are found."""
     mock_find_impacted_files.return_value = ["file1.py"]
     mock_resolve_files_to_modules.return_value = ["module1"]
-    mock_build_dep_tree.return_value = MagicMock()
-    mock_resolve_impacted_tests.return_value = ["test_module1"]
     mock_resolve_modules_to_files.return_value = []
+
+    # Create a mock strategy that returns test modules
+    mock_strategy = MagicMock()
+    mock_strategy.find_impacted_tests.return_value = ["test_module1"]
 
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
         impacted_base_branch="main",
         root_dir=Path("."),
         ns_module="project_ns",
+        strategy=mock_strategy,
     )
 
     assert result is None
@@ -176,29 +173,27 @@ def test_get_impacted_tests_no_impacted_test_files(
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_modules")
-@patch("pytest_impacted.api.build_dep_tree")
-@patch("pytest_impacted.api.resolve_impacted_tests")
 @patch("pytest_impacted.api.resolve_modules_to_files")
 def test_get_impacted_tests_success_without_tests_dir(
     mock_resolve_modules_to_files,
-    mock_resolve_impacted_tests,
-    mock_build_dep_tree,
     mock_resolve_files_to_modules,
     mock_find_impacted_files,
 ):
     """Test get_impacted_tests successful path without tests_dir."""
     mock_find_impacted_files.return_value = ["file1.py"]
     mock_resolve_files_to_modules.return_value = ["module1"]
-    mock_build_dep_tree.return_value = MagicMock()
-    mock_resolve_impacted_tests.return_value = ["test_module1"]
     mock_resolve_modules_to_files.return_value = ["test_file1.py"]
+
+    # Create a mock strategy that returns test modules
+    mock_strategy = MagicMock()
+    mock_strategy.find_impacted_tests.return_value = ["test_module1"]
 
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
         impacted_base_branch="main",
         root_dir=Path("."),
         ns_module="project_ns",
-        tests_dir=None,
+        strategy=mock_strategy,
     )
 
     assert result == ["test_file1.py"]
