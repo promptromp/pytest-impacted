@@ -12,6 +12,7 @@ A pytest plugin that selectively runs tests impacted by codechanges via git intr
 * Configurable to meet your demands for both local and CI-driven invocations. :dromedary_camel:
 * Built using a modern, best-of-breed Python stack, using [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/) for
   Python code AST, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories. :rocket:
+* **Strategy-based architecture** allowing for different impact analysis approaches, including specialized pytest-specific handling (e.g., `conftest.py` dependencies). :gear:
 * Modular codebase with high unit-test coverage to ensure solid, reliable performance in CI and production environments. :muscle:
 
 > [!CAUTION]
@@ -24,6 +25,25 @@ Sometimes code repositories can become encumbered with a large codebase and a la
 An alternative solution is to try and selectively mark tests that have been affected by recent changes, e.g. as relative to a base branch when we are on a feature branch. This plugin takes this approach. It uses a combination of static analysis (parsing the AST for python modules in a package and building a dependency graph of imports) and git introspection to flag tests that should be re-run.
 
 The philosophy is to err on the side of caution; we currently do not attempt to isolate changes on a line-by-line basis, but rather favor 'false positives' by simply following the chain of dependencies from any file that was modified in any way according to the git history, all the way to any unit-test file that imports it directly or transitively.
+
+## Impact Analysis Strategies
+
+The plugin uses a **strategy-based architecture** that allows for different approaches to determine which tests are impacted by code changes. This modular design enables specialized handling for different scenarios:
+
+### AST Impact Strategy
+
+The default strategy uses static analysis by parsing Python ASTs to build a dependency graph and follow import chains from changed modules to affected tests.
+
+### Pytest Impact Strategy
+
+A pytest-specific strategy that extends AST analysis with additional pytest-specific dependency detection:
+
+* **`conftest.py` handling**: When `conftest.py` files are modified, all tests in the same directory and subdirectories are considered impacted, as these files provide fixtures and configuration that affect test execution.
+* Future pytest-specific dependencies can be easily added to this strategy.
+
+### Composite Strategy
+
+Multiple strategies can be combined to provide comprehensive impact analysis, ensuring no affected tests are missed while maintaining performance.
 
 ### Why another such plugin?
 
