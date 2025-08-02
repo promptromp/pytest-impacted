@@ -1,6 +1,6 @@
 # Usage Guide: pytest-impacted
 
-`pytest-impacted` is a pytest plugin that selectively runs only the tests impacted by code changes, using git introspection, AST parsing, and dependency graph analysis.
+`pytest-impacted` is a pytest plugin that selectively runs only the tests impacted by code changes, using git introspection, AST parsing, and dependency graph analysis with a **strategy-based architecture**.
 
 ## Basic Usage
 
@@ -21,6 +21,22 @@ pytest --impacted --impacted-git-mode=branch --impacted-base-branch=main
 ```
 
 This command will run all unit tests impacted by files changed in commits on your current branch, compared to the main branch.
+
+## Impact Analysis Strategies
+
+The plugin uses a modular strategy-based architecture to determine which tests are affected by code changes:
+
+### AST Impact Strategy (Default)
+Uses static analysis to parse Python ASTs, build dependency graphs, and follow import chains from changed modules to affected tests.
+
+### Pytest Impact Strategy
+Extends AST analysis with pytest-specific dependency detection:
+
+* **`conftest.py` handling**: When `conftest.py` files are modified, all tests in the same directory and subdirectories are considered impacted
+* Future pytest-specific dependencies can be easily added
+
+### Composite Strategy
+Multiple strategies can be combined for comprehensive analysis while maintaining performance.
 
 ## Typical Workflows
 
