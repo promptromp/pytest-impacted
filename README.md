@@ -12,7 +12,7 @@ A pytest plugin that selectively runs tests impacted by codechanges via git intr
 * Configurable to meet your demands for both local and CI-driven invocations. :dromedary_camel:
 * Built using a modern, best-of-breed Python stack, using [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/) for
   Python code AST, [NetworkX](https://networkx.org/documentation/stable/index.html) for dependency graph analysis, and [GitPython](https://github.com/gitpython-developers/GitPython) for interacting with git repositories. :rocket:
-* **Strategy-based architecture** allowing for different impact analysis approaches, including specialized pytest-specific handling (e.g., `conftest.py` dependencies). :gear:
+* **Strategy-based architecture** allowing for different change impact analysis approaches, including specialized pytest-specific handling (e.g., `conftest.py` dependencies). :gear:
 * Modular codebase with high unit-test coverage to ensure solid, reliable performance in CI and production environments. :muscle:
 
 > [!CAUTION]
