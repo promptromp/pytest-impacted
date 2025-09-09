@@ -159,11 +159,7 @@ def test_is_module_path(module_path, package, expected):
 
 def test_parse_module_imports_with_relative_imports():
     """Test parse_module_imports with relative imports to verify proper package resolution."""
-    # Test case that reproduces the bug described in the issue:
-    # When inside a package, relative imports should be resolved to the full module path
-
     # Simulate module inside a package: my_package.a
-    # This is the exact scenario from the bug report
     mock_source = """
         from .models.b import Something
         from . import utils
@@ -183,7 +179,7 @@ def test_parse_module_imports_with_relative_imports():
         # from . import utils should resolve to my_package
         assert "my_package" in imports
 
-        # These unresolved paths should NOT be in the imports (this was the bug)
+        # These unresolved paths should NOT be in the imports
         assert "models.b" not in imports
         assert "" not in imports
 
