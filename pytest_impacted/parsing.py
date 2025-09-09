@@ -81,14 +81,50 @@ def parse_module_imports(module: types.ModuleType) -> list[str]:
             for name in node.names:
                 imports.add(name[0])
         elif isinstance(node, astroid.ImportFrom):
+            # Handle relative imports by resolving them to absolute module paths
+            if node.level and node.level > 0:
+                # This is a relative import
+                # Get the package context from the module
+                package = getattr(module, "__package__", None)
+                if not package:
+                    # Fall back to getting package from module name
+                    package = module.__name__.rsplit(".", 1)[0] if "." in module.__name__ else ""
+
+                # Calculate the base package for the relative import
+                # Each level represents going up one package level
+                if node.level == 1:
+                    # Single dot: same package
+                    base_package = package
+                else:
+                    # Multiple dots: go up (level - 1) packages
+                    package_parts = package.split(".")
+                    # Go up (level - 1) levels from current package
+                    levels_to_go_up = node.level - 1
+                    if len(package_parts) >= levels_to_go_up:
+                        base_package_parts = package_parts[:-levels_to_go_up]
+                    else:
+                        base_package_parts = []
+                    base_package = ".".join(base_package_parts) if base_package_parts else ""
+
+                # Resolve the module name
+                if node.modname:
+                    # from .module import something
+                    resolved_modname = f"{base_package}.{node.modname}" if base_package else node.modname
+                else:
+                    # from . import something
+                    resolved_modname = base_package
+            else:
+                # Absolute import
+                resolved_modname = node.modname
+
             # Nb. with `from x import y` statements we need to check
             # if x.y is a module path or if y is a function/class/variable.
             for name, *_ in node.names:
-                full_name = f"{node.modname}.{name}"
+                full_name = f"{resolved_modname}.{name}" if resolved_modname else name
                 if is_module_path(full_name, package=module.__name__):
                     imports.add(full_name)
                 else:
-                    imports.add(node.modname)
+                    imports.add(resolved_modname)
 
     return list(imports)
 
