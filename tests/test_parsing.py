@@ -155,3 +155,71 @@ def test_is_test_module(module_name, expected):
 def test_is_module_path(module_path, package, expected):
     """Test is_module_path with various import scenarios."""
     assert parsing.is_module_path(module_path, package=package) is expected
+
+
+def test_parse_module_imports_with_relative_imports():
+    """Test parse_module_imports with relative imports to verify proper package resolution."""
+    # Simulate module inside a package: my_package.a
+    mock_source = """
+        from .models.b import Something
+        from . import utils
+    """
+
+    # Create a mock module that appears to be at my_package.a
+    mock_module = type(
+        "MockModule", (), {"__file__": "/mock/my_package/a.py", "__name__": "my_package.a", "__package__": "my_package"}
+    )
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+
+        # Relative imports should be resolved to full module paths using the package context
+        # from .models.b should resolve to my_package.models.b
+        assert "my_package.models.b" in imports
+        # from . import utils should resolve to my_package
+        assert "my_package" in imports
+
+        # These unresolved paths should NOT be in the imports
+        assert "models.b" not in imports
+        assert "" not in imports
+
+
+def test_parse_module_imports_with_complex_relative_imports():
+    """Test parse_module_imports with various levels of relative imports."""
+    # Test more complex relative import scenarios
+
+    # Simulate module inside a nested package: my_package.subpackage.module
+    mock_source = """
+        from . import sibling_module
+        from .sibling import SomeClass
+        from ..parent_level import something
+        from ...root_level import another
+    """
+
+    # Create a mock module at my_package.subpackage.module
+    mock_module = type(
+        "MockModule",
+        (),
+        {
+            "__file__": "/mock/my_package/subpackage/module.py",
+            "__name__": "my_package.subpackage.module",
+            "__package__": "my_package.subpackage",
+        },
+    )
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+
+        # from . import sibling_module -> my_package.subpackage
+        assert "my_package.subpackage" in imports
+        # from .sibling -> my_package.subpackage.sibling
+        assert "my_package.subpackage.sibling" in imports
+        # from ..parent_level -> my_package.parent_level
+        assert "my_package.parent_level" in imports
+        # from ...root_level -> root_level (goes up to root)
+        assert "root_level" in imports
+
+        # These should NOT be in imports
+        assert "sibling" not in imports
+        assert "parent_level" not in imports
+        assert "" not in imports
