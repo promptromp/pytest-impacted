@@ -11,6 +11,26 @@ from typing import Any
 import astroid
 
 
+class _ModuleProxy:
+    """Lightweight stand-in for a real module object.
+
+    Provides just the ``__name__`` and ``__package__`` attributes needed by
+    :func:`_resolve_relative_import` and :func:`_extract_imports_from_node`,
+    without actually importing the module (avoiding side-effects).
+    """
+
+    __slots__ = ("__name__", "__package__")
+
+    def __init__(self, name: str, *, is_package: bool = False) -> None:
+        self.__name__ = name
+        if is_package:
+            self.__package__ = name
+        elif "." in name:
+            self.__package__ = name.rsplit(".", 1)[0]
+        else:
+            self.__package__ = ""
+
+
 def normalize_path(path_like: Any) -> Path:
     """Normalize various path-like objects to pathlib.Path.
 
@@ -174,6 +194,47 @@ def parse_module_imports(module: types.ModuleType) -> list[str]:
         imports.update(_extract_imports_from_node(node, module))
 
     return sorted(list(imports))
+
+
+def parse_file_imports(file_path: str, module_name: str, is_package: bool = False) -> list[str]:
+    """Parse imports from a source file without importing the module.
+
+    Reads the file directly and uses a :class:`_ModuleProxy` to supply the
+    module metadata required for relative-import resolution.  This avoids
+    executing any module-level code.
+
+    Args:
+        file_path: Absolute path to the ``.py`` file.
+        module_name: Fully-qualified module name (e.g. ``"pkg.sub.mod"``).
+        is_package: ``True`` when the file is an ``__init__.py``.
+
+    Returns:
+        Sorted list of imported module names (absolute paths).
+    """
+    try:
+        source = Path(file_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        if os.path.exists(file_path) and os.stat(file_path).st_size == 0:
+            return []
+        logging.error("Error reading file %s", file_path)
+        return []
+
+    if not source.strip():
+        return []
+
+    module_proxy = _ModuleProxy(module_name, is_package=is_package)
+
+    try:
+        tree = astroid.parse(source)
+    except astroid.exceptions.AstroidSyntaxError:
+        logging.warning("Syntax error while parsing %s", file_path)
+        return []
+
+    imports: set[str] = set()
+    for node in tree.nodes_of_class((astroid.Import, astroid.ImportFrom)):
+        imports.update(_extract_imports_from_node(node, module_proxy))  # type: ignore[arg-type]
+
+    return sorted(imports)
 
 
 def is_module_path(module_path: str, package: str | None = None) -> bool:

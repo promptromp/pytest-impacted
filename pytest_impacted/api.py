@@ -105,7 +105,11 @@ def get_impacted_tests(
         )
         return None
 
-    impacted_test_files = resolve_modules_to_files(impacted_test_modules)
+    impacted_test_files = resolve_modules_to_files(
+        impacted_test_modules,
+        ns_module=ns_module,
+        tests_package=tests_package,
+    )
     if not impacted_test_files:
         warn(
             "No unit-test file paths impacted by the changes could be found. "
