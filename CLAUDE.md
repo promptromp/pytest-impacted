@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 pytest-impacted is a pytest plugin that selectively runs tests impacted by code changes via git introspection, AST parsing, and dependency graph analysis. It analyzes Python import dependencies using astroid, builds dependency graphs with NetworkX, and uses GitPython to identify changed files. The philosophy is to err on the side of caution—favoring false positives over missed impacted tests.
 
+**Key design principle**: All module discovery and import analysis is done via filesystem scanning and AST parsing—modules are never imported at analysis time. This avoids side effects from module-level code (e.g. monkey patching, database connections, application factory calls).
+
 ## Development Commands
 
 This project uses `uv` for dependency and virtualenv management.
@@ -47,15 +49,15 @@ The pipeline: Git identifies changed files → Files converted to Python modules
 
 ### Module Responsibilities
 
-- **plugin.py**: pytest plugin entry point via `pytest11` entry point; handles CLI options and test collection filtering
+- **plugin.py**: pytest plugin entry point via `pytest11` entry point; handles CLI options, config validation (module name, base branch, tests dir), and test collection filtering
 - **api.py**: Orchestration layer (`get_impacted_tests`, `matches_impacted_tests`); creates the default composite strategy
 - **strategies.py**: Strategy pattern for impact analysis (see below)
 - **git.py**: Git integration for finding changed files (unstaged changes and branch diffs)
-- **graph.py**: Dependency graph construction and querying using NetworkX
-- **parsing.py**: AST parsing using astroid to extract import relationships
-- **traversal.py**: Module discovery and path↔module name conversion utilities
+- **graph.py**: Dependency graph construction and querying using NetworkX; uses `discover_submodules` for filesystem-based module discovery and `parse_file_imports` for AST parsing
+- **parsing.py**: AST parsing using astroid to extract import relationships. Key functions: `parse_file_imports` (reads source files directly, uses `_ModuleProxy` for relative import resolution without importing), `is_module_path`, `is_test_module`, `normalize_path`
+- **traversal.py**: Module discovery and path/module name conversion. Key functions: `discover_submodules` (LRU-cached filesystem scanning via `pkgutil.iter_modules`), `resolve_files_to_modules`, `resolve_modules_to_files` (requires `ns_module` parameter)
 - **cli.py**: Standalone `impacted-tests` CLI tool (Click-based) for CI integration
-- **display.py**: Rich-based console output formatting
+- **display.py**: Console output formatting using pytest's `terminalreporter`
 
 ### Strategy Pattern
 
@@ -68,7 +70,7 @@ Impact analysis uses a strategy-based architecture defined in `strategies.py`:
 
 The default strategy in `api.py` is `CompositeImpactStrategy([ASTImpactStrategy(), PytestImpactStrategy()])`.
 
-Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation.
+Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation (also clears `discover_submodules` cache).
 
 ### Test Structure
 

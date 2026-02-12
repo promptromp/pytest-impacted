@@ -2,13 +2,12 @@
 
 import importlib
 import pkgutil
-import types
 from pathlib import Path
 
 import pytest
 
 from pytest_impacted.traversal import (
-    import_submodules,
+    discover_submodules,
     iter_namespace,
     package_name_to_path,
     path_to_package_name,
@@ -48,14 +47,15 @@ def test_iter_namespace_with_module():
     assert all(hasattr(m, "name") for m in modules)
 
 
-def test_import_submodules():
-    """Test import_submodules function."""
-    # Test with a known package
-    modules = import_submodules("pytest_impacted")
+def test_discover_submodules():
+    """Test discover_submodules function."""
+    modules = discover_submodules("pytest_impacted")
     assert isinstance(modules, dict)
     assert len(modules) > 0
-    assert all(isinstance(m, types.ModuleType) for m in modules.values())
+    # Values are absolute file paths (strings), not ModuleType
+    assert all(isinstance(v, str) for v in modules.values())
     assert "pytest_impacted.traversal" in modules
+    assert modules["pytest_impacted.traversal"].endswith("traversal.py")
 
 
 def test_resolve_files_to_modules():
@@ -70,7 +70,7 @@ def test_resolve_files_to_modules():
 def test_resolve_modules_to_files():
     """Test resolve_modules_to_files function."""
     # Test with a known module
-    files = resolve_modules_to_files(["pytest_impacted.traversal"])
+    files = resolve_modules_to_files(["pytest_impacted.traversal"], ns_module="pytest_impacted")
     assert len(files) == 1
     assert files[0].endswith("traversal.py")
 
@@ -83,10 +83,10 @@ def test_resolve_files_to_modules_with_invalid_file():
 
 
 def test_resolve_modules_to_files_with_invalid_module():
-    """Test resolve_modules_to_files with an invalid module."""
-    # Test with a non-existent module
-    with pytest.raises(ModuleNotFoundError):
-        resolve_modules_to_files(["nonexistent.module"])
+    """Test resolve_modules_to_files with a module not in the discovered package."""
+    # Module not in the package should be silently skipped (with a warning log)
+    files = resolve_modules_to_files(["nonexistent.module"], ns_module="pytest_impacted")
+    assert files == []
 
 
 def test_iter_namespace_with_nested_package():
@@ -128,68 +128,21 @@ def test_iter_namespace_invalid_input():
         list(iter_namespace(123))  # type: ignore
 
 
-def test_import_submodules_with_missing_module():
-    """Test import_submodules with a module that doesn't exist."""
+def test_discover_submodules_skips_missing_files():
+    """Test discover_submodules skips modules whose files don't exist on disk."""
+    from pytest_impacted import traversal
+
+    traversal.discover_submodules.cache_clear()
     with pytest.MonkeyPatch.context() as m:
-        # Mock iter_namespace to return a module that will fail to import
+
         def mock_iter_namespace(package):
             return [pkgutil.ModuleInfo(None, "nonexistent.module", False)]
 
         m.setattr("pytest_impacted.traversal.iter_namespace", mock_iter_namespace)
 
-        # Should not raise an exception, but log a warning
-        modules = import_submodules("pytest_impacted")
+        modules = discover_submodules("some_package")
+        # Module file won't exist on disk, so it should be skipped
         assert "nonexistent.module" not in modules
-
-
-def test_import_submodules_with_syntax_error():
-    """Test import_submodules gracefully handles SyntaxError from broken modules."""
-    from pytest_impacted import traversal
-
-    traversal.import_submodules.cache_clear()
-    with pytest.MonkeyPatch.context() as m:
-
-        def mock_iter_namespace(package):
-            return [pkgutil.ModuleInfo(None, "broken_syntax_module", False)]
-
-        m.setattr("pytest_impacted.traversal.iter_namespace", mock_iter_namespace)
-
-        original_import = importlib.import_module
-
-        def mock_import_module(name):
-            if name == "broken_syntax_module":
-                raise SyntaxError("invalid syntax")
-            return original_import(name)
-
-        m.setattr(importlib, "import_module", mock_import_module)
-
-        modules = import_submodules("pytest_impacted")
-        assert "broken_syntax_module" not in modules
-
-
-def test_import_submodules_with_import_error():
-    """Test import_submodules gracefully handles ImportError from broken modules."""
-    from pytest_impacted import traversal
-
-    traversal.import_submodules.cache_clear()
-    with pytest.MonkeyPatch.context() as m:
-
-        def mock_iter_namespace(package):
-            return [pkgutil.ModuleInfo(None, "broken_import_module", False)]
-
-        m.setattr("pytest_impacted.traversal.iter_namespace", mock_iter_namespace)
-
-        original_import = importlib.import_module
-
-        def mock_import_module(name):
-            if name == "broken_import_module":
-                raise ImportError("No module named 'missing_dep'")
-            return original_import(name)
-
-        m.setattr(importlib, "import_module", mock_import_module)
-
-        modules = import_submodules("pytest_impacted")
-        assert "broken_import_module" not in modules
 
 
 def test_resolve_files_to_modules_edge_cases():
@@ -207,33 +160,22 @@ def test_resolve_files_to_modules_edge_cases():
 def test_resolve_modules_to_files_edge_cases():
     """Test resolve_modules_to_files with various edge cases."""
     # Test with empty module list
-    assert resolve_modules_to_files([]) == []
+    assert resolve_modules_to_files([], ns_module="pytest_impacted") == []
 
     # Test with multiple modules
-    files = resolve_modules_to_files(["pytest_impacted.traversal", "pytest_impacted"])
+    modules = ["pytest_impacted.traversal", "pytest_impacted.graph"]
+    files = resolve_modules_to_files(modules, ns_module="pytest_impacted")
     assert len(files) == 2
     assert all(isinstance(f, str) for f in files)
 
 
-def test_resolve_modules_to_files_no_file(monkeypatch):
-    """Test resolve_modules_to_files with a module that lacks __file__."""
-
-    class DummyModule:
-        pass
-
-    dummy = DummyModule()
-    monkeypatch.setattr(importlib, "import_module", lambda name: dummy)
-    with pytest.raises(AttributeError):
-        resolve_modules_to_files(["dummy"])
-
-
-def test_import_submodules_empty(monkeypatch):
-    """Test import_submodules for a package with no submodules."""
+def test_discover_submodules_empty(monkeypatch):
+    """Test discover_submodules for a package with no submodules."""
     from pytest_impacted import traversal
 
-    traversal.import_submodules.cache_clear()
+    traversal.discover_submodules.cache_clear()
     monkeypatch.setattr("pytest_impacted.traversal.iter_namespace", lambda pkg: [])
-    result = import_submodules("pytest_impacted")
+    result = discover_submodules("some_package")
     assert result == {}
 
 
@@ -251,29 +193,15 @@ def test_iter_namespace_module_without_path(monkeypatch):
 def test_resolve_files_to_modules_with_tests_package():
     """Test resolve_files_to_modules with tests_package parameter."""
     with pytest.MonkeyPatch.context() as m:
-        # Mock import_submodules to return known results for both packages
-        def mock_import_submodules(package):
+        # Mock discover_submodules to return known results (name -> abs filepath)
+        def mock_discover_submodules(package):
             if package == "pytest_impacted":
-                return {"pytest_impacted.traversal": types.ModuleType("pytest_impacted.traversal")}
+                return {"pytest_impacted.traversal": "/path/to/pytest_impacted/traversal.py"}
             elif package == "tests":
-                return {"tests.test_traversal": types.ModuleType("tests.test_traversal")}
+                return {"tests.test_traversal": "/path/to/tests/test_traversal.py"}
             return {}
 
-        m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)
-
-        # Mock the package path
-        def mock_import_module(name):
-            if name == "pytest_impacted":
-                module = types.ModuleType("pytest_impacted")
-                module.__path__ = ["/path/to/pytest_impacted"]
-                return module
-            elif name == "tests":
-                module = types.ModuleType("tests")
-                module.__path__ = ["/path/to/tests"]
-                return module
-            return types.ModuleType(name)
-
-        m.setattr(importlib, "import_module", mock_import_module)
+        m.setattr("pytest_impacted.traversal.discover_submodules", mock_discover_submodules)
 
         # Test with a file from the main package
         main_file = "/path/to/pytest_impacted/traversal.py"
@@ -292,17 +220,10 @@ def test_resolve_files_to_modules_init_file():
     """Test resolve_files_to_modules with __init__.py files."""
     with pytest.MonkeyPatch.context() as m:
 
-        def mock_import_submodules(package):
-            return {"mypkg": types.ModuleType("mypkg")}
+        def mock_discover_submodules(package):
+            return {"mypkg": "/project/mypkg/__init__.py"}
 
-        m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)
-
-        def mock_import_module(name):
-            module = types.ModuleType(name)
-            module.__path__ = ["/project/mypkg"]
-            return module
-
-        m.setattr(importlib, "import_module", mock_import_module)
+        m.setattr("pytest_impacted.traversal.discover_submodules", mock_discover_submodules)
 
         modules = resolve_files_to_modules(["/project/mypkg/__init__.py"], "mypkg")
         assert modules == ["mypkg"]
@@ -310,19 +231,15 @@ def test_resolve_files_to_modules_init_file():
 
 def test_resolve_files_to_modules_relative_git_path():
     """Test resolve_files_to_modules with relative git paths (e.g. 'pytest_impacted/foo.py')."""
+    import os
+
     with pytest.MonkeyPatch.context() as m:
 
-        def mock_import_submodules(package):
-            return {"mypkg.foo": types.ModuleType("mypkg.foo")}
+        def mock_discover_submodules(package):
+            # The absolute path must match what os.path.abspath("mypkg/foo.py") resolves to
+            return {"mypkg.foo": os.path.abspath("mypkg/foo.py")}
 
-        m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)
-
-        def mock_import_module(name):
-            module = types.ModuleType(name)
-            module.__path__ = ["/somewhere/else/mypkg"]
-            return module
-
-        m.setattr(importlib, "import_module", mock_import_module)
+        m.setattr("pytest_impacted.traversal.discover_submodules", mock_discover_submodules)
 
         # Relative path from git that doesn't match the absolute package path
         modules = resolve_files_to_modules(["mypkg/foo.py"], "mypkg")

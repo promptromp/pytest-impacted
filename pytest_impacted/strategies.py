@@ -9,7 +9,7 @@ import networkx as nx
 
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
-from pytest_impacted.traversal import import_submodules
+from pytest_impacted.traversal import discover_submodules
 
 
 @lru_cache(maxsize=8)
@@ -36,11 +36,11 @@ def clear_dep_tree_cache() -> None:
     """Clear the dependency tree cache.
 
     This is useful for testing or when you want to ensure fresh analysis
-    after code changes during development. Also clears the import_submodules
-    cache since stale submodule data would produce stale dependency trees.
+    after code changes during development. Also clears discovery caches
+    since stale submodule data would produce stale dependency trees.
     """
     _cached_build_dep_tree.cache_clear()
-    import_submodules.cache_clear()
+    discover_submodules.cache_clear()
 
 
 class ImpactStrategy(ABC):

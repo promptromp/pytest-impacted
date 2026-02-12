@@ -5,8 +5,8 @@ import types
 
 import networkx as nx
 
-from pytest_impacted.parsing import is_test_module, parse_module_imports
-from pytest_impacted.traversal import import_submodules
+from pytest_impacted.parsing import is_test_module, parse_file_imports
+from pytest_impacted.traversal import discover_submodules
 
 
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
@@ -57,21 +57,28 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
 
 
 def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.ModuleType | None = None) -> nx.DiGraph:
-    """Run the script for a given package name."""
-    submodules = import_submodules(package)
+    """Build a dependency tree using filesystem discovery (no imports).
+
+    Scans the package directory to find modules, reads their source files,
+    and parses imports via AST — without executing any module-level code.
+    """
+    pkg_name = package if isinstance(package, str) else package.__name__
+    submodules = discover_submodules(pkg_name)
 
     if tests_package:
-        logging.debug("Adding modules from tests_package: %s", tests_package)
-        test_submodules = import_submodules(tests_package)
-        submodules.update(test_submodules)
+        tests_name = tests_package if isinstance(tests_package, str) else tests_package.__name__
+        logging.debug("Adding modules from tests_package: %s", tests_name)
+        test_submodules = discover_submodules(tests_name)
+        submodules = {**submodules, **test_submodules}
 
-    logging.debug("Building dependency tree for submodules: %s", submodules)
+    logging.debug("Building dependency tree for %d submodules", len(submodules))
 
     digraph = nx.DiGraph()
-    for name, module in submodules.items():
+    for name, file_path in submodules.items():
         logging.debug("Processing submodule: %s", name)
         digraph.add_node(name)
-        module_imports = parse_module_imports(module)
+        is_pkg = file_path.endswith("__init__.py")
+        module_imports = parse_file_imports(file_path, name, is_package=is_pkg)
         for imp in module_imports:
             if imp in submodules:
                 # Nb. We only care about imports that are also submodules

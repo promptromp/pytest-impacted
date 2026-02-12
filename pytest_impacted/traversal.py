@@ -2,6 +2,7 @@
 
 import importlib
 import logging
+import os
 import pkgutil
 import types
 from functools import lru_cache
@@ -49,126 +50,63 @@ def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInf
 
 
 @lru_cache
-def import_submodules(package: str | types.ModuleType) -> dict[str, types.ModuleType]:
-    """Import all submodules of a module, recursively, including subpackages,
-    and return a dict mapping their fully-qualified names to the module object.
+def discover_submodules(package: str) -> dict[str, str]:
+    """Discover all submodules by filesystem scanning, without importing them.
 
-    :param package: package (name or actual module)
-    :type package: str | module
-    :rtype: dict[str, types.ModuleType]
+    Uses pkgutil.iter_modules for directory scanning and constructs file paths
+    from module names. This avoids executing module-level code (e.g. gevent
+    monkey patching, application factory calls, global connections) that can
+    corrupt the test environment when modules are eagerly imported.
 
+    Returns:
+        Dict mapping fully-qualified module name -> absolute file path.
     """
-    results = {}
+    results: dict[str, str] = {}
     for module_info in iter_namespace(package):
         name = module_info.name
         if name not in results:
-            try:
-                results[name] = importlib.import_module(name)
-            except Exception:
-                logging.exception(
-                    "Encountered error while trying to import module from name: %s",
-                    name,
-                )
-                continue
+            # Construct file path from module name
+            parts = name.split(".")
+            if module_info.ispkg:
+                file_path = os.path.join(*parts, "__init__.py")
+            else:
+                file_path = os.path.join(*parts) + ".py"
 
-            if hasattr(results[name], "__path__"):
-                # Recursively import submodules
-                results.update(import_submodules(name))
+            abs_path = os.path.abspath(file_path)
+            if os.path.exists(abs_path):
+                results[name] = abs_path
+            else:
+                logging.warning("Module %s not found at expected path %s", name, abs_path)
+
+            if module_info.ispkg:
+                results.update(discover_submodules(name))
 
     return results
 
 
 def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package: str | None = None):
-    """Resolve file paths to their corresponding Python module objects."""
-    submodules = import_submodules(ns_module)
+    """Resolve file paths to their corresponding Python module names.
+
+    Uses filesystem-based discovery (no imports) to build the module mapping.
+    """
+    submodules = discover_submodules(ns_module)
     if tests_package:
         logging.debug("Adding modules from tests_package: %s", tests_package)
-        test_submodules = import_submodules(tests_package)
-        submodules.update(test_submodules)
+        test_submodules = discover_submodules(tests_package)
+        submodules = {**submodules, **test_submodules}
 
-    # Build a mapping of package name -> package root path for resolution
-    package_paths: list[tuple[str, Path]] = []
-
-    ns_mod = importlib.import_module(ns_module)
-    ns_path = Path(ns_mod.__path__[0])
-    package_paths.append((ns_module, ns_path))
-
-    if tests_package:
-        try:
-            tests_mod = importlib.import_module(tests_package)
-            tests_path = Path(tests_mod.__path__[0])
-            package_paths.append((tests_package, tests_path))
-        except (ModuleNotFoundError, AttributeError):
-            logging.warning("Could not import tests_package: %s", tests_package)
+    # Build reverse mapping: absolute file path -> module name
+    path_to_module = {path: name for name, path in submodules.items()}
 
     resolved_modules = []
     for file in filenames:
         if not file.endswith(".py"):
             continue
 
-        file_path = Path(file)
-        resolved = False
-
-        # Try matching against each known package path
-        for pkg_name, pkg_path in package_paths:
-            try:
-                rel = file_path.relative_to(pkg_path)
-            except ValueError:
-                continue
-
-            # Convert relative path to module name
-            parts = list(rel.parts)
-            # Remove .py extension from last part
-            if parts:
-                parts[-1] = parts[-1].removesuffix(".py")
-            # Handle __init__.py -> use the package name itself
-            if parts and parts[-1] == "__init__":
-                parts = parts[:-1]
-
-            if parts:
-                module_name = f"{pkg_name}.{'.'.join(parts)}"
-            else:
-                module_name = pkg_name
-
-            if module_name in submodules:
-                resolved_modules.append(module_name)
-                resolved = True
-                break
-
-        if resolved:
-            continue
-
-        # Fallback: try matching relative paths (e.g. "pytest_impacted/foo.py" from git)
-        # by checking if the file path contains a known package directory name
-        for pkg_name, pkg_path in package_paths:
-            pkg_dir_name = pkg_path.name
-            file_str = str(file_path)
-            # Find the package directory in the file path
-            sep = "/"
-            prefix = pkg_dir_name + sep
-            if file_str.startswith(prefix) or (sep + prefix) in file_str:
-                # Extract the part starting from the package directory
-                idx = file_str.find(prefix)
-                if idx >= 0:
-                    rel_from_pkg = file_str[idx + len(prefix) :]
-                    rel_path = Path(rel_from_pkg)
-                    parts = list(rel_path.parts)
-                    if parts:
-                        parts[-1] = parts[-1].removesuffix(".py")
-                    if parts and parts[-1] == "__init__":
-                        parts = parts[:-1]
-
-                    if parts:
-                        module_name = f"{pkg_name}.{'.'.join(parts)}"
-                    else:
-                        module_name = pkg_name
-
-                    if module_name in submodules:
-                        resolved_modules.append(module_name)
-                        resolved = True
-                        break
-
-        if not resolved:
+        abs_path = os.path.abspath(file)
+        if abs_path in path_to_module:
+            resolved_modules.append(path_to_module[abs_path])
+        else:
             logging.warning(
                 "File %s could not be resolved to a known module",
                 file,
@@ -177,6 +115,23 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package
     return resolved_modules
 
 
-def resolve_modules_to_files(modules: list[str]) -> list:
-    """Resolve module names to their corresponding file paths."""
-    return [importlib.import_module(module_path).__file__ for module_path in modules]
+def resolve_modules_to_files(
+    modules: list[str],
+    ns_module: str,
+    tests_package: str | None = None,
+) -> list[str]:
+    """Resolve module names to their corresponding file paths.
+
+    Uses filesystem-based discovery (no imports) to find module files.
+    """
+    submodules = discover_submodules(ns_module)
+    if tests_package:
+        submodules = {**submodules, **discover_submodules(tests_package)}
+
+    result = []
+    for module_name in modules:
+        if module_name in submodules:
+            result.append(submodules[module_name])
+        else:
+            logging.warning("Module %s not found in discovered submodules", module_name)
+    return result

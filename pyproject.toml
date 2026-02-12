@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytest-impacted"
-description = "A pytest plugin that selectively runs tests impacted by codechanges via git introspection, ASL parsing, and dependency graph analysis."
+description = "A pytest plugin that selectively runs tests impacted by code changes via git introspection, AST parsing, and dependency graph analysis."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [

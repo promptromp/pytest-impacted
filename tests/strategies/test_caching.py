@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from pytest_impacted.strategies import _cached_build_dep_tree, clear_dep_tree_cache
-from pytest_impacted.traversal import import_submodules
+from pytest_impacted.traversal import discover_submodules
 
 
 class TestCaching:
@@ -88,16 +88,16 @@ class TestCaching:
         mock_build_tree.assert_called_once_with("mypackage", tests_package=None)
         assert result1 is result2
 
-    def test_clear_dep_tree_cache_also_clears_import_submodules(self):
-        """Test that clear_dep_tree_cache also clears the import_submodules cache."""
-        # Populate the import_submodules cache
-        import_submodules("pytest_impacted")
-        cache_info_before = import_submodules.cache_info()
+    def test_clear_dep_tree_cache_also_clears_discover_submodules(self):
+        """Test that clear_dep_tree_cache also clears the discover_submodules cache."""
+        # Populate the discover_submodules cache
+        discover_submodules("pytest_impacted")
+        cache_info_before = discover_submodules.cache_info()
         assert cache_info_before.currsize > 0
 
         # Clear caches
         clear_dep_tree_cache()
 
-        # import_submodules cache should also be cleared
-        cache_info_after = import_submodules.cache_info()
+        # discover_submodules cache should also be cleared
+        cache_info_after = discover_submodules.cache_info()
         assert cache_info_after.currsize == 0
