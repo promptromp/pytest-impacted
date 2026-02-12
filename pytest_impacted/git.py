@@ -58,6 +58,10 @@ class GitStatus(StrEnum):
                 return cls(status)
 
 
+# Statuses that indicate a file is impactful for test coverage.
+_IMPACTFUL_STATUSES = (GitStatus.MODIFIED, GitStatus.ADDED, GitStatus.RENAMED, GitStatus.COPIED)
+
+
 class Change:
     """A change to a git repository file."""
 
@@ -215,10 +219,6 @@ def _collect_paths_for_change(item: Change) -> list[str | None]:
     if item.status in (GitStatus.RENAMED, GitStatus.COPIED):
         return [item.a_path, item.b_path]
     return [item.name]
-
-
-# Statuses that indicate a file is impactful for test coverage.
-_IMPACTFUL_STATUSES = (GitStatus.MODIFIED, GitStatus.ADDED, GitStatus.RENAMED, GitStatus.COPIED)
 
 
 def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
