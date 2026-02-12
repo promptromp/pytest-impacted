@@ -156,4 +156,4 @@ def test_validate_base_branch_nonexistent():
 
 def test_validate_base_branch_valid():
     """Test that a valid base branch passes validation."""
-    _validate_base_branch("main", ".")  # Should not raise
+    _validate_base_branch("HEAD", ".")  # Should not raise — HEAD exists in any git checkout
