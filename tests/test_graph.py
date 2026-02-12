@@ -1,6 +1,6 @@
 """Unit tests for the graph module."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import networkx as nx
 import pytest
@@ -69,21 +69,16 @@ def test_resolve_impacted_tests_dangling_production_module(sample_dep_tree):
 
 def test_build_dep_tree():
     """Test building dependency tree from a package."""
-    # Create a mock package module
-    mock_package = MagicMock()
-    mock_package.__name__ = "mock_package"
-    mock_package.__path__ = []
-
-    # Mock the submodules and their imports
+    # Mock discovered submodules: name -> absolute file path
     mock_submodules = {
-        "module_a": MagicMock(),
-        "module_b": MagicMock(),
-        "module_c": MagicMock(),
+        "module_a": "/fake/module_a.py",
+        "module_b": "/fake/module_b.py",
+        "module_c": "/fake/module_c.py",
     }
 
     with (
-        patch("pytest_impacted.graph.import_submodules", return_value=mock_submodules),
-        patch("pytest_impacted.graph.parse_module_imports") as mock_parse_imports,
+        patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
+        patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
     ):
         # Set up mock imports for each module
         mock_parse_imports.side_effect = [
@@ -92,7 +87,7 @@ def test_build_dep_tree():
             [],  # module_c imports
         ]
 
-        dep_tree = graph.build_dep_tree(mock_package)
+        dep_tree = graph.build_dep_tree("mock_package")
 
         # Verify the graph structure
         assert set(dep_tree.nodes()) == {"module_a", "module_b", "module_c"}

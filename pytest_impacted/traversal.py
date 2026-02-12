@@ -84,39 +84,6 @@ def discover_submodules(package: str) -> dict[str, str]:
     return results
 
 
-@lru_cache
-def import_submodules(package: str | types.ModuleType) -> dict[str, types.ModuleType]:
-    """Import all submodules of a module, recursively, including subpackages,
-    and return a dict mapping their fully-qualified names to the module object.
-
-    .. deprecated::
-        Use :func:`discover_submodules` instead to avoid import side effects.
-
-    :param package: package (name or actual module)
-    :type package: str | module
-    :rtype: dict[str, types.ModuleType]
-
-    """
-    results = {}
-    for module_info in iter_namespace(package):
-        name = module_info.name
-        if name not in results:
-            try:
-                results[name] = importlib.import_module(name)
-            except Exception:
-                logging.exception(
-                    "Encountered error while trying to import module from name: %s",
-                    name,
-                )
-                continue
-
-            if hasattr(results[name], "__path__"):
-                # Recursively import submodules
-                results.update(import_submodules(name))
-
-    return results
-
-
 def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package: str | None = None):
     """Resolve file paths to their corresponding Python module names.
 
@@ -150,26 +117,21 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package
 
 def resolve_modules_to_files(
     modules: list[str],
-    ns_module: str | None = None,
+    ns_module: str,
     tests_package: str | None = None,
 ) -> list[str]:
     """Resolve module names to their corresponding file paths.
 
-    Uses filesystem-based discovery when ns_module is provided (no imports).
-    Falls back to importing modules if ns_module is not provided.
+    Uses filesystem-based discovery (no imports) to find module files.
     """
-    if ns_module:
-        submodules = discover_submodules(ns_module)
-        if tests_package:
-            submodules = {**submodules, **discover_submodules(tests_package)}
+    submodules = discover_submodules(ns_module)
+    if tests_package:
+        submodules = {**submodules, **discover_submodules(tests_package)}
 
-        result = []
-        for module_name in modules:
-            if module_name in submodules:
-                result.append(submodules[module_name])
-            else:
-                logging.warning("Module %s not found in discovered submodules", module_name)
-        return result
-
-    # Legacy fallback: import to get __file__
-    return [importlib.import_module(module_path).__file__ for module_path in modules]
+    result = []
+    for module_name in modules:
+        if module_name in submodules:
+            result.append(submodules[module_name])
+        else:
+            logging.warning("Module %s not found in discovered submodules", module_name)
+    return result

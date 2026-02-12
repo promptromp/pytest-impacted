@@ -1,110 +1,90 @@
 """Unit tests for the parsing module."""
 
 import tempfile
-from unittest.mock import patch
 
 import pytest
 
 from pytest_impacted import parsing
 
 
-def test_should_silently_ignore_oserror():
-    """Test the should_silently_ignore_oserror function."""
-    # Test with empty file
-    with tempfile.NamedTemporaryFile() as temp_file:
-        assert parsing.should_silently_ignore_oserror(temp_file.name) is True
+def test_parse_file_imports():
+    """Test parse_file_imports with basic import statements."""
+    source = """\
+import os
+import sys
+from pathlib import Path
+from typing import List, Dict
+"""
 
-    # Test with non-empty file
-    with tempfile.NamedTemporaryFile() as temp_file:
-        temp_file.write(b"some content")
-        temp_file.flush()
-        assert parsing.should_silently_ignore_oserror(temp_file.name) is False
-
-
-def test_parse_module_imports():
-    """Test the parse_module_imports function."""
-    # Create a mock module with some imports
-    mock_source = """
-        import os
-        import sys
-        from pathlib import Path
-        from typing import List, Dict
-    """
-
-    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
-
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert set(imports) == {"os", "sys", "pathlib", "typing"}
 
 
-def test_parse_module_imports_empty_source():
-    """Test parse_module_imports with empty source."""
-    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
-
-    with patch("inspect.getsource", return_value=None):
-        imports = parsing.parse_module_imports(mock_module)
+def test_parse_file_imports_empty_source():
+    """Test parse_file_imports with an empty file."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write("")
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert imports == []
 
 
-def test_parse_module_imports_oserror():
-    """Test parse_module_imports handling of OSError."""
-    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
+def test_parse_file_imports_nonexistent_file():
+    """Test parse_file_imports with a file that doesn't exist."""
+    imports = parsing.parse_file_imports("/nonexistent/path.py", "mypkg.mymod")
+    assert imports == []
 
-    # Test with empty file (should return empty list)
-    with (
-        patch("inspect.getsource", side_effect=OSError()),
-        patch("os.stat", return_value=type("MockStat", (), {"st_size": 0})()),
-    ):
-        imports = parsing.parse_module_imports(mock_module)
+
+def test_parse_file_imports_zero_byte_file():
+    """Test parse_file_imports gracefully handles zero-byte files."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        # Write nothing — file stays at 0 bytes
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert imports == []
 
-    # Test with non-empty file (should raise)
-    with (
-        patch("inspect.getsource", side_effect=OSError()),
-        patch("os.stat", return_value=type("MockStat", (), {"st_size": 100})()),
-    ):
-        with pytest.raises(OSError):
-            parsing.parse_module_imports(mock_module)
 
-
-def test_parse_module_imports_from_statements():
-    """Test parse_module_imports with various from-import statement scenarios."""
-    # Test importing a module
-    mock_source = """
-        from pathlib import Path
-        from typing import List, Dict
-        from os import path
-        from sys import modules
-    """
-
-    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
-
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
+def test_parse_file_imports_from_statements():
+    """Test parse_file_imports with various from-import statement scenarios."""
+    # Test importing a sub-module vs a symbol
+    source = """\
+from pathlib import Path
+from typing import List, Dict
+from os import path
+from sys import modules
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert set(imports) == {"pathlib", "typing", "os.path", "sys"}
 
     # Test importing non-module items
-    mock_source = """
-        from datetime import datetime
-        from collections import defaultdict
-        from unittest.mock import patch
-    """
-
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
+    source = """\
+from datetime import datetime
+from collections import defaultdict
+from unittest.mock import patch
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert set(imports) == {"datetime", "collections", "unittest.mock"}
 
     # Test mixed imports
-    mock_source = """
-        import os
-        from pathlib import Path
-        from typing import List, Dict
-        from unittest.mock import patch
-    """
-
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
+    source = """\
+import os
+from pathlib import Path
+from typing import List, Dict
+from unittest.mock import patch
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert set(imports) == {"os", "pathlib", "typing", "unittest.mock"}
 
 
@@ -160,9 +140,9 @@ def test_is_module_path(module_path, package, expected):
     assert parsing.is_module_path(module_path, package=package) is expected
 
 
-def test_parse_module_imports_nested_in_try_except():
-    """Test parse_module_imports finds imports inside try/except blocks."""
-    mock_source = """
+def test_parse_file_imports_nested_in_try_except():
+    """Test parse_file_imports finds imports inside try/except blocks."""
+    source = """\
 import os
 
 try:
@@ -171,18 +151,18 @@ except ImportError:
     import json
 """
 
-    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
-
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert "os" in imports
         assert "ujson" in imports
         assert "json" in imports
 
 
-def test_parse_module_imports_nested_in_if_block():
-    """Test parse_module_imports finds imports inside if-guards."""
-    mock_source = """
+def test_parse_file_imports_nested_in_if_block():
+    """Test parse_file_imports finds imports inside if-guards."""
+    source = """\
 import sys
 
 if sys.version_info >= (3, 11):
@@ -191,32 +171,28 @@ else:
     from tomli import loads
 """
 
-    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
-
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
         assert "sys" in imports
         assert "tomllib" in imports
         assert "tomli" in imports
 
 
-def test_parse_module_imports_with_relative_imports():
-    """Test parse_module_imports with relative imports to verify proper package resolution."""
-    # Simulate module inside a package: my_package.a
-    mock_source = """
-        from .models.b import Something
-        from . import utils
-    """
+def test_parse_file_imports_with_relative_imports():
+    """Test parse_file_imports with relative imports to verify proper package resolution."""
+    source = """\
+from .models.b import Something
+from . import utils
+"""
 
-    # Create a mock module that appears to be at my_package.a
-    mock_module = type(
-        "MockModule", (), {"__file__": "/mock/my_package/a.py", "__name__": "my_package.a", "__package__": "my_package"}
-    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        # Module is my_package.a, so relative imports resolve against my_package
+        imports = parsing.parse_file_imports(f.name, "my_package.a")
 
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
-
-        # Relative imports should be resolved to full module paths using the package context
         # from .models.b should resolve to my_package.models.b
         assert "my_package.models.b" in imports
         # from . import utils should resolve to my_package
@@ -227,31 +203,20 @@ def test_parse_module_imports_with_relative_imports():
         assert "" not in imports
 
 
-def test_parse_module_imports_with_complex_relative_imports():
-    """Test parse_module_imports with various levels of relative imports."""
-    # Test more complex relative import scenarios
+def test_parse_file_imports_with_complex_relative_imports():
+    """Test parse_file_imports with various levels of relative imports."""
+    source = """\
+from . import sibling_module
+from .sibling import SomeClass
+from ..parent_level import something
+from ...root_level import another
+"""
 
-    # Simulate module inside a nested package: my_package.subpackage.module
-    mock_source = """
-        from . import sibling_module
-        from .sibling import SomeClass
-        from ..parent_level import something
-        from ...root_level import another
-    """
-
-    # Create a mock module at my_package.subpackage.module
-    mock_module = type(
-        "MockModule",
-        (),
-        {
-            "__file__": "/mock/my_package/subpackage/module.py",
-            "__name__": "my_package.subpackage.module",
-            "__package__": "my_package.subpackage",
-        },
-    )
-
-    with patch("inspect.getsource", return_value=mock_source):
-        imports = parsing.parse_module_imports(mock_module)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        # Module is my_package.subpackage.module
+        imports = parsing.parse_file_imports(f.name, "my_package.subpackage.module")
 
         # from . import sibling_module -> my_package.subpackage
         assert "my_package.subpackage" in imports
@@ -266,3 +231,17 @@ def test_parse_module_imports_with_complex_relative_imports():
         assert "sibling" not in imports
         assert "parent_level" not in imports
         assert "" not in imports
+
+
+def test_parse_file_imports_syntax_error():
+    """Test parse_file_imports gracefully handles files with syntax errors."""
+    source = """\
+import os
+def broken(
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(source)
+        f.flush()
+        imports = parsing.parse_file_imports(f.name, "mypkg.broken")
+        assert imports == []

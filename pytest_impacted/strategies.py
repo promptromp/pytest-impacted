@@ -9,7 +9,7 @@ import networkx as nx
 
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
-from pytest_impacted.traversal import discover_submodules, import_submodules
+from pytest_impacted.traversal import discover_submodules
 
 
 @lru_cache(maxsize=8)
@@ -41,7 +41,6 @@ def clear_dep_tree_cache() -> None:
     """
     _cached_build_dep_tree.cache_clear()
     discover_submodules.cache_clear()
-    import_submodules.cache_clear()
 
 
 class ImpactStrategy(ABC):

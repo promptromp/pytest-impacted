@@ -1,10 +1,8 @@
 """Python code parsing (AST) utilities."""
 
 import importlib.util
-import inspect
 import logging
 import os
-import types
 from pathlib import Path
 from typing import Any
 
@@ -67,26 +65,11 @@ def normalize_path(path_like: Any) -> Path:
         raise ValueError(f"Cannot normalize path-like object {path_like!r} of type {type(path_like)}") from e
 
 
-def should_silently_ignore_oserror(file_path: str) -> bool:
-    """Check if the file should be silently ignored.
-
-    Zero-byte files (often __init__.py) raise OSError in inspect.getsource().
-    We silently ignore these cases.
-
-    Args:
-        file_path: Path to the file to check
-
-    Returns:
-        True if the file has zero bytes and should be ignored
-    """
-    return os.stat(file_path).st_size == 0
-
-
-def _resolve_relative_import(module: types.ModuleType, node: astroid.ImportFrom) -> str:
+def _resolve_relative_import(module: _ModuleProxy, node: astroid.ImportFrom) -> str:
     """Resolve a relative import to its absolute module path.
 
     Args:
-        module: The module containing the relative import
+        module: A module proxy providing __name__ and __package__ context
         node: The ImportFrom AST node with relative import
 
     Returns:
@@ -124,12 +107,12 @@ def _resolve_relative_import(module: types.ModuleType, node: astroid.ImportFrom)
         return base_package
 
 
-def _extract_imports_from_node(node: astroid.Import | astroid.ImportFrom, module: types.ModuleType) -> set[str]:
+def _extract_imports_from_node(node: astroid.Import | astroid.ImportFrom, module: _ModuleProxy) -> set[str]:
     """Extract import module names from an AST node.
 
     Args:
         node: The import AST node
-        module: The module being parsed (for context)
+        module: A module proxy providing name/package context
 
     Returns:
         Set of imported module names
@@ -157,43 +140,6 @@ def _extract_imports_from_node(node: astroid.Import | astroid.ImportFrom, module
                 imports.add(resolved_modname)
 
     return imports
-
-
-def parse_module_imports(module: types.ModuleType) -> list[str]:
-    """Parse the module to find all import statements.
-
-    Args:
-        module: The module to parse for imports
-
-    Returns:
-        List of imported module names (absolute paths)
-
-    Raises:
-        OSError: If source code cannot be retrieved (except for zero-byte files)
-    """
-    # Get the source code of the module
-    source = None
-    try:
-        source = inspect.getsource(module)
-    except OSError:
-        if module.__file__ and should_silently_ignore_oserror(module.__file__):
-            return []
-        else:
-            logging.error("Exception raised while trying to get source code for module %s", module)
-            raise
-
-    if not source:
-        return []
-
-    # Parse the source code into an AST
-    tree = astroid.parse(source)
-
-    # Find all import statements in the AST (including nested ones in try/except, if blocks, etc.)
-    imports = set()
-    for node in tree.nodes_of_class((astroid.Import, astroid.ImportFrom)):
-        imports.update(_extract_imports_from_node(node, module))
-
-    return sorted(list(imports))
 
 
 def parse_file_imports(file_path: str, module_name: str, is_package: bool = False) -> list[str]:
@@ -232,7 +178,7 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
 
     imports: set[str] = set()
     for node in tree.nodes_of_class((astroid.Import, astroid.ImportFrom)):
-        imports.update(_extract_imports_from_node(node, module_proxy))  # type: ignore[arg-type]
+        imports.update(_extract_imports_from_node(node, module_proxy))
 
     return sorted(imports)
 
