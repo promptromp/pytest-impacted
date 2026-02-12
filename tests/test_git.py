@@ -541,3 +541,56 @@ def test_git_status_from_git_diff_name_status_copy_and_rename():
     # Test rename with score
     assert git.GitStatus.from_git_diff_name_status("R100") == git.GitStatus.RENAMED
     assert git.GitStatus.from_git_diff_name_status("R75") == git.GitStatus.RENAMED
+
+
+@patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_unstaged_mode_with_renamed_files(mock_repo):
+    """Test impacted_files_for_unstaged_mode includes both paths for renamed files."""
+    diff1 = MagicMock(a_path="old_name.py", b_path="new_name.py", change_type="R")
+    diff2 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
+    diff_result = [diff1, diff2]
+
+    repo = DummyRepo(dirty=True, diff_result=diff_result)
+    result = git.impacted_files_for_unstaged_mode(repo)
+
+    assert set(result) == {"old_name.py", "new_name.py", "file1.py"}
+
+
+@patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_branch_mode_with_renamed_files(mock_repo):
+    """Test impacted_files_for_branch_mode includes both paths for renamed files."""
+    diff_output = "R100\told_name.py\tnew_name.py\nM\tmodified.py\n"
+    repo = DummyRepo(diff_branch_result=diff_output)
+    result = git.impacted_files_for_branch_mode(repo, "main")
+
+    assert set(result) == {"old_name.py", "new_name.py", "modified.py"}
+
+
+@patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_branch_mode_with_copied_files(mock_repo):
+    """Test impacted_files_for_branch_mode includes both paths for copied files."""
+    diff_output = "C85\toriginal.py\tcopy.py\nA\tnew_file.py\n"
+    repo = DummyRepo(diff_branch_result=diff_output)
+    result = git.impacted_files_for_branch_mode(repo, "main")
+
+    assert set(result) == {"original.py", "copy.py", "new_file.py"}
+
+
+@patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_branch_mode_detached_head(mock_repo):
+    """Test impacted_files_for_branch_mode handles detached HEAD (common in CI)."""
+    diff_output = "M\tfile1.py\n"
+    repo = DummyRepo(diff_branch_result=diff_output)
+
+    # Simulate detached HEAD: accessing head.reference raises TypeError
+    def _raise_type_error(self):
+        raise TypeError("HEAD is a detached symbolic reference")
+
+    type(repo.head).reference = property(_raise_type_error)
+    repo.head.commit = "abc123"
+
+    result = git.impacted_files_for_branch_mode(repo, "main")
+
+    assert result == ["file1.py"]
+    # Verify git.diff was called with the commit hash fallback
+    repo.git.diff.assert_called_once_with("main", "abc123", name_status=True)

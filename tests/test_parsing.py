@@ -150,11 +150,54 @@ def test_is_test_module(module_name, expected):
         ("os", None, True),
         ("sys", None, True),
         ("nonexistent.module", None, False),
+        # ValueError cases: empty string, leading dots without package
+        ("", None, False),
+        ("..invalid", None, False),
     ],
 )
 def test_is_module_path(module_path, package, expected):
     """Test is_module_path with various import scenarios."""
     assert parsing.is_module_path(module_path, package=package) is expected
+
+
+def test_parse_module_imports_nested_in_try_except():
+    """Test parse_module_imports finds imports inside try/except blocks."""
+    mock_source = """
+import os
+
+try:
+    import ujson as json
+except ImportError:
+    import json
+"""
+
+    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert "os" in imports
+        assert "ujson" in imports
+        assert "json" in imports
+
+
+def test_parse_module_imports_nested_in_if_block():
+    """Test parse_module_imports finds imports inside if-guards."""
+    mock_source = """
+import sys
+
+if sys.version_info >= (3, 11):
+    from tomllib import loads
+else:
+    from tomli import loads
+"""
+
+    mock_module = type("MockModule", (), {"__file__": "/mock/path.py"})
+
+    with patch("inspect.getsource", return_value=mock_source):
+        imports = parsing.parse_module_imports(mock_module)
+        assert "sys" in imports
+        assert "tomllib" in imports
+        assert "tomli" in imports
 
 
 def test_parse_module_imports_with_relative_imports():

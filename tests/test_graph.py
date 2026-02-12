@@ -37,8 +37,8 @@ def sample_dep_tree():
         (["module_b", "module_c"], {"test_module1", "test_module2"}),
         # Test no impact
         (["module_e"], {"test_module2"}),
-        # Test dangling node (module not in dependency tree)
-        (["dangling_module"], set()),
+        # Test dangling production module — conservatively marks all tests as impacted
+        (["dangling_module"], {"test_module1", "test_module2"}),
     ],
 )
 def test_resolve_impacted_tests(sample_dep_tree, modified_modules, expected_impacted):
@@ -51,6 +51,20 @@ def test_resolve_impacted_tests(sample_dep_tree, modified_modules, expected_impa
     """
     impacted = graph.resolve_impacted_tests(modified_modules, sample_dep_tree)
     assert set(impacted) == expected_impacted
+
+
+def test_resolve_impacted_tests_dangling_test_module(sample_dep_tree):
+    """Test that a dangling test module is directly included as impacted."""
+    impacted = graph.resolve_impacted_tests(["test_new_feature"], sample_dep_tree)
+    assert "test_new_feature" in impacted
+
+
+def test_resolve_impacted_tests_dangling_production_module(sample_dep_tree):
+    """Test that a dangling production module causes all test modules to be impacted."""
+    impacted = graph.resolve_impacted_tests(["unknown_prod_module"], sample_dep_tree)
+    # Should include all test modules from the tree
+    assert "test_module1" in impacted
+    assert "test_module2" in impacted
 
 
 def test_build_dep_tree():

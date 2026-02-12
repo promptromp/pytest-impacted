@@ -50,6 +50,14 @@ def test_matches_impacted_tests_item_path_longer():
     assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is False
 
 
+def test_matches_impacted_tests_false_suffix_match():
+    """Test that endswith doesn't false-match on non-boundary suffixes."""
+    item_path = "test_example.py"
+    impacted_tests = ["project/module/tests/foo_test_example.py"]
+    # "foo_test_example.py" ends with "test_example.py" but is NOT the same file
+    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is False
+
+
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 def test_get_impacted_tests_no_impacted_files(mock_find_impacted_files):
     mock_find_impacted_files.return_value = []

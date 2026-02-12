@@ -1,6 +1,7 @@
 """Matchers used for pattern matching and unit-tests."""
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from pytest_impacted.traversal import (
 def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
     """Check if the item path matches any of the impacted tests."""
     for test in impacted_tests:
-        if test.endswith(item_path):
+        if test == item_path or test.endswith(os.sep + item_path):
             return True
 
     return False
