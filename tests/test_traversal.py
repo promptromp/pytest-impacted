@@ -62,16 +62,9 @@ def test_resolve_files_to_modules():
     """Test resolve_files_to_modules function."""
     package_path = Path(importlib.import_module("pytest_impacted").__path__[0])
     test_file = str(package_path / "traversal.py")
-    # Simulate the replacement logic
-    module_name = test_file.replace(str(package_path), "").replace("/", ".").replace(".py", "").lstrip(".")
-    submodules = import_submodules("pytest_impacted")
     modules = resolve_files_to_modules([test_file], "pytest_impacted")
-    # The function will only return the module name if it matches a key in submodules
-    if module_name in submodules:
-        assert len(modules) == 1
-        assert modules[0] == module_name
-    else:
-        assert modules == []
+    assert len(modules) == 1
+    assert modules[0] == "pytest_impacted.traversal"
 
 
 def test_resolve_modules_to_files():
@@ -149,6 +142,56 @@ def test_import_submodules_with_missing_module():
         assert "nonexistent.module" not in modules
 
 
+def test_import_submodules_with_syntax_error():
+    """Test import_submodules gracefully handles SyntaxError from broken modules."""
+    from pytest_impacted import traversal
+
+    traversal.import_submodules.cache_clear()
+    with pytest.MonkeyPatch.context() as m:
+
+        def mock_iter_namespace(package):
+            return [pkgutil.ModuleInfo(None, "broken_syntax_module", False)]
+
+        m.setattr("pytest_impacted.traversal.iter_namespace", mock_iter_namespace)
+
+        original_import = importlib.import_module
+
+        def mock_import_module(name):
+            if name == "broken_syntax_module":
+                raise SyntaxError("invalid syntax")
+            return original_import(name)
+
+        m.setattr(importlib, "import_module", mock_import_module)
+
+        modules = import_submodules("pytest_impacted")
+        assert "broken_syntax_module" not in modules
+
+
+def test_import_submodules_with_import_error():
+    """Test import_submodules gracefully handles ImportError from broken modules."""
+    from pytest_impacted import traversal
+
+    traversal.import_submodules.cache_clear()
+    with pytest.MonkeyPatch.context() as m:
+
+        def mock_iter_namespace(package):
+            return [pkgutil.ModuleInfo(None, "broken_import_module", False)]
+
+        m.setattr("pytest_impacted.traversal.iter_namespace", mock_iter_namespace)
+
+        original_import = importlib.import_module
+
+        def mock_import_module(name):
+            if name == "broken_import_module":
+                raise ImportError("No module named 'missing_dep'")
+            return original_import(name)
+
+        m.setattr(importlib, "import_module", mock_import_module)
+
+        modules = import_submodules("pytest_impacted")
+        assert "broken_import_module" not in modules
+
+
 def test_resolve_files_to_modules_edge_cases():
     """Test resolve_files_to_modules with various edge cases."""
     # Test with empty file list
@@ -207,14 +250,13 @@ def test_iter_namespace_module_without_path(monkeypatch):
 
 def test_resolve_files_to_modules_with_tests_package():
     """Test resolve_files_to_modules with tests_package parameter."""
-    # Create a temporary test package structure for testing
     with pytest.MonkeyPatch.context() as m:
         # Mock import_submodules to return known results for both packages
         def mock_import_submodules(package):
             if package == "pytest_impacted":
-                return {"traversal": types.ModuleType("traversal")}
+                return {"pytest_impacted.traversal": types.ModuleType("pytest_impacted.traversal")}
             elif package == "tests":
-                return {"path.to.tests.test_traversal": types.ModuleType("test_traversal")}
+                return {"tests.test_traversal": types.ModuleType("tests.test_traversal")}
             return {}
 
         m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)
@@ -237,10 +279,51 @@ def test_resolve_files_to_modules_with_tests_package():
         main_file = "/path/to/pytest_impacted/traversal.py"
         modules = resolve_files_to_modules([main_file], "pytest_impacted", "tests")
         assert len(modules) == 1
-        assert modules[0] == "traversal"
+        assert modules[0] == "pytest_impacted.traversal"
 
         # Test with a file from the tests package
         test_file = "/path/to/tests/test_traversal.py"
         modules = resolve_files_to_modules([test_file], "pytest_impacted", "tests")
         assert len(modules) == 1
-        assert modules[0] == "path.to.tests.test_traversal"
+        assert modules[0] == "tests.test_traversal"
+
+
+def test_resolve_files_to_modules_init_file():
+    """Test resolve_files_to_modules with __init__.py files."""
+    with pytest.MonkeyPatch.context() as m:
+
+        def mock_import_submodules(package):
+            return {"mypkg": types.ModuleType("mypkg")}
+
+        m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)
+
+        def mock_import_module(name):
+            module = types.ModuleType(name)
+            module.__path__ = ["/project/mypkg"]
+            return module
+
+        m.setattr(importlib, "import_module", mock_import_module)
+
+        modules = resolve_files_to_modules(["/project/mypkg/__init__.py"], "mypkg")
+        assert modules == ["mypkg"]
+
+
+def test_resolve_files_to_modules_relative_git_path():
+    """Test resolve_files_to_modules with relative git paths (e.g. 'pytest_impacted/foo.py')."""
+    with pytest.MonkeyPatch.context() as m:
+
+        def mock_import_submodules(package):
+            return {"mypkg.foo": types.ModuleType("mypkg.foo")}
+
+        m.setattr("pytest_impacted.traversal.import_submodules", mock_import_submodules)
+
+        def mock_import_module(name):
+            module = types.ModuleType(name)
+            module.__path__ = ["/somewhere/else/mypkg"]
+            return module
+
+        m.setattr(importlib, "import_module", mock_import_module)
+
+        # Relative path from git that doesn't match the absolute package path
+        modules = resolve_files_to_modules(["mypkg/foo.py"], "mypkg")
+        assert modules == ["mypkg.foo"]

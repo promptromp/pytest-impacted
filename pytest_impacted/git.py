@@ -116,16 +116,21 @@ class ChangeSet:
     @classmethod
     def from_diff_objs(cls, diffs: list[Diff]) -> "ChangeSet":
         """Create a ChangeSet from a list of git diff objects."""
-        # Nb. a_path would be None if this is a new file in which case
-        # we use the `b_path` argument to get its name and consider it
-        # modified.
-        changes = [
-            Change.from_git_diff_name_status(
-                status=diff.change_type,
-                name=diff.a_path if diff.a_path is not None else diff.b_path,
-            )
-            for diff in diffs
-        ]
+        changes = []
+        for diff in diffs:
+            status = GitStatus.from_git_diff_name_status(diff.change_type) if diff.change_type else None
+            if status in (GitStatus.RENAMED, GitStatus.COPIED):
+                changes.append(Change(a_path=diff.a_path, b_path=diff.b_path, status=status))
+            else:
+                # a_path would be None if this is a new file in which case
+                # we use the b_path to get its name.
+                changes.append(
+                    Change(
+                        a_path=diff.a_path if diff.a_path is not None else diff.b_path,
+                        b_path=None,
+                        status=status,
+                    )
+                )
         return cls(changes)
 
     @classmethod
@@ -200,6 +205,21 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     return impacted_files
 
 
+def _collect_paths_for_change(item: Change) -> list[str | None]:
+    """Collect all relevant file paths from a change.
+
+    For renames and copies, both source and destination paths are relevant.
+    For other changes, just the primary name is returned.
+    """
+    if item.status in (GitStatus.RENAMED, GitStatus.COPIED):
+        return [item.a_path, item.b_path]
+    return [item.name]
+
+
+# Statuses that indicate a file is impactful for test coverage.
+_IMPACTFUL_STATUSES = (GitStatus.MODIFIED, GitStatus.ADDED, GitStatus.RENAMED, GitStatus.COPIED)
+
+
 def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     """Get the impacted files when in the UNSTAGED git mode."""
     if not repo.is_dirty():
@@ -209,7 +229,10 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     diffs = repo.index.diff(None)
     change_set = ChangeSet.from_diff_objs(diffs)
 
-    impacted_files = [item.name for item in change_set.changes if item.status in (GitStatus.MODIFIED, GitStatus.ADDED)]
+    impacted_files = []
+    for item in change_set.changes:
+        if item.status in _IMPACTFUL_STATUSES:
+            impacted_files.extend(_collect_paths_for_change(item))
 
     # Nb. we also include untracked files as they are also
     # potentially impactful for unit-test coverage.
@@ -221,11 +244,19 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:
     """Get the impacted files when in the BRANCH git mode."""
 
-    current_branch = repo.head.reference
-    diffs = repo.git.diff(base_branch, current_branch, name_status=True)
+    try:
+        current_ref = repo.head.reference
+    except TypeError:
+        # Detached HEAD state (common in CI) — fall back to HEAD commit
+        current_ref = repo.head.commit
+
+    diffs = repo.git.diff(base_branch, current_ref, name_status=True)
     change_set = ChangeSet.from_git_diff_name_status_output(diffs)
 
-    impacted_files = [item.name for item in change_set.changes if item.status in (GitStatus.MODIFIED, GitStatus.ADDED)]
+    impacted_files = []
+    for item in change_set.changes:
+        if item.status in _IMPACTFUL_STATUSES:
+            impacted_files.extend(_collect_paths_for_change(item))
 
     return without_nones(impacted_files) or None
 

@@ -16,17 +16,33 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     We then check if these nodes are test modules.
     We return the list of test modules that are impacted.
 
+    For modules not found in the dependency tree (dangling nodes):
+    - Test modules are included directly as impacted (they changed, so they should run).
+    - Production modules cause ALL test modules to be marked as impacted,
+      erring on the side of caution per project philosophy.
+
     """
     impacted_tests = []
+    all_test_modules_in_tree = [node for node in dep_tree.nodes if is_test_module(node)]
+
     for module in impacted_modules:
         if module not in dep_tree.nodes:
-            # This could happen if a module file was modified but is a "dangling node" in the dependency tree.
-            # This is likely because the module is not imported by any other module.
             logging.warning(
-                "Module %s is marked as impacted was not found in dependency tree, "
-                "likely pruned because it is a dangling node. Skipping.",
+                "Module %s is marked as impacted but was not found in dependency tree "
+                "(likely pruned as a dangling node).",
                 module,
             )
+            if is_test_module(module):
+                # Test module changed but not in tree — include it directly.
+                impacted_tests.append(module)
+            else:
+                # Production module changed but not in tree — conservatively
+                # mark all known test modules as impacted.
+                logging.warning(
+                    "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
+                    module,
+                )
+                impacted_tests.extend(all_test_modules_in_tree)
             continue
 
         dependent_nodes = [node for node in nx.dfs_preorder_nodes(dep_tree, source=module) if is_test_module(node)]

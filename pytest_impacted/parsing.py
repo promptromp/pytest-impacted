@@ -168,11 +168,10 @@ def parse_module_imports(module: types.ModuleType) -> list[str]:
     # Parse the source code into an AST
     tree = astroid.parse(source)
 
-    # Find all import statements in the AST
+    # Find all import statements in the AST (including nested ones in try/except, if blocks, etc.)
     imports = set()
-    for node in tree.body:
-        if isinstance(node, (astroid.Import, astroid.ImportFrom)):
-            imports.update(_extract_imports_from_node(node, module))
+    for node in tree.nodes_of_class((astroid.Import, astroid.ImportFrom)):
+        imports.update(_extract_imports_from_node(node, module))
 
     return sorted(list(imports))
 
@@ -192,6 +191,14 @@ def is_module_path(module_path: str, package: str | None = None) -> bool:
         spec = importlib.util.find_spec(module_path, package=package)
         return spec is not None
     except ModuleNotFoundError:
+        return False
+    except ValueError:
+        # find_spec raises ValueError for invalid module names (empty strings, leading dots, etc.)
+        logging.debug(
+            "ValueError while trying to find spec for module %s in package %s",
+            module_path,
+            package,
+        )
         return False
     except ImportError:
         logging.exception(
