@@ -76,6 +76,21 @@ Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strateg
 
 Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_caching.py`, `test_integration.py`). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
 
+## Documentation
+
+The project has three documentation surfaces that must stay in sync:
+
+- **`README.md`** — project home page (also served as MkDocs home via `mkdocs.yml`)
+- **`docs/usage.md`** — detailed usage guide (MkDocs site)
+- **`CLAUDE.md`** — this file (architecture reference for Claude Code)
+
+The documentation site uses [MkDocs Material](https://squidfun.github.io/mkdocs-material/) and is published to GitHub Pages at `https://promptromp.github.io/pytest-impacted`. Configuration is in `mkdocs.yml`.
+
+## Special Instructions
+
+- **Keep docs in sync**: When making significant changes to the codebase (new features, API changes, architectural changes, new CLI options, strategy changes), always update **all three** of `CLAUDE.md`, `README.md`, and `docs/usage.md` to reflect those changes in the same PR.
+- **README.md and docs/usage.md serve different audiences**: `README.md` is a concise overview for GitHub/PyPI visitors; `docs/usage.md` is a comprehensive reference with deeper explanations, code examples, and MkDocs-specific features (admonitions, mermaid diagrams).
+
 ## Configuration Notes
 
 - Ruff: line-length=120, target-version=py311, double quote style, T201 (print) allowed
