@@ -4,112 +4,79 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pytest-impacted is a pytest plugin that selectively runs tests impacted by code changes via git introspection, AST parsing, and dependency graph analysis. The plugin analyzes Python import dependencies using astroid, builds dependency graphs with NetworkX, and uses GitPython to identify changed files.
-
-## Core Architecture
-
-The plugin follows a modular architecture with clear separation of concerns:
-
-- **plugin.py**: pytest plugin entry point, handles CLI options and test collection filtering
-- **api.py**: Main API functions (`get_impacted_tests`, `matches_impacted_tests`) that orchestrate the analysis
-- **git.py**: Git integration for finding changed files (supports unstaged changes and branch diffs)
-- **graph.py**: Dependency graph construction and analysis using NetworkX
-- **parsing.py**: AST parsing using astroid to extract import relationships
-- **traversal.py**: Module discovery and path/module name conversion utilities
-- **cli.py**: Standalone CLI tool for generating impacted test lists
-- **display.py**: Rich-based console output formatting
-
-The workflow: Git identifies changed files → Files converted to Python modules → AST parser builds dependency graph → Graph analysis finds impacted test modules → Tests are filtered accordingly.
+pytest-impacted is a pytest plugin that selectively runs tests impacted by code changes via git introspection, AST parsing, and dependency graph analysis. It analyzes Python import dependencies using astroid, builds dependency graphs with NetworkX, and uses GitPython to identify changed files. The philosophy is to err on the side of caution—favoring false positives over missed impacted tests.
 
 ## Development Commands
 
-### Testing
+This project uses `uv` for dependency and virtualenv management.
+
 ```bash
+# Install/sync development environment
+uv sync --all-extras --dev
+
+# Add a new dependency
+uv add <package_name>
+
 # Run all tests
 uv run python -m pytest
 
 # Run tests with coverage
 uv run python -m pytest --cov=pytest_impacted --cov-branch tests
 
-# Run tests excluding slow tests (used in pre-commit)
+# Run tests excluding slow tests (matches pre-commit behavior)
 uv run python -m pytest --cov=pytest_impacted --cov-branch tests -m 'not slow'
 
-# Run a single test file
+# Run a single test file or function
 uv run python -m pytest tests/test_api.py
-
-# Run a specific test function
 uv run python -m pytest tests/test_api.py::test_function_name
-```
 
-### Linting and Formatting
-```bash
-# Run ruff linting with auto-fix
+# Linting and formatting (ruff: line-length=120, target=py311, double quotes)
 ruff check --fix
-
-# Run ruff formatting
 ruff format
 
-# Check both lint and format (CI mode)
-ruff check && ruff format --check
-```
-
-### Type Checking
-```bash
-# Run mypy type checking
+# Type checking
 uv run mypy pytest_impacted
-```
 
-### Pre-commit Hooks
-```bash
-# Run all pre-commit hooks manually
+# Run all pre-commit hooks (fail_fast: true)
 pre-commit run --all-files
-
-# Install pre-commit hooks
-pre-commit install
 ```
 
-## Package Management
+## Core Architecture
 
-This project uses `uv` for dependency management:
+The pipeline: Git identifies changed files → Files converted to Python modules → AST parser builds dependency graph → Graph analysis finds impacted test modules → Tests are filtered.
 
-```bash
-# Install development environment
-uv sync --all-extras --dev
+### Module Responsibilities
 
-# Install package in editable mode (legacy approach)
-pip install -e .
-```
+- **plugin.py**: pytest plugin entry point via `pytest11` entry point; handles CLI options and test collection filtering
+- **api.py**: Orchestration layer (`get_impacted_tests`, `matches_impacted_tests`); creates the default composite strategy
+- **strategies.py**: Strategy pattern for impact analysis (see below)
+- **git.py**: Git integration for finding changed files (unstaged changes and branch diffs)
+- **graph.py**: Dependency graph construction and querying using NetworkX
+- **parsing.py**: AST parsing using astroid to extract import relationships
+- **traversal.py**: Module discovery and path↔module name conversion utilities
+- **cli.py**: Standalone `impacted-tests` CLI tool (Click-based) for CI integration
+- **display.py**: Rich-based console output formatting
 
-## Plugin Usage Examples
+### Strategy Pattern
 
-```bash
-# Run tests impacted by unstaged changes
-pytest --impacted --impacted-git-mode=unstaged --impacted-module=my_package
+Impact analysis uses a strategy-based architecture defined in `strategies.py`:
 
-# Run tests impacted by branch changes vs main
-pytest --impacted --impacted-git-mode=branch --impacted-base-branch=main --impacted-module=my_package
+- **`ImpactStrategy`** (ABC): Base class defining `find_impacted_tests()` interface
+- **`ASTImpactStrategy`**: Default strategy using AST parsing and dependency graph traversal
+- **`PytestImpactStrategy`**: Extends AST analysis with pytest-specific handling—when `conftest.py` files change, all tests in the same directory and subdirectories are considered impacted
+- **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results
 
-# Include external tests directory
-pytest --impacted --impacted-git-mode=unstaged --impacted-module=my_package --impacted-tests-dir=tests/
+The default strategy in `api.py` is `CompositeImpactStrategy([ASTImpactStrategy(), PytestImpactStrategy()])`.
 
-# Generate impacted test list (for CI)
-impacted-tests --module=my_package --git-mode=branch --base-branch=main > impacted_tests.txt
-pytest @impacted_tests.txt
-```
+Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation.
 
-## Key Dependencies
+### Test Structure
 
-- **astroid**: AST parsing and static analysis
-- **networkx**: Dependency graph construction and analysis
-- **gitpython**: Git repository introspection
-- **pytest**: Test framework integration
-- **click**: CLI interface for standalone tool
-- **rich**: Console output formatting
+Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_caching.py`, `test_integration.py`). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
 
 ## Configuration Notes
 
-- Ruff configuration in pyproject.toml sets line length to 120 characters
-- MyPy configured with namespace packages support
-- Pre-commit hooks include ruff, mypy, and pytest with coverage
-- CI runs on Python 3.11, 3.12, and 3.13
-- Project requires Python 3.11+ minimum
+- Ruff: line-length=120, target-version=py311, double quote style, T201 (print) allowed
+- Pre-commit hooks: ruff, mypy, pytest with coverage (fail_fast: true)
+- CI matrix: Python 3.11, 3.12, 3.13
+- Python 3.11+ minimum required

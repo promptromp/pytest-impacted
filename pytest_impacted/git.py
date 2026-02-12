@@ -5,6 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+
 try:
     from git import Repo
     from git.diff import Diff
