@@ -1,10 +1,12 @@
+import importlib.util
+import os
 from functools import partial
 
 import pytest
 from pytest import Config, Parser, UsageError
 
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
-from pytest_impacted.git import GitMode
+from pytest_impacted.git import GIT_AVAILABLE, GitMode
 
 
 def pytest_addoption(parser: Parser):
@@ -170,16 +172,92 @@ def get_option_from_config(config: Config, name: str) -> str | None:
 
 
 def validate_config(config: Config):
-    """Validate the configuration options"""
+    """Validate the configuration options."""
     get_option = partial(get_option_from_config, config)
-    if get_option("impacted"):
-        if not get_option("impacted_module"):
-            # If the impacted option is set, we need to check if there is a module specified.
-            raise UsageError("No module specified. Please specify a module using --impacted-module.")
-        if not get_option("impacted_git_mode"):
-            # If the impacted option is set, we need to check if there is a git mode specified.
-            raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
+    if not get_option("impacted"):
+        return
 
-        if get_option("impacted_git_mode") == GitMode.BRANCH and not get_option("impacted_base_branch"):
-            # If the git mode is branch, we need to check if there is a base branch specified.
-            raise UsageError("No base branch specified. Please specify a base branch using --impacted-base-branch.")
+    if not get_option("impacted_module"):
+        raise UsageError("No module specified. Please specify a module using --impacted-module.")
+    if not get_option("impacted_git_mode"):
+        raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
+
+    if get_option("impacted_git_mode") == GitMode.BRANCH and not get_option("impacted_base_branch"):
+        raise UsageError("No base branch specified. Please specify a base branch using --impacted-base-branch.")
+
+    module_name = get_option("impacted_module")
+    assert module_name is not None  # guarded by the check above
+    _validate_module(module_name)
+
+    tests_dir = get_option("impacted_tests_dir")
+    if tests_dir:
+        _validate_tests_dir(tests_dir)
+
+    base_branch = get_option("impacted_base_branch")
+    if get_option("impacted_git_mode") == GitMode.BRANCH and base_branch:
+        _validate_base_branch(base_branch, str(config.rootdir))  # type: ignore[attr-defined]
+
+
+def _validate_module(module_name: str) -> None:
+    """Validate that --impacted-module refers to a discoverable Python package."""
+    module_dir = module_name.replace(".", os.sep)
+    if os.path.isdir(module_dir):
+        return
+
+    # The directory doesn't exist — try to give a helpful suggestion
+    if "-" in module_name:
+        suggestion = module_name.replace("-", "_")
+        suggestion_dir = suggestion.replace(".", os.sep)
+        if os.path.isdir(suggestion_dir):
+            raise UsageError(
+                f"Module '{module_name}' not found. Python module names use underscores, not hyphens. "
+                f"Did you mean: --impacted-module={suggestion}"
+            )
+
+    raise UsageError(
+        f"Module '{module_name}' not found (no '{module_dir}/' directory in the current working directory). "
+        f"Make sure --impacted-module is a valid Python package name and you are running from the project root."
+    )
+
+
+def _validate_tests_dir(tests_dir: str) -> None:
+    """Validate that --impacted-tests-dir refers to an existing, importable directory."""
+    if not os.path.isdir(tests_dir):
+        raise UsageError(
+            f"Tests directory '{tests_dir}' does not exist. Please check the path passed to --impacted-tests-dir."
+        )
+
+    dir_name = os.path.basename(os.path.normpath(tests_dir))
+    if importlib.util.find_spec(dir_name) is None:
+        raise UsageError(
+            f"Tests directory '{tests_dir}' exists but is not importable as a Python package "
+            f"(could not find module '{dir_name}'). "
+            f"Ensure it contains an __init__.py or is otherwise importable."
+        )
+
+
+def _validate_base_branch(base_branch: str, root_dir: str) -> None:
+    """Validate that --impacted-base-branch refers to a valid git ref."""
+    if not GIT_AVAILABLE:
+        return
+
+    from git import GitCommandError, Repo
+
+    try:
+        repo = Repo(path=root_dir)
+        repo.git.rev_parse("--verify", base_branch)
+    except GitCommandError as err:
+        # List available local branches for the suggestion
+        try:
+            branches = [ref.name for ref in repo.references]
+            branch_list = ", ".join(sorted(branches)[:10])
+            suffix = f" Available refs: {branch_list}"
+            if len(repo.references) > 10:
+                suffix += ", ..."
+        except Exception:
+            suffix = ""
+
+        raise UsageError(
+            f"Base branch '{base_branch}' does not exist in the git repository. "
+            f"Please check the value passed to --impacted-base-branch.{suffix}"
+        ) from err

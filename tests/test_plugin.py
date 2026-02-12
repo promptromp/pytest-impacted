@@ -4,6 +4,9 @@ import pytest
 
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
+    _validate_base_branch,
+    _validate_module,
+    _validate_tests_dir,
     pytest_addoption,
     pytest_configure,
     pytest_report_header,
@@ -81,7 +84,7 @@ def test_pytest_report_header(pytestconfig):
 def test_validate_config_valid(pytestconfig):
     """Test that valid configuration passes validation."""
     pytestconfig.option.impacted = True
-    pytestconfig.option.impacted_module = "test_module"
+    pytestconfig.option.impacted_module = "pytest_impacted"
     pytestconfig.option.impacted_git_mode = GitMode.UNSTAGED
     validate_config(pytestconfig)  # Should not raise
 
@@ -109,9 +112,48 @@ def test_validate_config_missing_git_mode(pytestconfig):
 def test_validate_config_branch_mode_missing_base(pytestconfig):
     """Test that validation fails when branch mode is used without base branch."""
     pytestconfig.option.impacted = True
-    pytestconfig.option.impacted_module = "test_module"
+    pytestconfig.option.impacted_module = "pytest_impacted"
     pytestconfig.option.impacted_git_mode = GitMode.BRANCH
     pytestconfig.option.impacted_base_branch = None
     pytestconfig._inicache["impacted_base_branch"] = None
     with pytest.raises(pytest.UsageError, match="No base branch specified"):
         validate_config(pytestconfig)
+
+
+def test_validate_module_hyphen_suggests_underscore():
+    """Test that a hyphenated module name suggests the underscore version."""
+    with pytest.raises(pytest.UsageError, match="Did you mean: --impacted-module=pytest_impacted"):
+        _validate_module("pytest-impacted")
+
+
+def test_validate_module_nonexistent():
+    """Test that a completely unknown module gives a helpful error."""
+    with pytest.raises(pytest.UsageError, match="Module 'doesnotexist' not found"):
+        _validate_module("doesnotexist")
+
+
+def test_validate_module_valid():
+    """Test that a valid module name passes validation."""
+    _validate_module("pytest_impacted")  # Should not raise
+
+
+def test_validate_tests_dir_nonexistent():
+    """Test that a non-existent tests directory gives a helpful error."""
+    with pytest.raises(pytest.UsageError, match="Tests directory 'nonexistent_dir' does not exist"):
+        _validate_tests_dir("nonexistent_dir")
+
+
+def test_validate_tests_dir_valid():
+    """Test that a valid tests directory passes validation."""
+    _validate_tests_dir("tests")  # Should not raise
+
+
+def test_validate_base_branch_nonexistent():
+    """Test that a non-existent base branch gives a helpful error with available refs."""
+    with pytest.raises(pytest.UsageError, match="Base branch 'nonexistent_branch_xyz' does not exist"):
+        _validate_base_branch("nonexistent_branch_xyz", ".")
+
+
+def test_validate_base_branch_valid():
+    """Test that a valid base branch passes validation."""
+    _validate_base_branch("main", ".")  # Should not raise
