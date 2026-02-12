@@ -92,6 +92,37 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
 
+### Strategy-Based Architecture
+
+Impact analysis is pluggable via a strategy pattern. The default pipeline combines two strategies:
+
+| Strategy | What it does |
+|----------|-------------|
+| **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
+| **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, **all tests in its directory and subdirectories** are marked as impacted |
+
+Both strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. This is important because `conftest.py` files are implicitly loaded by pytest at runtime and are not visible through normal import analysis.
+
+You can also supply a custom strategy via the `get_impacted_tests()` API:
+
+```python
+from pytest_impacted.api import get_impacted_tests
+from pytest_impacted.strategies import ImpactStrategy
+
+class MyCustomStrategy(ImpactStrategy):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+        # your logic here
+        ...
+
+impacted = get_impacted_tests(
+    impacted_git_mode="branch",
+    impacted_base_branch="main",
+    root_dir=Path("."),
+    ns_module="my_package",
+    strategy=MyCustomStrategy(),
+)
+```
+
 ---
 
 ## Usage
