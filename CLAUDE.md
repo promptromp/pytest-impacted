@@ -96,5 +96,5 @@ The documentation site uses [MkDocs Material](https://squidfun.github.io/mkdocs-
 
 - Ruff: line-length=120, target-version=py311, double quote style, T201 (print) allowed
 - Pre-commit hooks: ruff, mypy, pytest with coverage (fail_fast: true)
-- CI matrix: Python 3.11, 3.12, 3.13
+- CI matrix: Python 3.11, 3.12, 3.13, 3.14
 - Python 3.11+ minimum required
