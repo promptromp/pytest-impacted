@@ -235,11 +235,14 @@ def test_get_impacted_tests_dep_file_only_change(
     mock_resolve_files_to_modules,
     mock_find_impacted_files,
 ):
-    """When only dependency files changed, all tests should be returned (not None)."""
+    """When only dependency files changed, the strategy pipeline still runs.
+
+    Even though impacted_modules is empty (no .py files changed), the orchestrator
+    always delegates to strategies — DependencyFileImpactStrategy handles this case.
+    """
     mock_find_impacted_files.return_value = ["uv.lock"]
     mock_resolve_files_to_modules.return_value = []  # No .py files -> no modules
 
-    # Create a mock strategy that returns all test modules when dep files detected
     mock_strategy = MagicMock()
     mock_strategy.find_impacted_tests.return_value = ["test_module1", "test_module2"]
     mock_resolve_modules_to_files.return_value = ["test_file1.py", "test_file2.py"]
@@ -254,7 +257,6 @@ def test_get_impacted_tests_dep_file_only_change(
         watch_dep_files=True,
     )
 
-    # Should NOT return None — dep file change keeps the pipeline running
     assert result == ["test_file1.py", "test_file2.py"]
     mock_strategy.find_impacted_tests.assert_called_once()
 
@@ -265,7 +267,10 @@ def test_get_impacted_tests_dep_file_with_watch_disabled(
     mock_resolve_files_to_modules,
     mock_find_impacted_files,
 ):
-    """When watch_dep_files=False, dep-only changes should return None."""
+    """When watch_dep_files=False, DependencyFileImpactStrategy is excluded from the default
+    composite. With no .py modules changed, the remaining strategies (AST, Pytest) find
+    nothing, so the result is None.
+    """
     mock_find_impacted_files.return_value = ["uv.lock"]
     mock_resolve_files_to_modules.return_value = []
 
