@@ -1,4 +1,3 @@
-import importlib.util
 import os
 from functools import partial
 
@@ -221,18 +220,10 @@ def _validate_module(module_name: str) -> None:
 
 
 def _validate_tests_dir(tests_dir: str) -> None:
-    """Validate that --impacted-tests-dir refers to an existing, importable directory."""
+    """Validate that --impacted-tests-dir refers to an existing directory."""
     if not os.path.isdir(tests_dir):
         raise UsageError(
             f"Tests directory '{tests_dir}' does not exist. Please check the path passed to --impacted-tests-dir."
-        )
-
-    dir_name = os.path.basename(os.path.normpath(tests_dir))
-    if importlib.util.find_spec(dir_name) is None:
-        raise UsageError(
-            f"Tests directory '{tests_dir}' exists but is not importable as a Python package "
-            f"(could not find module '{dir_name}'). "
-            f"Ensure it contains an __init__.py or is otherwise importable."
         )
 
 

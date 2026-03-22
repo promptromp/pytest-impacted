@@ -107,19 +107,20 @@ def test_iter_namespace_with_nested_package():
 
 def test_path_to_package_name():
     """Test the path_to_package_name function."""
-    # Use a path whose name is an importable module (e.g., 'os')
-    import os
+    # Simple directory name
+    assert path_to_package_name("tests") == "tests"
+    assert path_to_package_name(Path("tests")) == "tests"
 
-    path = Path(os.__file__)
-    # Remove extension for importable name
-    module_name = path.stem
-    assert path_to_package_name(path.with_name(module_name)) == "os"
-    # Test with string path
-    assert path_to_package_name(str(path.with_name(module_name))) == "os"
-    # Test with a non-importable name (should raise ModuleNotFoundError)
-    fake_path = Path("/tmp/notamodule")
-    with pytest.raises(ModuleNotFoundError):
-        path_to_package_name(fake_path)
+    # Nested path
+    assert path_to_package_name("tests/unit") == "tests.unit"
+    assert path_to_package_name(Path("tests/unit")) == "tests.unit"
+
+    # Normalizes ./ prefix
+    assert path_to_package_name("./tests") == "tests"
+    assert path_to_package_name("./tests/unit") == "tests.unit"
+
+    # Normalizes trailing slash
+    assert path_to_package_name("tests/") == "tests"
 
 
 def test_iter_namespace_invalid_input():

@@ -148,6 +148,15 @@ def test_validate_tests_dir_valid():
     _validate_tests_dir("tests")  # Should not raise
 
 
+def test_validate_tests_dir_without_init(tmp_path, monkeypatch):
+    """Test that a tests directory without __init__.py passes validation."""
+    test_dir = tmp_path / "my_tests"
+    test_dir.mkdir()
+    (test_dir / "test_example.py").write_text("def test_it(): pass\n")
+    monkeypatch.chdir(tmp_path)
+    _validate_tests_dir("my_tests")  # Should not raise
+
+
 def test_validate_base_branch_nonexistent():
     """Test that a non-existent base branch gives a helpful error with available refs."""
     with pytest.raises(pytest.UsageError, match="Base branch 'nonexistent_branch_xyz' does not exist"):

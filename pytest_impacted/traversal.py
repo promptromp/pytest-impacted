@@ -1,6 +1,5 @@
 """Python package and module traversal utilities."""
 
-import importlib
 import logging
 import os
 import pkgutil
@@ -15,11 +14,13 @@ def package_name_to_path(package_name: str) -> str:
 
 
 def path_to_package_name(path: Path | str) -> str:
-    """Convert a path to a package name."""
-    if not isinstance(path, Path):
-        path = Path(path)
+    """Convert a directory path to a dotted package name.
 
-    return importlib.import_module(path.name).__name__
+    Uses pure path manipulation — no imports are performed.
+    E.g. "tests" -> "tests", "tests/unit" -> "tests.unit".
+    """
+    normalized = os.path.normpath(str(path))
+    return ".".join(Path(normalized).parts)
 
 
 def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInfo]:

@@ -1,8 +1,6 @@
 """Matchers used for pattern matching and unit-tests."""
 
-import logging
 import os
-import sys
 from pathlib import Path
 
 from pytest_impacted.display import notify, warn
@@ -53,12 +51,6 @@ def get_impacted_tests(
 
     tests_package = None
     if tests_dir:
-        # Add the parent directory of the tests_dir to sys.path
-        # so that we can import the tests_dir as a module.
-        tests_dir_path = Path(tests_dir).resolve().parent
-        if str(tests_dir_path) not in sys.path:
-            logging.debug("Adding tests_dir parent directory to sys.path: %s", tests_dir_path)
-            sys.path.insert(0, str(tests_dir_path))
         tests_package = path_to_package_name(tests_dir)
 
     impacted_files = find_impacted_files_in_repo(
