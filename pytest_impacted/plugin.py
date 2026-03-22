@@ -167,16 +167,11 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(pytest.mark.skip)
         return
 
-    impacted_items = []
     for item in items:
         item_path = item.location[0]
         if matches_impacted_tests(item_path, impacted_tests=impacted_tests):
-            # notify(f"matched impacted item_path:  {item.location}", session)
             item.add_marker(pytest.mark.impacted)
-            impacted_items.append(item)
         else:
-            # Mark the item as skipped if it is not impacted. This will be used to
-            # let pytest know to skip the test.
             item.add_marker(pytest.mark.skip)
 
 
@@ -277,7 +272,7 @@ def _validate_base_branch(base_branch: str, root_dir: str) -> None:
             suffix = f" Available refs: {branch_list}"
             if len(repo.references) > 10:
                 suffix += ", ..."
-        except Exception:
+        except (AttributeError, TypeError):
             suffix = ""
 
         raise UsageError(
