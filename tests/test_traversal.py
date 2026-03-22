@@ -1,11 +1,13 @@
 """Tests for the traversal module."""
 
 import importlib
+import os
 import pkgutil
 from pathlib import Path
 
 import pytest
 
+from pytest_impacted import traversal
 from pytest_impacted.traversal import (
     _find_non_package_prefix,
     discover_submodules,
@@ -132,8 +134,6 @@ def test_iter_namespace_invalid_input():
 
 def test_discover_submodules_skips_missing_files():
     """Test discover_submodules skips modules whose files don't exist on disk."""
-    from pytest_impacted import traversal
-
     traversal.discover_submodules.cache_clear()
     with pytest.MonkeyPatch.context() as m:
 
@@ -173,8 +173,6 @@ def test_resolve_modules_to_files_edge_cases():
 
 def test_discover_submodules_empty(monkeypatch):
     """Test discover_submodules for a package with no submodules."""
-    from pytest_impacted import traversal
-
     traversal.discover_submodules.cache_clear()
     monkeypatch.setattr("pytest_impacted.traversal.iter_namespace", lambda pkg, **kwargs: [])
     result = discover_submodules("some_package")
@@ -233,8 +231,6 @@ def test_resolve_files_to_modules_init_file():
 
 def test_resolve_files_to_modules_relative_git_path():
     """Test resolve_files_to_modules with relative git paths (e.g. 'pytest_impacted/foo.py')."""
-    import os
-
     with pytest.MonkeyPatch.context() as m:
 
         def mock_discover_submodules(package, **kwargs):

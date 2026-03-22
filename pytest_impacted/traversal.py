@@ -104,10 +104,7 @@ def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str
         if name not in results:
             # Construct file path: prepend the non-package prefix to module parts
             module_parts = name.split(".")
-            if non_pkg_prefix:
-                file_parts = list(Path(non_pkg_prefix).parts) + module_parts
-            else:
-                file_parts = module_parts
+            file_parts = list(Path(non_pkg_prefix).parts) + module_parts if non_pkg_prefix else module_parts
 
             if module_info.ispkg:
                 file_path = os.path.join(*file_parts, "__init__.py")

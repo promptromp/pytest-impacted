@@ -240,7 +240,7 @@ def _validate_base_branch(base_branch: str, root_dir: str) -> None:
     if not GIT_AVAILABLE:
         return
 
-    from git import GitCommandError, InvalidGitRepositoryError
+    from git import GitCommandError, InvalidGitRepositoryError  # noqa: PLC0415
 
     try:
         repo = find_repo(root_dir)

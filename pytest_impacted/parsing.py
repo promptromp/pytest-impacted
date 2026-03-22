@@ -92,10 +92,7 @@ def _resolve_relative_import(module: _ModuleProxy, node: ImportFrom) -> str:
         package_parts = package.split(".")
         levels_to_go_up = node.level - 1
 
-        if len(package_parts) >= levels_to_go_up:
-            base_package_parts = package_parts[:-levels_to_go_up]
-        else:
-            base_package_parts = []
+        base_package_parts = package_parts[:-levels_to_go_up] if len(package_parts) >= levels_to_go_up else []
 
         base_package = ".".join(base_package_parts) if base_package_parts else ""
 
@@ -125,12 +122,7 @@ def _extract_imports_from_node(node: Import | ImportFrom, module: _ModuleProxy) 
             imports.add(name[0])
 
     elif isinstance(node, ImportFrom):
-        # Handle relative imports
-        if node.level and node.level > 0:
-            resolved_modname = _resolve_relative_import(module, node)
-        else:
-            # Absolute import
-            resolved_modname = node.modname
+        resolved_modname = _resolve_relative_import(module, node) if node.level and node.level > 0 else node.modname
 
         # Check if imported names are modules or just symbols
         for name, *_ in node.names:

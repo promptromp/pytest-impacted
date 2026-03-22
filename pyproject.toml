@@ -84,6 +84,8 @@ select = [
     "G",  # flake8-logging-format
     "I",  # isort
     "PERF",  # perflint
+    "PLC",  # Pylint (Convention)
+    "SIM",  # flake8-simplify
     "T",  # flake8-debugger
 ]
 

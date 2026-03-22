@@ -20,11 +20,7 @@ from pytest_impacted.traversal import (
 
 def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
     """Check if the item path matches any of the impacted tests."""
-    for test in impacted_tests:
-        if test == item_path or test.endswith(os.sep + item_path):
-            return True
-
-    return False
+    return any(test == item_path or test.endswith(os.sep + item_path) for test in impacted_tests)
 
 
 def get_impacted_tests(

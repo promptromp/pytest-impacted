@@ -383,9 +383,11 @@ def test_git_available_warning_not_called(mock_warn):
 
 def test_git_unavailable_warning():
     """Test that warning is triggered when GitPython is not available."""
-    with patch("pytest_impacted.git.GIT_AVAILABLE", False):
-        with pytest.warns(UserWarning, match="Git functionality is disabled"):
-            git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+    with (
+        patch("pytest_impacted.git.GIT_AVAILABLE", False),
+        pytest.warns(UserWarning, match="Git functionality is disabled"),
+    ):
+        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
 
 
 def test_git_status_from_git_diff_name_status_edge_cases():

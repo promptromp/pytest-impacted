@@ -92,15 +92,14 @@ class Change:
         paths separated by a tab.
 
         """
-        if status is not None and status.startswith(("R", "C")):
+        if status is not None and status.startswith(("R", "C")) and name is not None and "\t" in name:
             # For rename/copy operations, split the name into source and destination
-            if name is not None and "\t" in name:
-                a_path, b_path = name.split("\t", 1)
-                return cls(
-                    a_path=a_path,
-                    b_path=b_path,
-                    status=GitStatus.from_git_diff_name_status(status),
-                )
+            a_path, b_path = name.split("\t", 1)
+            return cls(
+                a_path=a_path,
+                b_path=b_path,
+                status=GitStatus.from_git_diff_name_status(status),
+            )
 
         return cls(
             a_path=name,
