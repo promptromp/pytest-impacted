@@ -315,6 +315,14 @@ def test_impacted_files_for_unstaged_mode_clean_repo(mock_repo):
 
 
 @patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_unstaged_mode_only_untracked_files(mock_repo):
+    """Untracked files should be detected even when no tracked files are modified."""
+    repo = DummyRepo(dirty=False, untracked_files=["tests/test_new.py"])
+    result = git.impacted_files_for_unstaged_mode(repo)
+    assert result == ["tests/test_new.py"]
+
+
+@patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_unstaged_mode_with_deleted_files(mock_repo):
     """Test impacted_files_for_unstaged_mode with deleted files."""
     diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
