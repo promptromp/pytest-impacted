@@ -10,8 +10,27 @@ on:
   pull_request:
 
 jobs:
-  build:
+  lint:
+    runs-on: ubuntu-latest
 
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install uv and set the python version
+      uses: astral-sh/setup-uv@v5
+      with:
+        python-version: "3.13"
+        version: "latest"
+        enable-cache: true
+    - name: Install the project
+      run: uv sync --all-extras --dev
+    - name: Run ruff lint and formatting checks
+      run: |
+        ruff check
+        ruff format --check
+    - name: Run mypy
+      run: uv run mypy pytest_impacted
+
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,23 +46,9 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"
-    - name: Install ruff
-      uses: astral-sh/ruff-action@v3
-      with:
-        version: "latest"
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
+        enable-cache: true
     - name: Install the project
       run: uv sync --all-extras --dev
-    - name: Run ruff lint and formatting checks
-      run: |
-        ruff check
-        ruff format
-    - name: Run mypy
-      run: |
-        uv run mypy pytest_impacted
     - name: Run impacted tests
       run: >
         uv run pytest
