@@ -58,6 +58,9 @@ dev = [
     "ruff>=0.11.9",
 ]
 
+[tool.setuptools.packages.find]
+exclude = ["rust", "rust.*", "benchmarks", "benchmarks.*"]
+
 [tool.setuptools_scm]
 # can be empty if no extra settings are needed, presence enables setuptools-scm
 

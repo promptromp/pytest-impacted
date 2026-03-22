@@ -77,6 +77,7 @@ def test_build_dep_tree():
     }
 
     with (
+        patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
     ):
@@ -104,6 +105,7 @@ def test_pruned_singleton_init_triggers_run_all():
     }
 
     with (
+        patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
@@ -133,6 +135,7 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
     }
 
     with (
+        patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):

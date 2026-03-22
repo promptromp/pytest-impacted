@@ -5,6 +5,7 @@ import types
 
 import networkx as nx
 
+from pytest_impacted._rust import RUST_AVAILABLE
 from pytest_impacted.parsing import is_test_module, parse_file_imports
 from pytest_impacted.traversal import discover_submodules
 
@@ -74,17 +75,30 @@ def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.M
     logging.debug("Building dependency tree for %d submodules", len(submodules))
 
     digraph = nx.DiGraph()
-    for name, file_path in submodules.items():
-        logging.debug("Processing submodule: %s", name)
-        digraph.add_node(name)
-        is_pkg = file_path.endswith("__init__.py")
-        module_imports = parse_file_imports(file_path, name, is_package=is_pkg)
-        for imp in module_imports:
-            if imp in submodules:
-                # Nb. We only care about imports that are also submodules
-                # of the package we are analyzing.
-                digraph.add_node(imp)
-                digraph.add_edge(name, imp)
+
+    if RUST_AVAILABLE:
+        # Parallel batch parsing via Rust extension
+        from pytest_impacted._rust import _rust_parse_all_imports  # noqa: PLC0415
+
+        modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
+        all_imports = _rust_parse_all_imports(modules_info)
+        for name in submodules:
+            digraph.add_node(name)
+            for imp in all_imports.get(name, []):
+                if imp in submodules:
+                    digraph.add_node(imp)
+                    digraph.add_edge(name, imp)
+    else:
+        # Sequential parsing via astroid (pure-Python fallback)
+        for name, file_path in submodules.items():
+            logging.debug("Processing submodule: %s", name)
+            digraph.add_node(name)
+            is_pkg = file_path.endswith("__init__.py")
+            module_imports = parse_file_imports(file_path, name, is_package=is_pkg)
+            for imp in module_imports:
+                if imp in submodules:
+                    digraph.add_node(imp)
+                    digraph.add_edge(name, imp)
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     inverted_digraph = inverted(digraph)
