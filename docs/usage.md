@@ -49,6 +49,45 @@ pytest --impacted \
 
 The tests directory does **not** need to contain `__init__.py` — the plugin uses filesystem-based discovery that matches pytest's own behavior.
 
+## Monorepo / src-Layout Support
+
+The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.
+
+### src-Layout Projects
+
+For projects using the [src-layout](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/) convention (e.g. `src/my_package/`), point `--impacted-module` at the full path including the `src/` prefix:
+
+```bash
+# From the project directory (e.g. monorepo/backend/)
+pytest --impacted \
+       --impacted-module=src/my_package \
+       --impacted-tests-dir=tests
+```
+
+The plugin automatically detects that `src/` is not a Python package (no `__init__.py`) and uses the correct importable module name (`my_package`) for dependency analysis. This means AST-parsed imports like `from my_package import ...` will correctly match discovered modules.
+
+!!! tip
+    If you accidentally pass just `--impacted-module=my_package` in a src-layout project, the plugin will detect that `src/my_package` exists and suggest the correct flag.
+
+### Monorepo Layout
+
+In a monorepo where the Python project is nested under a subdirectory:
+
+```
+monorepo/              ← git root
+  backend/             ← working directory (pyproject.toml here)
+    src/
+      my_package/
+    tests/
+  frontend/
+```
+
+Run pytest from the `backend/` directory as usual. The plugin will:
+
+1. Find the git repository by searching parent directories
+2. Convert git-relative file paths (e.g. `backend/src/my_package/module.py`) to working-directory-relative paths (e.g. `src/my_package/module.py`)
+3. Only consider changes within the working directory — changes in sibling directories (e.g. `frontend/`) are ignored
+
 ## Impact Analysis Strategies
 
 The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines two built-in strategies.
@@ -137,9 +176,11 @@ The plugin validates configuration early and provides helpful error messages:
 | Scenario | What happens |
 |----------|-------------|
 | `--impacted-module=my-package` (hyphens) | Suggests `my_package` if it exists |
+| `--impacted-module=my_package` (src-layout) | Suggests `src/my_package` if found under `src/` |
 | `--impacted-module=nonexistent` | Clear error with instructions to check the package name and working directory |
 | `--impacted-tests-dir=bad_path` | Error indicating the directory doesn't exist |
 | `--impacted-base-branch=no_such_branch` | Error listing available git refs |
+| No git repository found | Clear error indicating no `.git` found at or above the working directory |
 
 ## All Options
 

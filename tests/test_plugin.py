@@ -166,3 +166,26 @@ def test_validate_base_branch_nonexistent():
 def test_validate_base_branch_valid():
     """Test that a valid base branch passes validation."""
     _validate_base_branch("HEAD", ".")  # Should not raise — HEAD exists in any git checkout
+
+
+def test_validate_base_branch_from_subdirectory():
+    """_validate_base_branch works from a subdirectory of the git root (monorepo)."""
+    # tests/ is a subdirectory of the project; .git is at the project root
+    _validate_base_branch("HEAD", "tests")  # Should not raise
+
+
+def test_validate_base_branch_no_git_repo(tmp_path):
+    """_validate_base_branch gives a helpful error when no git repo is found."""
+    with pytest.raises(pytest.UsageError, match="No git repository found"):
+        _validate_base_branch("main", str(tmp_path))
+
+
+def test_validate_module_src_layout_suggestion(tmp_path, monkeypatch):
+    """When a module exists under src/, suggest the src-layout path."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mypackage").mkdir()
+    (tmp_path / "src" / "mypackage" / "__init__.py").touch()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(pytest.UsageError, match="--impacted-module=src/mypackage"):
+        _validate_module("mypackage")

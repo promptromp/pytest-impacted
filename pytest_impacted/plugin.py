@@ -5,7 +5,7 @@ import pytest
 from pytest import Config, Parser, UsageError
 
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
-from pytest_impacted.git import GIT_AVAILABLE, GitMode
+from pytest_impacted.git import GIT_AVAILABLE, GitMode, find_repo
 
 
 def pytest_addoption(parser: Parser):
@@ -213,6 +213,14 @@ def _validate_module(module_name: str) -> None:
                 f"Did you mean: --impacted-module={suggestion}"
             )
 
+    # Check for src-layout: module might be under src/
+    src_dir = os.path.join("src", module_dir)
+    if os.path.isdir(src_dir):
+        raise UsageError(
+            f"Module '{module_name}' not found in the current directory, but found at '{src_dir}'. "
+            f"For src-layout projects, use: --impacted-module=src/{module_dir}"
+        )
+
     raise UsageError(
         f"Module '{module_name}' not found (no '{module_dir}/' directory in the current working directory). "
         f"Make sure --impacted-module is a valid Python package name and you are running from the project root."
@@ -232,11 +240,15 @@ def _validate_base_branch(base_branch: str, root_dir: str) -> None:
     if not GIT_AVAILABLE:
         return
 
-    from git import GitCommandError, Repo
+    from git import GitCommandError, InvalidGitRepositoryError
 
     try:
-        repo = Repo(path=root_dir)
+        repo = find_repo(root_dir)
         repo.git.rev_parse("--verify", base_branch)
+    except InvalidGitRepositoryError as err:
+        raise UsageError(
+            f"No git repository found at or above '{root_dir}'. Make sure you are running from within a git repository."
+        ) from err
     except GitCommandError as err:
         # List available local branches for the suggestion
         try:

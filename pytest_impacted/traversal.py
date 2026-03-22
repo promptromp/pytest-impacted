@@ -23,19 +23,45 @@ def path_to_package_name(path: Path | str) -> str:
     return ".".join(Path(normalized).parts)
 
 
-def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInfo]:
-    """iterate over all submodules of a namespace package.
+def _find_non_package_prefix(fs_path: str) -> tuple[str, str]:
+    """Split a filesystem path into non-package prefix and importable package root.
+
+    Directories that do not contain ``__init__.py`` are treated as non-package
+    path prefixes (e.g. the ``src/`` in a src-layout project).
+
+    Returns:
+        A ``(prefix, importable_root)`` tuple.
+
+        * ``'src/predicated'`` → ``('src', 'predicated')``  when ``src/`` has no ``__init__.py``
+        * ``'mypackage'``      → ``('', 'mypackage')``      when ``mypackage/`` has ``__init__.py``
+        * ``'src/lib/pkg'``    → ``('src/lib', 'pkg')``     when neither ``src/`` nor ``src/lib/`` has ``__init__.py``
+    """
+    parts = Path(fs_path).parts
+    for i in range(len(parts)):
+        candidate = Path(*parts[: i + 1])
+        if (candidate / "__init__.py").exists():
+            if i == 0:
+                return "", fs_path
+            prefix = str(Path(*parts[:i]))
+            rest = str(Path(*parts[i:]))
+            return prefix, rest
+    # No __init__.py found at any level — treat whole path as importable (namespace package fallback)
+    return "", fs_path
+
+
+def iter_namespace(ns_package: str | types.ModuleType, *, scan_path: str | None = None) -> list[pkgutil.ModuleInfo]:
+    """Iterate over all submodules of a namespace package.
 
     :param ns_package: namespace package (name or actual module)
-    :type ns_package: str | module
-    :rtype: iterable[types.ModuleType]
-
+    :param scan_path: optional filesystem path to scan instead of deriving from *ns_package*.
+        When provided, the filesystem search uses *scan_path* while module name
+        prefixes are still derived from *ns_package*.
     """
     logging.debug("Iterating over namespace for package: %s", ns_package)
 
     match ns_package:
         case str():
-            path = [package_name_to_path(ns_package)]
+            path = [scan_path or package_name_to_path(ns_package)]
             prefix = f"{ns_package}."
         case types.ModuleType():
             path = list(ns_package.__path__)
@@ -53,19 +79,40 @@ def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInf
 def _discover_via_pkgutil(package: str) -> dict[str, str]:
     """Discover submodules using pkgutil (requires __init__.py in directories).
 
-    This is the correct approach for proper Python packages where the import
-    system's package rules apply.
+    Handles src-layout projects by detecting non-package prefix directories
+    (e.g. ``src/``) and stripping them from module names while keeping them
+    in filesystem paths.
+    """
+    fs_path = package_name_to_path(package)
+    non_pkg_prefix, importable_path = _find_non_package_prefix(fs_path)
+    importable_name = path_to_package_name(importable_path)
+    return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix)
+
+
+def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str) -> dict[str, str]:
+    """Recursive implementation of pkgutil-based submodule discovery.
+
+    Args:
+        module_name: Dotted importable module name used as prefix (e.g. ``"predicated"``).
+        scan_path: Filesystem path to scan (e.g. ``"src/predicated"``).
+        non_pkg_prefix: Non-package path prefix to prepend when constructing file paths
+            (e.g. ``"src"``).  Empty string when there is no prefix.
     """
     results: dict[str, str] = {}
-    for module_info in iter_namespace(package):
+    for module_info in iter_namespace(module_name, scan_path=scan_path):
         name = module_info.name
         if name not in results:
-            # Construct file path from module name
-            parts = name.split(".")
-            if module_info.ispkg:
-                file_path = os.path.join(*parts, "__init__.py")
+            # Construct file path: prepend the non-package prefix to module parts
+            module_parts = name.split(".")
+            if non_pkg_prefix:
+                file_parts = list(Path(non_pkg_prefix).parts) + module_parts
             else:
-                file_path = os.path.join(*parts) + ".py"
+                file_parts = module_parts
+
+            if module_info.ispkg:
+                file_path = os.path.join(*file_parts, "__init__.py")
+            else:
+                file_path = os.path.join(*file_parts) + ".py"
 
             abs_path = os.path.abspath(file_path)
             if os.path.exists(abs_path):
@@ -74,7 +121,8 @@ def _discover_via_pkgutil(package: str) -> dict[str, str]:
                 logging.warning("Module %s not found at expected path %s", name, abs_path)
 
             if module_info.ispkg:
-                results.update(_discover_via_pkgutil(name))
+                sub_scan_path = os.path.join(scan_path, module_parts[-1])
+                results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix))
 
     return results
 
@@ -113,7 +161,9 @@ def discover_submodules(package: str, require_init: bool = True) -> dict[str, st
     environment when modules are eagerly imported.
 
     Args:
-        package: Dotted package name to scan (e.g. "mypackage" or "tests").
+        package: Dotted package name (or path-style name like ``"src.predicated"``)
+            to scan.  For src-layout projects, non-package prefix directories
+            are automatically detected and stripped from module names.
         require_init: If True, use pkgutil-based discovery which requires
             __init__.py in directories (correct for importable Python packages).
             If False, use filesystem walking which finds all .py files

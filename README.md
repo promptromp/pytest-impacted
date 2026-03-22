@@ -146,6 +146,21 @@ pytest --impacted \
        --impacted-tests-dir=tests
 ```
 
+### Monorepo / src-Layout Support
+
+The plugin works in monorepos where the Python project is nested in a subdirectory (the `.git` directory doesn't need to be in the working directory — parent directories are searched automatically).
+
+For **src-layout** projects (e.g. `src/my_package/`), point `--impacted-module` at the full path including the `src/` prefix:
+
+```bash
+# From the project directory (e.g. monorepo/backend/)
+pytest --impacted \
+       --impacted-module=src/my_package \
+       --impacted-tests-dir=tests
+```
+
+The plugin automatically detects that `src/` is not a Python package and uses the correct importable module name (`my_package`) for dependency analysis.
+
 ### CI Integration
 
 For CI pipelines where git access and test execution happen in separate stages, use the `impacted-tests` CLI to generate the test file list:

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from pytest_impacted.traversal import (
+    _find_non_package_prefix,
     discover_submodules,
     iter_namespace,
     package_name_to_path,
@@ -136,7 +137,7 @@ def test_discover_submodules_skips_missing_files():
     traversal.discover_submodules.cache_clear()
     with pytest.MonkeyPatch.context() as m:
 
-        def mock_iter_namespace(package):
+        def mock_iter_namespace(package, *, scan_path=None):
             return [pkgutil.ModuleInfo(None, "nonexistent.module", False)]
 
         m.setattr("pytest_impacted.traversal.iter_namespace", mock_iter_namespace)
@@ -175,7 +176,7 @@ def test_discover_submodules_empty(monkeypatch):
     from pytest_impacted import traversal
 
     traversal.discover_submodules.cache_clear()
-    monkeypatch.setattr("pytest_impacted.traversal.iter_namespace", lambda pkg: [])
+    monkeypatch.setattr("pytest_impacted.traversal.iter_namespace", lambda pkg, **kwargs: [])
     result = discover_submodules("some_package")
     assert result == {}
 
@@ -300,3 +301,134 @@ def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
 
     modules = discover_submodules("nonexistent_pkg", require_init=False)
     assert modules == {}
+
+
+# --- Tests for _find_non_package_prefix (src-layout support) ---
+
+
+def test_find_non_package_prefix_flat_layout(tmp_path, monkeypatch):
+    """Flat layout: mypackage/ has __init__.py → no prefix."""
+    (tmp_path / "mypackage").mkdir()
+    (tmp_path / "mypackage" / "__init__.py").touch()
+    monkeypatch.chdir(tmp_path)
+
+    prefix, importable = _find_non_package_prefix("mypackage")
+    assert prefix == ""
+    assert importable == "mypackage"
+
+
+def test_find_non_package_prefix_src_layout(tmp_path, monkeypatch):
+    """src-layout: src/ has no __init__.py, src/predicated/ has __init__.py."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "predicated").mkdir()
+    (tmp_path / "src" / "predicated" / "__init__.py").touch()
+    monkeypatch.chdir(tmp_path)
+
+    prefix, importable = _find_non_package_prefix("src/predicated")
+    assert prefix == "src"
+    assert importable == "predicated"
+
+
+def test_find_non_package_prefix_deeply_nested(tmp_path, monkeypatch):
+    """Deeply nested non-package prefix: src/lib/mypackage."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib").mkdir()
+    (tmp_path / "src" / "lib" / "mypackage").mkdir()
+    (tmp_path / "src" / "lib" / "mypackage" / "__init__.py").touch()
+    monkeypatch.chdir(tmp_path)
+
+    prefix, importable = _find_non_package_prefix("src/lib/mypackage")
+    assert prefix == "src/lib"
+    assert importable == "mypackage"
+
+
+def test_find_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
+    """No __init__.py found anywhere → fallback: no prefix, whole path is importable."""
+    (tmp_path / "ns_pkg").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    prefix, importable = _find_non_package_prefix("ns_pkg")
+    assert prefix == ""
+    assert importable == "ns_pkg"
+
+
+def test_discover_submodules_src_layout(tmp_path, monkeypatch):
+    """discover_submodules with src-layout produces importable module names, not src-prefixed."""
+    import importlib
+
+    # Create src/srcpkg_a/ layout
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "srcpkg_a").mkdir()
+    (tmp_path / "src" / "srcpkg_a" / "__init__.py").write_text("# init\n")
+    (tmp_path / "src" / "srcpkg_a" / "core.py").write_text("x = 1\n")
+    (tmp_path / "src" / "srcpkg_a" / "utils.py").write_text("y = 2\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+    importlib.invalidate_caches()
+
+    modules = discover_submodules("src.srcpkg_a", require_init=True)
+
+    # Module names should use the importable prefix, not src-prefixed
+    assert "srcpkg_a.core" in modules
+    assert "srcpkg_a.utils" in modules
+    # Should NOT have src-prefixed names
+    assert "src.srcpkg_a" not in modules
+    assert "src.srcpkg_a.core" not in modules
+
+
+def test_discover_submodules_src_layout_with_subpackage(tmp_path, monkeypatch):
+    """Recursive sub-package discovery works correctly in src-layout."""
+    import importlib
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "srcpkg_b").mkdir()
+    (tmp_path / "src" / "srcpkg_b" / "__init__.py").write_text("")
+    (tmp_path / "src" / "srcpkg_b" / "sub").mkdir()
+    (tmp_path / "src" / "srcpkg_b" / "sub" / "__init__.py").write_text("")
+    (tmp_path / "src" / "srcpkg_b" / "sub" / "module.py").write_text("z = 3\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+    importlib.invalidate_caches()
+
+    modules = discover_submodules("src.srcpkg_b", require_init=True)
+
+    assert "srcpkg_b.sub" in modules
+    assert "srcpkg_b.sub.module" in modules
+    assert "src.srcpkg_b.sub" not in modules
+
+
+def test_discover_submodules_flat_layout_backward_compat(tmp_path, monkeypatch):
+    """Flat layout (no src/) continues to work as before."""
+    import importlib
+
+    (tmp_path / "flatpkg_a").mkdir()
+    (tmp_path / "flatpkg_a" / "__init__.py").write_text("")
+    (tmp_path / "flatpkg_a" / "module.py").write_text("x = 1\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+    importlib.invalidate_caches()
+
+    modules = discover_submodules("flatpkg_a", require_init=True)
+
+    # pkgutil.iter_modules yields children, not the package itself
+    assert "flatpkg_a.module" in modules
+
+
+def test_iter_namespace_with_scan_path(tmp_path, monkeypatch):
+    """iter_namespace uses scan_path for filesystem scanning while keeping module prefix."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "pkg").mkdir()
+    (tmp_path / "src" / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "src" / "pkg" / "mod.py").write_text("")
+
+    monkeypatch.chdir(tmp_path)
+
+    # scan_path points to the filesystem location, but module names use "pkg" prefix
+    modules = iter_namespace("pkg", scan_path="src/pkg")
+    names = [m.name for m in modules]
+    assert "pkg.mod" in names
+    # Should NOT have "src.pkg.mod"
+    assert all(not n.startswith("src.") for n in names)
