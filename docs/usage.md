@@ -90,7 +90,7 @@ Run pytest from the `backend/` directory as usual. The plugin will:
 
 ## Impact Analysis Strategies
 
-The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines two built-in strategies.
+The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines three built-in strategies.
 
 ### ASTImpactStrategy
 
@@ -223,13 +223,16 @@ graph LR
     B --> C[Module resolution]
     C --> D[AST import parsing]
     D --> E[Dependency graph]
-    E --> F[Impacted tests]
+    E --> G[Impacted tests]
+    B --> F[Dep file detection]
+    F -->|uv.lock, requirements.txt, etc.| G
 ```
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Test filtering** skips tests whose modules are not in the impact set
+5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
+6. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run).

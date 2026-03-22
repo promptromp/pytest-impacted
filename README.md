@@ -83,19 +83,21 @@ That's it. Unaffected tests are automatically skipped.
 
 ```
 Git diff → Changed files → Module resolution → AST import parsing → Dependency graph → Impacted tests
+                         ↘ Dependency file detection → All tests (if dep files changed)
 ```
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Test filtering** skips tests whose modules are not in the impact set
+5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
+6. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
 
 ### Strategy-Based Architecture
 
-Impact analysis is pluggable via a strategy pattern. The default pipeline combines two strategies:
+Impact analysis is pluggable via a strategy pattern. The default pipeline combines three strategies:
 
 | Strategy | What it does |
 |----------|-------------|
@@ -186,6 +188,7 @@ impacted_module = "my_package"
 impacted_git_mode = "branch"
 impacted_base_branch = "main"
 impacted_tests_dir = "tests"
+# no_impacted_dep_files = true  # uncomment to disable dep file detection
 ```
 
 CLI flags override these defaults.

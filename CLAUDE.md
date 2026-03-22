@@ -45,7 +45,7 @@ pre-commit run --all-files
 
 ## Core Architecture
 
-The pipeline: Git identifies changed files → Files converted to Python modules → AST parser builds dependency graph → Graph analysis finds impacted test modules → Tests are filtered.
+The pipeline: Git identifies changed files → Files converted to Python modules → AST parser builds dependency graph → Graph analysis finds impacted test modules → Tests are filtered. In parallel, dependency file changes (e.g. `uv.lock`, `requirements.txt`) trigger all tests via `DependencyFileImpactStrategy`.
 
 ### Module Responsibilities
 
