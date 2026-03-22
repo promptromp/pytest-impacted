@@ -244,3 +244,35 @@ def test_resolve_files_to_modules_relative_git_path():
         # Relative path from git that doesn't match the absolute package path
         modules = resolve_files_to_modules(["mypkg/foo.py"], "mypkg")
         assert modules == ["mypkg.foo"]
+
+
+def test_discover_submodules_without_init_in_subdirectory(tmp_path, monkeypatch):
+    """Modules in subdirectories without __init__.py should still be discovered."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").touch()
+    (tmp_path / "pkg" / "sub").mkdir()
+    (tmp_path / "pkg" / "sub" / "test_thing.py").write_text("def test_it(): pass\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+
+    modules = discover_submodules("pkg")
+
+    assert "pkg.sub.test_thing" in modules
+
+
+def test_discover_submodules_without_init_in_ancestor_directory(tmp_path, monkeypatch):
+    """Modules should be discovered even when an ancestor directory lacks __init__.py."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "__init__.py").touch()
+    (tmp_path / "tests" / "app").mkdir()
+    (tmp_path / "tests" / "app" / "unit").mkdir()
+    (tmp_path / "tests" / "app" / "unit" / "__init__.py").touch()
+    (tmp_path / "tests" / "app" / "unit" / "test_core.py").write_text("def test_core(): pass\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+
+    modules = discover_submodules("tests")
+
+    assert "tests.app.unit.test_core" in modules

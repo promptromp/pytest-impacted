@@ -53,33 +53,27 @@ def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInf
 def discover_submodules(package: str) -> dict[str, str]:
     """Discover all submodules by filesystem scanning, without importing them.
 
-    Uses pkgutil.iter_modules for directory scanning and constructs file paths
-    from module names. This avoids executing module-level code (e.g. gevent
-    monkey patching, application factory calls, global connections) that can
-    corrupt the test environment when modules are eagerly imported.
+    Walks the directory tree with Path.rglob to find all .py files, regardless
+    of whether intermediate directories contain __init__.py. This matches
+    pytest's own discovery behavior and avoids executing module-level code.
 
     Returns:
         Dict mapping fully-qualified module name -> absolute file path.
     """
+    base_path = Path(package_name_to_path(package))
+    if not base_path.is_dir():
+        return {}
+
     results: dict[str, str] = {}
-    for module_info in iter_namespace(package):
-        name = module_info.name
-        if name not in results:
-            # Construct file path from module name
-            parts = name.split(".")
-            if module_info.ispkg:
-                file_path = os.path.join(*parts, "__init__.py")
-            else:
-                file_path = os.path.join(*parts) + ".py"
+    for py_file in base_path.rglob("*.py"):
+        rel = py_file.relative_to(base_path.parent)
+        if py_file.name == "__init__.py":
+            module_name = ".".join(rel.parent.parts)
+        else:
+            module_name = ".".join(rel.with_suffix("").parts)
 
-            abs_path = os.path.abspath(file_path)
-            if os.path.exists(abs_path):
-                results[name] = abs_path
-            else:
-                logging.warning("Module %s not found at expected path %s", name, abs_path)
-
-            if module_info.ispkg:
-                results.update(discover_submodules(name))
+        abs_path = str(py_file.resolve())
+        results[module_name] = abs_path
 
     return results
 
