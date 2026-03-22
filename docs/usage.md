@@ -47,7 +47,7 @@ pytest --impacted \
        --impacted-tests-dir=tests
 ```
 
-The tests directory must be importable as a Python package (i.e., contain an `__init__.py` or be otherwise discoverable).
+The tests directory does **not** need to contain `__init__.py` — the plugin uses filesystem-based discovery that matches pytest's own behavior.
 
 ## Impact Analysis Strategies
 
@@ -139,7 +139,6 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-module=my-package` (hyphens) | Suggests `my_package` if it exists |
 | `--impacted-module=nonexistent` | Clear error with instructions to check the package name and working directory |
 | `--impacted-tests-dir=bad_path` | Error indicating the directory doesn't exist |
-| `--impacted-tests-dir=exists_but_not_importable` | Error explaining the directory needs to be an importable Python package |
 | `--impacted-base-branch=no_such_branch` | Error listing available git refs |
 
 ## All Options

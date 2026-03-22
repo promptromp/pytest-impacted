@@ -55,7 +55,7 @@ The pipeline: Git identifies changed files → Files converted to Python modules
 - **git.py**: Git integration for finding changed files (unstaged changes and branch diffs)
 - **graph.py**: Dependency graph construction and querying using NetworkX; uses `discover_submodules` for filesystem-based module discovery and `parse_file_imports` for AST parsing
 - **parsing.py**: AST parsing using astroid to extract import relationships. Key functions: `parse_file_imports` (reads source files directly, uses `_ModuleProxy` for relative import resolution without importing), `is_module_path`, `is_test_module`, `normalize_path`
-- **traversal.py**: Module discovery and path/module name conversion. Key functions: `discover_submodules` (LRU-cached filesystem scanning via `pkgutil.iter_modules`), `resolve_files_to_modules`, `resolve_modules_to_files` (requires `ns_module` parameter)
+- **traversal.py**: Module discovery and path/module name conversion. Key functions: `discover_submodules` (LRU-cached, with `require_init` parameter: `True` uses `pkgutil.iter_modules` for source packages, `False` uses `Path.rglob` for test directories that may lack `__init__.py`), `path_to_package_name` (pure path manipulation, no imports), `resolve_files_to_modules`, `resolve_modules_to_files` (requires `ns_module` parameter)
 - **cli.py**: Standalone `impacted-tests` CLI tool (Click-based) for CI integration
 - **display.py**: Console output formatting using pytest's `terminalreporter`
 
