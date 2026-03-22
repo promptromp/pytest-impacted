@@ -1,17 +1,13 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+# Runs only tests impacted by the PR's changes (dogfoods pytest-impacted).
 
-name: CI
+name: CI (impacted)
 
 permissions:
   contents: read
   pull-requests: write
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 jobs:
   lint:
@@ -43,6 +39,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     - name: Install uv and set the python version
       uses: astral-sh/setup-uv@v5
       with:
@@ -51,5 +49,11 @@ jobs:
         enable-cache: true
     - name: Install the project
       run: uv sync --all-extras --dev
-    - name: Run tests
-      run: uv run pytest
+    - name: Run impacted tests
+      run: >
+        uv run pytest
+        --impacted
+        --impacted-module pytest_impacted
+        --impacted-git-mode branch
+        --impacted-base-branch origin/${{ github.base_ref }}
+        --impacted-tests-dir tests
