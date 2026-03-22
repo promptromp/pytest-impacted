@@ -28,7 +28,9 @@ class DummyRepo:
         self.head = MagicMock()
         self.head.reference = current_branch
 
-    def is_dirty(self):
+    def is_dirty(self, **kwargs):
+        if kwargs.get("untracked_files"):
+            return self._dirty or bool(self.untracked_files)
         return self._dirty
 
 
