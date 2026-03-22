@@ -63,12 +63,12 @@ def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.M
     and parses imports via AST — without executing any module-level code.
     """
     pkg_name = package if isinstance(package, str) else package.__name__
-    submodules = discover_submodules(pkg_name)
+    submodules = discover_submodules(pkg_name, require_init=True)
 
     if tests_package:
         tests_name = tests_package if isinstance(tests_package, str) else tests_package.__name__
         logging.debug("Adding modules from tests_package: %s", tests_name)
-        test_submodules = discover_submodules(tests_name)
+        test_submodules = discover_submodules(tests_name, require_init=False)
         submodules = {**submodules, **test_submodules}
 
     logging.debug("Building dependency tree for %d submodules", len(submodules))

@@ -28,7 +28,9 @@ class DummyRepo:
         self.head = MagicMock()
         self.head.reference = current_branch
 
-    def is_dirty(self):
+    def is_dirty(self, **kwargs):
+        if kwargs.get("untracked_files"):
+            return self._dirty or bool(self.untracked_files)
         return self._dirty
 
 
@@ -310,6 +312,14 @@ def test_impacted_files_for_unstaged_mode_clean_repo(mock_repo):
     repo = DummyRepo(dirty=False)
     result = git.impacted_files_for_unstaged_mode(repo)
     assert result is None
+
+
+@patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_unstaged_mode_only_untracked_files(mock_repo):
+    """Untracked files should be detected even when no tracked files are modified."""
+    repo = DummyRepo(dirty=False, untracked_files=["tests/test_new.py"])
+    result = git.impacted_files_for_unstaged_mode(repo)
+    assert result == ["tests/test_new.py"]
 
 
 @patch("pytest_impacted.git.Repo")
