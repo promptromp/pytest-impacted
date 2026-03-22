@@ -61,6 +61,10 @@ dev = [
 [tool.setuptools.packages.find]
 exclude = ["rust", "rust.*", "benchmarks", "benchmarks.*"]
 
+[tool.maturin]
+manifest-path = "rust/Cargo.toml"
+features = ["pyo3/extension-module", "pyo3/abi3-py311"]
+
 [tool.setuptools_scm]
 # can be empty if no extra settings are needed, presence enables setuptools-scm
 

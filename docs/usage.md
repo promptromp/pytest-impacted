@@ -230,9 +230,47 @@ graph LR
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
-3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/)) extracts import relationships from source files
+3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
 5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
 6. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run).
+
+## Performance: Rust Acceleration
+
+For large codebases with many modules, import parsing can become a bottleneck. An optional Rust extension provides **37-65x faster** import parsing using [ruff's Python parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing.
+
+### Installation
+
+Requires a [Rust toolchain](https://rustup.rs/) (1.70+) and [maturin](https://www.maturin.rs/):
+
+```bash
+# Install maturin
+pip install maturin
+
+# Build and install the Rust extension into your environment
+maturin develop --release --manifest-path rust/Cargo.toml
+```
+
+### How It Works
+
+When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential astroid parsing. No configuration or flags are needed — the extension is detected at import time.
+
+The Rust extension:
+
+1. Reads all source files in parallel via rayon
+2. Parses Python ASTs using ruff's hand-written recursive descent parser (the same parser used by the ruff linter)
+3. Extracts import statements by recursively walking all statement bodies (including `if`, `try`, `with`, function, and class blocks)
+4. Returns results as Python `list[str]` — only the final data crosses the Rust/Python boundary
+
+### Benchmarks
+
+Run the included benchmark script to measure speedup on your codebase:
+
+```bash
+python -m benchmarks.bench_parsing --module my_package --tests-dir tests
+```
+
+!!! note
+    The Rust extension is **completely optional**. When not installed, the pure-Python (astroid) implementation is used automatically. All functionality works identically in both modes.
