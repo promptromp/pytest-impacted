@@ -261,6 +261,21 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         return all_test_modules
 
 
+def get_default_strategies(*, watch_dep_files: bool = True) -> list[ImpactStrategy]:
+    """Return the default strategy list for impact analysis.
+
+    This centralizes the knowledge of which strategies form the default
+    pipeline. Add new strategies here rather than in api.py.
+    """
+    strategies: list[ImpactStrategy] = [
+        ASTImpactStrategy(),
+        PytestImpactStrategy(),
+    ]
+    if watch_dep_files:
+        strategies.append(DependencyFileImpactStrategy())
+    return strategies
+
+
 class CompositeImpactStrategy(ImpactStrategy):
     """Strategy that combines multiple strategies."""
 

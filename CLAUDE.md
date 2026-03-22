@@ -69,9 +69,7 @@ Impact analysis uses a strategy-based architecture defined in `strategies.py`:
 - **`DependencyFileImpactStrategy`**: Detects changes in dependency/config files (`uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg`, `requirements/*.txt`) and marks all test modules as impacted. Accepts custom patterns via constructor. Enabled by default; disable with `--no-impacted-dep-files`
 - **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results
 
-The default strategy in `api.py` is `CompositeImpactStrategy([ASTImpactStrategy(), PytestImpactStrategy(), DependencyFileImpactStrategy()])`.
-
-Helper functions `has_dependency_file_changes()` and `_matches_dependency_file()` in `strategies.py` provide the dependency file pattern matching, also used in `api.py` to bypass the early-return guard when no Python modules but dependency files are detected among changed files.
+The default strategy composition is built by `get_default_strategies()` in `strategies.py` and wrapped in `CompositeImpactStrategy` by `api.py`. The orchestrator (`api.py`) has no strategy-specific logic—it always passes `changed_files` and `impacted_modules` (which may be empty) to the composite, and each strategy decides what to do. This means strategies like `DependencyFileImpactStrategy` that operate on non-Python files work naturally without special-casing in the orchestrator.
 
 Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation (also clears `discover_submodules` cache).
 

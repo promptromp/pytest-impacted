@@ -6,12 +6,9 @@ from pathlib import Path
 from pytest_impacted.display import notify, warn
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
 from pytest_impacted.strategies import (
-    ASTImpactStrategy,
     CompositeImpactStrategy,
-    DependencyFileImpactStrategy,
     ImpactStrategy,
-    PytestImpactStrategy,
-    has_dependency_file_changes,
+    get_default_strategies,
 )
 from pytest_impacted.traversal import (
     path_to_package_name,
@@ -41,13 +38,7 @@ def get_impacted_tests(
 
     # Use default strategy if none provided
     if strategy is None:
-        strategies: list[ImpactStrategy] = [
-            ASTImpactStrategy(),
-            PytestImpactStrategy(),
-        ]
-        if watch_dep_files:
-            strategies.append(DependencyFileImpactStrategy())
-        strategy = CompositeImpactStrategy(strategies)
+        strategy = CompositeImpactStrategy(get_default_strategies(watch_dep_files=watch_dep_files))
 
     tests_package = None
     if tests_dir:
@@ -73,19 +64,11 @@ def get_impacted_tests(
 
     impacted_modules = resolve_files_to_modules(impacted_files, ns_module=ns_module, tests_package=tests_package)
     if not impacted_modules:
-        # Check if dependency file changes should keep the pipeline running
-        if watch_dep_files and has_dependency_file_changes(impacted_files):
-            notify(
-                f"No impacted Python modules detected, but dependency file changes found in: {impacted_files}. "
-                "Continuing to strategy pipeline.",
-                session,
-            )
-        else:
-            notify(
-                f"No impacted Python modules detected. Impacted files were: {impacted_files}",
-                session,
-            )
-            return None
+        notify(
+            f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
+            "Continuing to strategy pipeline.",
+            session,
+        )
 
     # Use the strategy to find impacted test modules
     impacted_test_modules = strategy.find_impacted_tests(
