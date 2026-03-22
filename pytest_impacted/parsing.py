@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import astroid
+from astroid.nodes import Import, ImportFrom
 
 
 class _ModuleProxy:
@@ -65,7 +66,7 @@ def normalize_path(path_like: Any) -> Path:
         raise ValueError(f"Cannot normalize path-like object {path_like!r} of type {type(path_like)}") from e
 
 
-def _resolve_relative_import(module: _ModuleProxy, node: astroid.ImportFrom) -> str:
+def _resolve_relative_import(module: _ModuleProxy, node: ImportFrom) -> str:
     """Resolve a relative import to its absolute module path.
 
     Args:
@@ -107,7 +108,7 @@ def _resolve_relative_import(module: _ModuleProxy, node: astroid.ImportFrom) -> 
         return base_package
 
 
-def _extract_imports_from_node(node: astroid.Import | astroid.ImportFrom, module: _ModuleProxy) -> set[str]:
+def _extract_imports_from_node(node: Import | ImportFrom, module: _ModuleProxy) -> set[str]:
     """Extract import module names from an AST node.
 
     Args:
@@ -119,11 +120,11 @@ def _extract_imports_from_node(node: astroid.Import | astroid.ImportFrom, module
     """
     imports = set()
 
-    if isinstance(node, astroid.Import):
+    if isinstance(node, Import):
         for name in node.names:
             imports.add(name[0])
 
-    elif isinstance(node, astroid.ImportFrom):
+    elif isinstance(node, ImportFrom):
         # Handle relative imports
         if node.level and node.level > 0:
             resolved_modname = _resolve_relative_import(module, node)
@@ -177,7 +178,7 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         return []
 
     imports: set[str] = set()
-    for node in tree.nodes_of_class((astroid.Import, astroid.ImportFrom)):
+    for node in tree.nodes_of_class((Import, ImportFrom)):
         imports.update(_extract_imports_from_node(node, module_proxy))
 
     return sorted(imports)
