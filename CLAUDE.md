@@ -45,7 +45,7 @@ pre-commit run --all-files
 
 ## Core Architecture
 
-The pipeline: Git identifies changed files → Files converted to Python modules → AST parser builds dependency graph → Graph analysis finds impacted test modules → Tests are filtered.
+The pipeline: Git identifies changed files → Files converted to Python modules → AST parser builds dependency graph → Graph analysis finds impacted test modules → Tests are filtered. In parallel, dependency file changes (e.g. `uv.lock`, `requirements.txt`) trigger all tests via `DependencyFileImpactStrategy`.
 
 ### Module Responsibilities
 
@@ -66,15 +66,16 @@ Impact analysis uses a strategy-based architecture defined in `strategies.py`:
 - **`ImpactStrategy`** (ABC): Base class defining `find_impacted_tests()` interface
 - **`ASTImpactStrategy`**: Default strategy using AST parsing and dependency graph traversal
 - **`PytestImpactStrategy`**: Extends AST analysis with pytest-specific handling—when `conftest.py` files change, all tests in the same directory and subdirectories are considered impacted
+- **`DependencyFileImpactStrategy`**: Detects changes in dependency/config files (`uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg`, `requirements/*.txt`) and marks all test modules as impacted. Accepts custom patterns via constructor. Enabled by default; disable with `--no-impacted-dep-files`
 - **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results
 
-The default strategy in `api.py` is `CompositeImpactStrategy([ASTImpactStrategy(), PytestImpactStrategy()])`.
+The default strategy composition is built by `get_default_strategies()` in `strategies.py` and wrapped in `CompositeImpactStrategy` by `api.py`. The orchestrator (`api.py`) has no strategy-specific logic—it always passes `changed_files` and `impacted_modules` (which may be empty) to the composite, and each strategy decides what to do. This means strategies like `DependencyFileImpactStrategy` that operate on non-Python files work naturally without special-casing in the orchestrator.
 
 Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation (also clears `discover_submodules` cache).
 
 ### Test Structure
 
-Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_caching.py`, `test_integration.py`). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
+Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_dependency_file_impact.py`, `test_caching.py`, `test_integration.py`). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
 
 ## Documentation
 
@@ -95,5 +96,5 @@ The documentation site uses [MkDocs Material](https://squidfun.github.io/mkdocs-
 
 - Ruff: line-length=120, target-version=py311, double quote style, T201 (print) allowed
 - Pre-commit hooks: ruff, mypy, pytest with coverage (fail_fast: true)
-- CI matrix: Python 3.11, 3.12, 3.13
+- CI matrix: Python 3.11, 3.12, 3.13, 3.14
 - Python 3.11+ minimum required

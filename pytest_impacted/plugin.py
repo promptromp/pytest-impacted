@@ -85,6 +85,19 @@ def pytest_addoption(parser: Parser):
         default=None,
     )
 
+    group.addoption(
+        "--no-impacted-dep-files",
+        action="store_true",
+        default=None,
+        dest="no_impacted_dep_files",
+        help="Disable dependency file change detection (uv.lock, requirements.txt, etc.).",
+    )
+    parser.addini(
+        "no_impacted_dep_files",
+        help="default value for --no-impacted-dep-files",
+        default=False,
+    )
+
 
 def pytest_configure(config: Config):
     """pytest hook to configure the plugin.
@@ -109,6 +122,7 @@ def pytest_report_header(config: Config) -> list[str]:
         f"impacted_git_mode={get_option('impacted_git_mode')}",
         f"impacted_base_branch={get_option('impacted_base_branch')}",
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
+        f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
     ]
     return [
         "pytest-impacted: " + ", ".join(header),
@@ -131,6 +145,7 @@ def pytest_collection_modifyitems(session, config, items):
     impacted_git_mode = get_option("impacted_git_mode")
     impacted_base_branch = get_option("impacted_base_branch")
     impacted_tests_dir = get_option("impacted_tests_dir")
+    no_dep_files = get_option("no_impacted_dep_files")
     root_dir = config.rootdir
 
     impacted_tests = get_impacted_tests(
@@ -140,6 +155,7 @@ def pytest_collection_modifyitems(session, config, items):
         ns_module=ns_module,
         tests_dir=impacted_tests_dir,
         session=session,
+        watch_dep_files=not no_dep_files,
     )
     if not impacted_tests:
         # skip all tests

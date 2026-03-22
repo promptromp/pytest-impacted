@@ -22,6 +22,7 @@ def cli_options():
         "impacted_git_mode",
         "impacted_base_branch",
         "impacted_tests_dir",
+        "no_impacted_dep_files",
     ]
 
 

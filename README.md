@@ -25,6 +25,7 @@ pytest --impacted --impacted-module=my_package \
 | :gear: | **No imports at analysis time** | Filesystem discovery + AST parsing — no module-level side effects |
 | :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options |
 | :wrench: | **conftest.py aware** | Changes to `conftest.py` automatically impact all tests in scope |
+| :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements.txt`, `pyproject.toml` etc. trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
 | :shield: | **Helpful errors** | Validates config early with clear messages and suggestions |
 
@@ -82,26 +83,29 @@ That's it. Unaffected tests are automatically skipped.
 
 ```
 Git diff → Changed files → Module resolution → AST import parsing → Dependency graph → Impacted tests
+                         ↘ Dependency file detection → All tests (if dep files changed)
 ```
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Test filtering** skips tests whose modules are not in the impact set
+5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
+6. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
 
 ### Strategy-Based Architecture
 
-Impact analysis is pluggable via a strategy pattern. The default pipeline combines two strategies:
+Impact analysis is pluggable via a strategy pattern. The default pipeline combines three strategies:
 
 | Strategy | What it does |
 |----------|-------------|
 | **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
 | **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, **all tests in its directory and subdirectories** are marked as impacted |
+| **DependencyFileImpactStrategy** | When dependency files change (`uv.lock`, `requirements.txt`, `pyproject.toml`, etc.), **all tests** are marked as impacted |
 
-Both strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. This is important because `conftest.py` files are implicitly loaded by pytest at runtime and are not visible through normal import analysis.
+All strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. Dependency file detection is enabled by default and can be disabled with `--no-impacted-dep-files`.
 
 You can also supply a custom strategy via the `get_impacted_tests()` API:
 
@@ -184,6 +188,7 @@ impacted_module = "my_package"
 impacted_git_mode = "branch"
 impacted_base_branch = "main"
 impacted_tests_dir = "tests"
+# no_impacted_dep_files = true  # uncomment to disable dep file detection
 ```
 
 CLI flags override these defaults.
@@ -197,6 +202,7 @@ CLI flags override these defaults.
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
+| `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
 
 ---
 

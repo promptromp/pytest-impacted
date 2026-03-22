@@ -3,8 +3,12 @@
 from unittest.mock import MagicMock
 
 from pytest_impacted.strategies import (
+    ASTImpactStrategy,
     CompositeImpactStrategy,
+    DependencyFileImpactStrategy,
     ImpactStrategy,
+    PytestImpactStrategy,
+    get_default_strategies,
 )
 
 
@@ -66,3 +70,30 @@ class TestCompositeImpactStrategy:
 
         assert result == ["test_a"]
         strategy.find_impacted_tests.assert_called_once()
+
+
+class TestGetDefaultStrategies:
+    """Test the get_default_strategies factory function."""
+
+    def test_default_includes_all_three_strategies(self):
+        """Default composition includes AST, Pytest, and DependencyFile strategies."""
+        strategies = get_default_strategies()
+        assert len(strategies) == 3
+        assert isinstance(strategies[0], ASTImpactStrategy)
+        assert isinstance(strategies[1], PytestImpactStrategy)
+        assert isinstance(strategies[2], DependencyFileImpactStrategy)
+
+    def test_watch_dep_files_false_excludes_dependency_strategy(self):
+        """When watch_dep_files=False, DependencyFileImpactStrategy is excluded."""
+        strategies = get_default_strategies(watch_dep_files=False)
+        assert len(strategies) == 2
+        assert isinstance(strategies[0], ASTImpactStrategy)
+        assert isinstance(strategies[1], PytestImpactStrategy)
+        assert not any(isinstance(s, DependencyFileImpactStrategy) for s in strategies)
+
+    def test_returns_new_instances_each_call(self):
+        """Each call should return fresh strategy instances."""
+        strategies_a = get_default_strategies()
+        strategies_b = get_default_strategies()
+        assert strategies_a is not strategies_b
+        assert strategies_a[0] is not strategies_b[0]

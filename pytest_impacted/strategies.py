@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import networkx as nx
@@ -10,6 +10,46 @@ import networkx as nx
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
 from pytest_impacted.traversal import discover_submodules
+
+
+# Default dependency file basenames that trigger all tests when changed
+DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
+    "uv.lock",
+    "requirements.txt",
+    "pyproject.toml",
+    "Pipfile",
+    "Pipfile.lock",
+    "poetry.lock",
+    "setup.py",
+    "setup.cfg",
+)
+
+# Glob-style patterns for matching nested dependency files (e.g. requirements/*.txt)
+DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
+    "requirements/*.txt",
+    "requirements/**/*.txt",
+)
+
+
+def _matches_dependency_file(
+    file_path: str,
+    patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
+    glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
+) -> bool:
+    """Check if a file path matches any dependency file pattern."""
+    basename = PurePosixPath(file_path).name
+    if basename in patterns:
+        return True
+    return any(PurePosixPath(file_path).match(glob_pat) for glob_pat in glob_patterns)
+
+
+def has_dependency_file_changes(
+    changed_files: list[str],
+    patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
+    glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
+) -> bool:
+    """Check if any changed files are dependency/configuration files."""
+    return any(_matches_dependency_file(f, patterns, glob_patterns) for f in changed_files)
 
 
 @lru_cache(maxsize=8)
@@ -174,6 +214,66 @@ class PytestImpactStrategy(ImpactStrategy):
                     continue
 
         return False
+
+
+class DependencyFileImpactStrategy(ImpactStrategy):
+    """Strategy that triggers all tests when dependency files change.
+
+    When files like uv.lock, requirements.txt, pyproject.toml etc. are
+    modified, any test could potentially be affected. This strategy
+    conservatively marks all discovered test modules as impacted.
+    """
+
+    def __init__(
+        self,
+        patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
+        glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
+    ):
+        self.patterns = patterns
+        self.glob_patterns = glob_patterns
+
+    def find_impacted_tests(
+        self,
+        changed_files: list[str],
+        impacted_modules: list[str],
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session: Any = None,
+    ) -> list[str]:
+        """Return all test modules if dependency files have changed."""
+        if not has_dependency_file_changes(changed_files, self.patterns, self.glob_patterns):
+            return []
+
+        # Build the dep tree to discover all test modules
+        dep_tree = _cached_build_dep_tree(ns_module, tests_package=tests_package)
+        all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
+
+        dep_files = [f for f in changed_files if _matches_dependency_file(f, self.patterns, self.glob_patterns)]
+        from pytest_impacted.display import notify  # noqa: PLC0415
+
+        notify(
+            f"Dependency file changes detected: {dep_files}. "
+            f"Marking all {len(all_test_modules)} test modules as impacted.",
+            session,
+        )
+
+        return all_test_modules
+
+
+def get_default_strategies(*, watch_dep_files: bool = True) -> list[ImpactStrategy]:
+    """Return the default strategy list for impact analysis.
+
+    This centralizes the knowledge of which strategies form the default
+    pipeline. Add new strategies here rather than in api.py.
+    """
+    strategies: list[ImpactStrategy] = [
+        ASTImpactStrategy(),
+        PytestImpactStrategy(),
+    ]
+    if watch_dep_files:
+        strategies.append(DependencyFileImpactStrategy())
+    return strategies
 
 
 class CompositeImpactStrategy(ImpactStrategy):

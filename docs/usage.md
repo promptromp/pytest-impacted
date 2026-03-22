@@ -90,7 +90,7 @@ Run pytest from the `backend/` directory as usual. The plugin will:
 
 ## Impact Analysis Strategies
 
-The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines two built-in strategies.
+The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines three built-in strategies.
 
 ### ASTImpactStrategy
 
@@ -108,6 +108,26 @@ Extends the AST analysis with pytest-specific dependency detection:
 - **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and are **not visible through normal import analysis**.
 - Designed to be extended with additional pytest-specific heuristics in the future.
 
+### DependencyFileImpactStrategy
+
+Detects changes in dependency and configuration files. When these files change, any test could potentially be affected — so **all test modules are marked as impacted**.
+
+Monitored files include:
+
+- `uv.lock`, `requirements.txt`, `pyproject.toml`
+- `Pipfile`, `Pipfile.lock`, `poetry.lock`
+- `setup.py`, `setup.cfg`
+- `requirements/*.txt` (nested requirements files)
+
+This strategy is enabled by default. To disable it, use:
+
+```bash
+pytest --impacted --impacted-module=my_package --no-impacted-dep-files
+```
+
+!!! tip
+    This is especially useful in CI where dependency version bumps (e.g. updating `uv.lock`) don't change any `.py` files but could still break tests due to changed third-party behavior.
+
 ### CompositeImpactStrategy
 
 Combines multiple strategies, deduplicating and sorting results. The default composition is:
@@ -116,6 +136,7 @@ Combines multiple strategies, deduplicating and sorting results. The default com
 CompositeImpactStrategy([
     ASTImpactStrategy(),
     PytestImpactStrategy(),
+    DependencyFileImpactStrategy(),
 ])
 ```
 
@@ -165,6 +186,7 @@ impacted_module = "my_package"
 impacted_git_mode = "branch"
 impacted_base_branch = "main"
 impacted_tests_dir = "tests"
+no_impacted_dep_files = false  # set to true to disable dep file detection
 ```
 
 CLI flags override these defaults.
@@ -191,6 +213,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
+| `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
 
 ## How It Works (Pipeline)
 
@@ -200,13 +223,16 @@ graph LR
     B --> C[Module resolution]
     C --> D[AST import parsing]
     D --> E[Dependency graph]
-    E --> F[Impacted tests]
+    E --> G[Impacted tests]
+    B --> F[Dep file detection]
+    F -->|uv.lock, requirements.txt, etc.| G
 ```
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Test filtering** skips tests whose modules are not in the impact set
+5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
+6. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run).
