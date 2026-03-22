@@ -86,8 +86,6 @@ def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.M
                 digraph.add_node(imp)
                 digraph.add_edge(name, imp)
 
-    maybe_prune_graph(digraph)
-
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     inverted_digraph = inverted(digraph)
 
@@ -104,16 +102,6 @@ def display_digraph(digraph: nx.DiGraph) -> None:
         edges = list(digraph.successors(node))
         print(f"{node} -> {edges}")
 
-
-def maybe_prune_graph(digraph: nx.DiGraph) -> nx.DiGraph:
-    """Prune the graph to remove nodes we do not need, e.g. singleton nodes."""
-    for node in list(digraph.nodes):
-        if digraph.in_degree(node) == 0 and digraph.out_degree(node) == 0:
-            # prune singleton nodes (typically __init__.py files)
-            logging.debug("Removing singleton node: %s", node)
-            digraph.remove_node(node)
-
-    return digraph
 
 
 def inverted(digraph: nx.DiGraph) -> nx.DiGraph:
