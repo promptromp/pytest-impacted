@@ -116,13 +116,17 @@ def pytest_configure(config: Config):
 @pytest.hookimpl(tryfirst=True)
 def pytest_report_header(config: Config) -> list[str]:
     """Add pytest-impacted config to pytest header."""
+    from pytest_impacted._rust import RUST_AVAILABLE  # noqa: PLC0415
+
     get_option = partial(get_option_from_config, config)
+    backend = "rust (ruff parser + rayon)" if RUST_AVAILABLE else "python (astroid)"
     header = [
         f"impacted_module={get_option('impacted_module')}",
         f"impacted_git_mode={get_option('impacted_git_mode')}",
         f"impacted_base_branch={get_option('impacted_base_branch')}",
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
+        f"backend={backend}",
     ]
     return [
         "pytest-impacted: " + ", ".join(header),
