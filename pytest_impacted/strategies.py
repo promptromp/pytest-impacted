@@ -124,7 +124,7 @@ class PytestImpactStrategy(ImpactStrategy):
         if not conftest_files:
             return []
 
-        impacted_tests = []
+        impacted_tests: list[str] = []
 
         for conftest_file in conftest_files:
             try:
