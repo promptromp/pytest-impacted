@@ -1,16 +1,12 @@
 # Build and publish pre-built Rust wheels for pytest-impacted-rs.
-# Triggered on tag pushes matching v* (same as the Python package).
+# Triggered on all pushes; publish jobs only run on tag pushes.
 
 name: Publish Rust Wheels
 
 permissions:
   contents: read
 
-on:
-  push:
-    tags:
-      - "v*"
-  workflow_dispatch:
+on: push
 
 jobs:
   build-wheels:
@@ -79,6 +75,7 @@ jobs:
 
   publish-to-pypi:
     name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/') # only publish to PyPI on tag pushes
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     environment:
@@ -100,6 +97,7 @@ jobs:
 
   publish-to-testpypi:
     name: Publish to TestPyPI
+    if: startsWith(github.ref, 'refs/tags/') # only publish to PyPI on tag pushes
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     environment:
