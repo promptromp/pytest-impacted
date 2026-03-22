@@ -223,8 +223,7 @@ def _collect_paths_for_change(item: Change) -> list[str | None]:
 
 def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     """Get the impacted files when in the UNSTAGED git mode."""
-    if not repo.is_dirty():
-        # No changes in the repository and we are working in unstanged mode, nack.
+    if not repo.is_dirty(untracked_files=True):
         return None
 
     diffs = repo.index.diff(None)

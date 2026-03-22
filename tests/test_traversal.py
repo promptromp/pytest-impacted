@@ -107,19 +107,20 @@ def test_iter_namespace_with_nested_package():
 
 def test_path_to_package_name():
     """Test the path_to_package_name function."""
-    # Use a path whose name is an importable module (e.g., 'os')
-    import os
+    # Simple directory name
+    assert path_to_package_name("tests") == "tests"
+    assert path_to_package_name(Path("tests")) == "tests"
 
-    path = Path(os.__file__)
-    # Remove extension for importable name
-    module_name = path.stem
-    assert path_to_package_name(path.with_name(module_name)) == "os"
-    # Test with string path
-    assert path_to_package_name(str(path.with_name(module_name))) == "os"
-    # Test with a non-importable name (should raise ModuleNotFoundError)
-    fake_path = Path("/tmp/notamodule")
-    with pytest.raises(ModuleNotFoundError):
-        path_to_package_name(fake_path)
+    # Nested path
+    assert path_to_package_name("tests/unit") == "tests.unit"
+    assert path_to_package_name(Path("tests/unit")) == "tests.unit"
+
+    # Normalizes ./ prefix
+    assert path_to_package_name("./tests") == "tests"
+    assert path_to_package_name("./tests/unit") == "tests.unit"
+
+    # Normalizes trailing slash
+    assert path_to_package_name("tests/") == "tests"
 
 
 def test_iter_namespace_invalid_input():
@@ -194,7 +195,7 @@ def test_resolve_files_to_modules_with_tests_package():
     """Test resolve_files_to_modules with tests_package parameter."""
     with pytest.MonkeyPatch.context() as m:
         # Mock discover_submodules to return known results (name -> abs filepath)
-        def mock_discover_submodules(package):
+        def mock_discover_submodules(package, **kwargs):
             if package == "pytest_impacted":
                 return {"pytest_impacted.traversal": "/path/to/pytest_impacted/traversal.py"}
             elif package == "tests":
@@ -220,7 +221,7 @@ def test_resolve_files_to_modules_init_file():
     """Test resolve_files_to_modules with __init__.py files."""
     with pytest.MonkeyPatch.context() as m:
 
-        def mock_discover_submodules(package):
+        def mock_discover_submodules(package, **kwargs):
             return {"mypkg": "/project/mypkg/__init__.py"}
 
         m.setattr("pytest_impacted.traversal.discover_submodules", mock_discover_submodules)
@@ -235,7 +236,7 @@ def test_resolve_files_to_modules_relative_git_path():
 
     with pytest.MonkeyPatch.context() as m:
 
-        def mock_discover_submodules(package):
+        def mock_discover_submodules(package, **kwargs):
             # The absolute path must match what os.path.abspath("mypkg/foo.py") resolves to
             return {"mypkg.foo": os.path.abspath("mypkg/foo.py")}
 
@@ -244,3 +245,58 @@ def test_resolve_files_to_modules_relative_git_path():
         # Relative path from git that doesn't match the absolute package path
         modules = resolve_files_to_modules(["mypkg/foo.py"], "mypkg")
         assert modules == ["mypkg.foo"]
+
+
+def test_discover_submodules_without_init_in_subdirectory(tmp_path, monkeypatch):
+    """Modules in subdirectories without __init__.py should be discovered with require_init=False."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").touch()
+    (tmp_path / "pkg" / "sub").mkdir()
+    (tmp_path / "pkg" / "sub" / "test_thing.py").write_text("def test_it(): pass\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+
+    modules = discover_submodules("pkg", require_init=False)
+    assert "pkg.sub.test_thing" in modules
+
+
+def test_discover_submodules_without_init_in_ancestor_directory(tmp_path, monkeypatch):
+    """Modules should be discovered even when an ancestor directory lacks __init__.py."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "__init__.py").touch()
+    (tmp_path / "tests" / "app").mkdir()
+    (tmp_path / "tests" / "app" / "unit").mkdir()
+    (tmp_path / "tests" / "app" / "unit" / "__init__.py").touch()
+    (tmp_path / "tests" / "app" / "unit" / "test_core.py").write_text("def test_core(): pass\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+
+    modules = discover_submodules("tests", require_init=False)
+    assert "tests.app.unit.test_core" in modules
+
+
+def test_discover_submodules_require_init_skips_no_init_dirs(tmp_path, monkeypatch):
+    """With require_init=True, directories without __init__.py should be skipped."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").touch()
+    (tmp_path / "pkg" / "visible.py").write_text("x = 1\n")
+    (tmp_path / "pkg" / "no_init_dir").mkdir()
+    (tmp_path / "pkg" / "no_init_dir" / "hidden.py").write_text("y = 2\n")
+
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+
+    modules = discover_submodules("pkg", require_init=True)
+    assert "pkg.visible" in modules
+    assert "pkg.no_init_dir.hidden" not in modules
+
+
+def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
+    """Filesystem discovery should return empty dict for a nonexistent directory."""
+    monkeypatch.chdir(tmp_path)
+    discover_submodules.cache_clear()
+
+    modules = discover_submodules("nonexistent_pkg", require_init=False)
+    assert modules == {}

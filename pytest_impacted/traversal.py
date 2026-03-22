@@ -1,6 +1,5 @@
 """Python package and module traversal utilities."""
 
-import importlib
 import logging
 import os
 import pkgutil
@@ -15,11 +14,13 @@ def package_name_to_path(package_name: str) -> str:
 
 
 def path_to_package_name(path: Path | str) -> str:
-    """Convert a path to a package name."""
-    if not isinstance(path, Path):
-        path = Path(path)
+    """Convert a directory path to a dotted package name.
 
-    return importlib.import_module(path.name).__name__
+    Uses pure path manipulation — no imports are performed.
+    E.g. "tests" -> "tests", "tests/unit" -> "tests.unit".
+    """
+    normalized = os.path.normpath(str(path))
+    return ".".join(Path(normalized).parts)
 
 
 def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInfo]:
@@ -49,17 +50,11 @@ def iter_namespace(ns_package: str | types.ModuleType) -> list[pkgutil.ModuleInf
     return module_infos
 
 
-@lru_cache
-def discover_submodules(package: str) -> dict[str, str]:
-    """Discover all submodules by filesystem scanning, without importing them.
+def _discover_via_pkgutil(package: str) -> dict[str, str]:
+    """Discover submodules using pkgutil (requires __init__.py in directories).
 
-    Uses pkgutil.iter_modules for directory scanning and constructs file paths
-    from module names. This avoids executing module-level code (e.g. gevent
-    monkey patching, application factory calls, global connections) that can
-    corrupt the test environment when modules are eagerly imported.
-
-    Returns:
-        Dict mapping fully-qualified module name -> absolute file path.
+    This is the correct approach for proper Python packages where the import
+    system's package rules apply.
     """
     results: dict[str, str] = {}
     for module_info in iter_namespace(package):
@@ -79,9 +74,58 @@ def discover_submodules(package: str) -> dict[str, str]:
                 logging.warning("Module %s not found at expected path %s", name, abs_path)
 
             if module_info.ispkg:
-                results.update(discover_submodules(name))
+                results.update(_discover_via_pkgutil(name))
 
     return results
+
+
+def _discover_via_filesystem(package: str) -> dict[str, str]:
+    """Discover submodules by walking the filesystem (no __init__.py required).
+
+    Uses Path.rglob to find all .py files regardless of whether intermediate
+    directories contain __init__.py. This matches pytest's own filesystem-based
+    test discovery behavior.
+    """
+    base_path = Path(package_name_to_path(package))
+    if not base_path.is_dir():
+        return {}
+
+    results: dict[str, str] = {}
+    for py_file in base_path.rglob("*.py"):
+        rel = py_file.relative_to(base_path.parent)
+        if py_file.name == "__init__.py":
+            module_name = ".".join(rel.parent.parts)
+        else:
+            module_name = ".".join(rel.with_suffix("").parts)
+
+        abs_path = str(py_file.resolve())
+        results[module_name] = abs_path
+
+    return results
+
+
+@lru_cache
+def discover_submodules(package: str, require_init: bool = True) -> dict[str, str]:
+    """Discover all submodules by filesystem scanning, without importing them.
+
+    This avoids executing module-level code (e.g. gevent monkey patching,
+    application factory calls, global connections) that can corrupt the test
+    environment when modules are eagerly imported.
+
+    Args:
+        package: Dotted package name to scan (e.g. "mypackage" or "tests").
+        require_init: If True, use pkgutil-based discovery which requires
+            __init__.py in directories (correct for importable Python packages).
+            If False, use filesystem walking which finds all .py files
+            regardless of __init__.py (matching pytest's discovery behavior).
+
+    Returns:
+        Dict mapping fully-qualified module name -> absolute file path.
+    """
+    if require_init:
+        return _discover_via_pkgutil(package)
+    else:
+        return _discover_via_filesystem(package)
 
 
 def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package: str | None = None):
@@ -89,10 +133,10 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package
 
     Uses filesystem-based discovery (no imports) to build the module mapping.
     """
-    submodules = discover_submodules(ns_module)
+    submodules = discover_submodules(ns_module, require_init=True)
     if tests_package:
         logging.debug("Adding modules from tests_package: %s", tests_package)
-        test_submodules = discover_submodules(tests_package)
+        test_submodules = discover_submodules(tests_package, require_init=False)
         submodules = {**submodules, **test_submodules}
 
     # Build reverse mapping: absolute file path -> module name
@@ -124,9 +168,9 @@ def resolve_modules_to_files(
 
     Uses filesystem-based discovery (no imports) to find module files.
     """
-    submodules = discover_submodules(ns_module)
+    submodules = discover_submodules(ns_module, require_init=True)
     if tests_package:
-        submodules = {**submodules, **discover_submodules(tests_package)}
+        submodules = {**submodules, **discover_submodules(tests_package, require_init=False)}
 
     result = []
     for module_name in modules:
