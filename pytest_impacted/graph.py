@@ -16,7 +16,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     We then check if these nodes are test modules.
     We return the list of test modules that are impacted.
 
-    For modules not found in the dependency tree (dangling nodes):
+    For modules not found in the dependency tree (e.g. outside the analyzed package scope):
     - Test modules are included directly as impacted (they changed, so they should run).
     - Production modules cause ALL test modules to be marked as impacted,
       erring on the side of caution per project philosophy.
@@ -29,7 +29,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
         if module not in dep_tree.nodes:
             logging.warning(
                 "Module %s is marked as impacted but was not found in dependency tree "
-                "(likely pruned as a dangling node).",
+                "(possibly outside the analyzed package scope).",
                 module,
             )
             if is_test_module(module):
@@ -86,8 +86,6 @@ def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.M
                 digraph.add_node(imp)
                 digraph.add_edge(name, imp)
 
-    maybe_prune_graph(digraph)
-
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     inverted_digraph = inverted(digraph)
 
@@ -103,17 +101,6 @@ def display_digraph(digraph: nx.DiGraph) -> None:
     for node in digraph.nodes:
         edges = list(digraph.successors(node))
         print(f"{node} -> {edges}")
-
-
-def maybe_prune_graph(digraph: nx.DiGraph) -> nx.DiGraph:
-    """Prune the graph to remove nodes we do not need, e.g. singleton nodes."""
-    for node in list(digraph.nodes):
-        if digraph.in_degree(node) == 0 and digraph.out_degree(node) == 0:
-            # prune singleton nodes (typically __init__.py files)
-            logging.debug("Removing singleton node: %s", node)
-            digraph.remove_node(node)
-
-    return digraph
 
 
 def inverted(digraph: nx.DiGraph) -> nx.DiGraph:
