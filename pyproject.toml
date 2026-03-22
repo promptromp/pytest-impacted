@@ -30,7 +30,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "astroid>=4.1.1",
+    "astroid>=4.1.2",
     "click>=8.2.0",
     "gitpython>=3.1.44",
     "networkx>=3.4.2",
