@@ -25,6 +25,7 @@ pytest --impacted --impacted-module=my_package \
 | :gear: | **No imports at analysis time** | Filesystem discovery + AST parsing — no module-level side effects |
 | :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options |
 | :wrench: | **conftest.py aware** | Changes to `conftest.py` automatically impact all tests in scope |
+| :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements.txt`, `pyproject.toml` etc. trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
 | :shield: | **Helpful errors** | Validates config early with clear messages and suggestions |
 
@@ -100,8 +101,9 @@ Impact analysis is pluggable via a strategy pattern. The default pipeline combin
 |----------|-------------|
 | **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
 | **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, **all tests in its directory and subdirectories** are marked as impacted |
+| **DependencyFileImpactStrategy** | When dependency files change (`uv.lock`, `requirements.txt`, `pyproject.toml`, etc.), **all tests** are marked as impacted |
 
-Both strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. This is important because `conftest.py` files are implicitly loaded by pytest at runtime and are not visible through normal import analysis.
+All strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. Dependency file detection is enabled by default and can be disabled with `--no-impacted-dep-files`.
 
 You can also supply a custom strategy via the `get_impacted_tests()` API:
 
@@ -197,6 +199,7 @@ CLI flags override these defaults.
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
+| `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
 
 ---
 

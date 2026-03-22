@@ -82,6 +82,7 @@ class TestImpactedTestsCLI:
                 root_dir=".",
                 ns_module="test_ns",
                 tests_dir=None,
+                watch_dep_files=True,
             )
 
             # Check that the impacted tests are printed to stdout
@@ -122,6 +123,7 @@ class TestImpactedTestsCLI:
                 root_dir=".",
                 ns_module="test_ns",
                 tests_dir="tests",
+                watch_dep_files=True,
             )
 
     @patch("pytest_impacted.cli.get_impacted_tests")
@@ -268,6 +270,7 @@ class TestImpactedTestsCLI:
                 root_dir=".",  # default
                 ns_module="test_ns",
                 tests_dir=None,  # default
+                watch_dep_files=True,  # default
             )
 
     @patch("pytest_impacted.cli.get_impacted_tests")

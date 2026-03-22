@@ -108,6 +108,26 @@ Extends the AST analysis with pytest-specific dependency detection:
 - **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and are **not visible through normal import analysis**.
 - Designed to be extended with additional pytest-specific heuristics in the future.
 
+### DependencyFileImpactStrategy
+
+Detects changes in dependency and configuration files. When these files change, any test could potentially be affected — so **all test modules are marked as impacted**.
+
+Monitored files include:
+
+- `uv.lock`, `requirements.txt`, `pyproject.toml`
+- `Pipfile`, `Pipfile.lock`, `poetry.lock`
+- `setup.py`, `setup.cfg`
+- `requirements/*.txt` (nested requirements files)
+
+This strategy is enabled by default. To disable it, use:
+
+```bash
+pytest --impacted --impacted-module=my_package --no-impacted-dep-files
+```
+
+!!! tip
+    This is especially useful in CI where dependency version bumps (e.g. updating `uv.lock`) don't change any `.py` files but could still break tests due to changed third-party behavior.
+
 ### CompositeImpactStrategy
 
 Combines multiple strategies, deduplicating and sorting results. The default composition is:
@@ -116,6 +136,7 @@ Combines multiple strategies, deduplicating and sorting results. The default com
 CompositeImpactStrategy([
     ASTImpactStrategy(),
     PytestImpactStrategy(),
+    DependencyFileImpactStrategy(),
 ])
 ```
 
@@ -165,6 +186,7 @@ impacted_module = "my_package"
 impacted_git_mode = "branch"
 impacted_base_branch = "main"
 impacted_tests_dir = "tests"
+no_impacted_dep_files = false  # set to true to disable dep file detection
 ```
 
 CLI flags override these defaults.
@@ -191,6 +213,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
+| `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
 
 ## How It Works (Pipeline)
 

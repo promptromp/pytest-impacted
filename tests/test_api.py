@@ -225,3 +225,88 @@ def test_get_impacted_tests_with_nested_tests_dir(mock_find_impacted_files):
 
         # path_to_package_name should not be called since no impacted files
         # but verify the function doesn't crash with nested paths
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+@patch("pytest_impacted.api.resolve_modules_to_files")
+def test_get_impacted_tests_dep_file_only_change(
+    mock_resolve_modules_to_files,
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+):
+    """When only dependency files changed, all tests should be returned (not None)."""
+    mock_find_impacted_files.return_value = ["uv.lock"]
+    mock_resolve_files_to_modules.return_value = []  # No .py files -> no modules
+
+    # Create a mock strategy that returns all test modules when dep files detected
+    mock_strategy = MagicMock()
+    mock_strategy.find_impacted_tests.return_value = ["test_module1", "test_module2"]
+    mock_resolve_modules_to_files.return_value = ["test_file1.py", "test_file2.py"]
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=Path("."),
+        ns_module="project_ns",
+        tests_dir="tests",
+        strategy=mock_strategy,
+        watch_dep_files=True,
+    )
+
+    # Should NOT return None — dep file change keeps the pipeline running
+    assert result == ["test_file1.py", "test_file2.py"]
+    mock_strategy.find_impacted_tests.assert_called_once()
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+def test_get_impacted_tests_dep_file_with_watch_disabled(
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+):
+    """When watch_dep_files=False, dep-only changes should return None."""
+    mock_find_impacted_files.return_value = ["uv.lock"]
+    mock_resolve_files_to_modules.return_value = []
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=Path("."),
+        ns_module="project_ns",
+        watch_dep_files=False,
+    )
+
+    assert result is None
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+@patch("pytest_impacted.api.resolve_modules_to_files")
+def test_get_impacted_tests_mixed_dep_and_py_changes(
+    mock_resolve_modules_to_files,
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+):
+    """Both dep files and .py files changed — strategy should receive all changed files."""
+    mock_find_impacted_files.return_value = ["src/module.py", "uv.lock"]
+    mock_resolve_files_to_modules.return_value = ["mypackage.module"]
+    mock_resolve_modules_to_files.return_value = ["test_file1.py", "test_file2.py"]
+
+    mock_strategy = MagicMock()
+    mock_strategy.find_impacted_tests.return_value = ["test_module1", "test_module2"]
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=Path("."),
+        ns_module="project_ns",
+        tests_dir="tests",
+        strategy=mock_strategy,
+    )
+
+    assert result == ["test_file1.py", "test_file2.py"]
+    # Strategy should receive all changed files including uv.lock
+    call_args = mock_strategy.find_impacted_tests.call_args
+    assert "uv.lock" in call_args.kwargs["changed_files"]
+    assert "src/module.py" in call_args.kwargs["changed_files"]

@@ -66,15 +66,18 @@ Impact analysis uses a strategy-based architecture defined in `strategies.py`:
 - **`ImpactStrategy`** (ABC): Base class defining `find_impacted_tests()` interface
 - **`ASTImpactStrategy`**: Default strategy using AST parsing and dependency graph traversal
 - **`PytestImpactStrategy`**: Extends AST analysis with pytest-specific handling—when `conftest.py` files change, all tests in the same directory and subdirectories are considered impacted
+- **`DependencyFileImpactStrategy`**: Detects changes in dependency/config files (`uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg`, `requirements/*.txt`) and marks all test modules as impacted. Accepts custom patterns via constructor. Enabled by default; disable with `--no-impacted-dep-files`
 - **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results
 
-The default strategy in `api.py` is `CompositeImpactStrategy([ASTImpactStrategy(), PytestImpactStrategy()])`.
+The default strategy in `api.py` is `CompositeImpactStrategy([ASTImpactStrategy(), PytestImpactStrategy(), DependencyFileImpactStrategy()])`.
+
+Helper functions `has_dependency_file_changes()` and `_matches_dependency_file()` in `strategies.py` provide the dependency file pattern matching, also used in `api.py` to bypass the early-return guard when no Python modules but dependency files are detected among changed files.
 
 Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation (also clears `discover_submodules` cache).
 
 ### Test Structure
 
-Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_caching.py`, `test_integration.py`). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
+Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_dependency_file_impact.py`, `test_caching.py`, `test_integration.py`). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
 
 ## Documentation
 

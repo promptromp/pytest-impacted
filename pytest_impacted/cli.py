@@ -46,7 +46,8 @@ def configure_logging(verbose: bool) -> None:
     ),
 )
 @click.option("--verbose", is_flag=True, help="Verbose output.")
-def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbose):
+@click.option("--no-dep-files", is_flag=True, default=False, help="Disable dependency file change detection.")
+def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbose, no_dep_files):
     """CLI entrypoint for impacted-tests console script."""
     click.echo("impacted-tests", err=True)
     click.secho("  base-branch: {}".format(base_branch), fg="blue", bold=True, err=True)
@@ -54,6 +55,7 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbo
     click.secho("  module: {}".format(module), fg="blue", bold=True, err=True)
     click.secho("  root-dir: {}".format(root_dir), fg="blue", bold=True, err=True)
     click.secho("  tests-dir: {}".format(tests_dir), fg="blue", bold=True, err=True)
+    click.secho("  no-dep-files: {}".format(no_dep_files), fg="blue", bold=True, err=True)
 
     configure_logging(verbose=verbose)
 
@@ -63,6 +65,7 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbo
         root_dir=root_dir,
         ns_module=module,
         tests_dir=tests_dir,
+        watch_dep_files=not no_dep_files,
     )
 
     if impacted_tests:
