@@ -219,14 +219,13 @@ CLI flags override these defaults.
 
 ## Performance: Optional Rust Acceleration
 
-For large codebases, install the optional Rust extension to accelerate import parsing by **37-65x**. Requires a [Rust toolchain](https://rustup.rs/) and [maturin](https://www.maturin.rs/):
+For large codebases, install the optional Rust extension to accelerate import parsing by **37-65x**:
 
 ```bash
-pip install maturin
-maturin develop --release --manifest-path rust/Cargo.toml
+pip install pytest-impacted[fast]
 ```
 
-The extension is automatically detected at runtime — no configuration needed. When unavailable, the pure-Python (astroid) implementation is used.
+This installs `pytest-impacted-rs`, a pre-built Rust extension using [ruff's parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing. The extension is automatically detected at runtime — no configuration needed. When unavailable, the pure-Python (astroid) implementation is used.
 
 ---
 
@@ -247,9 +246,12 @@ uv run python -m pytest --cov=pytest_impacted --cov-branch tests
 # Lint + format + type check
 pre-commit run --all-files
 
-# Build Rust extension (optional, requires Rust toolchain)
+# Install with Rust acceleration (pre-built wheels, no Rust toolchain needed)
+pip install pytest-impacted[fast]
+
+# Or build from source (requires Rust toolchain)
 pip install maturin
-maturin develop --release --manifest-path rust/Cargo.toml
+cd rust && maturin develop --release
 
 # Run parsing benchmarks
 python -m benchmarks.bench_parsing

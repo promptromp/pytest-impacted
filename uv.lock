@@ -398,6 +398,11 @@ dependencies = [
     { name = "rich" },
 ]
 
+[package.optional-dependencies]
+fast = [
+    { name = "pytest-impacted-rs" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "coverage" },
@@ -413,8 +418,10 @@ requires-dist = [
     { name = "gitpython", specifier = ">=3.1.44" },
     { name = "networkx", specifier = ">=3.4.2" },
     { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-impacted-rs", marker = "extra == 'fast'", editable = "rust" },
     { name = "rich", specifier = ">=14.0.0" },
 ]
+provides-extras = ["fast"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -423,6 +430,10 @@ dev = [
     { name = "pytest-cov", specifier = ">=6.1.1" },
     { name = "ruff", specifier = ">=0.11.9" },
 ]
+
+[[package]]
+name = "pytest-impacted-rs"
+source = { editable = "rust" }
 
 [[package]]
 name = "rich"

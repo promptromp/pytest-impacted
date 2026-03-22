@@ -243,14 +243,23 @@ For large codebases with many modules, import parsing can become a bottleneck. A
 
 ### Installation
 
-Requires a [Rust toolchain](https://rustup.rs/) (1.70+) and [maturin](https://www.maturin.rs/):
+Install with the `fast` extra to get pre-built Rust wheels (no Rust toolchain needed):
 
 ```bash
-# Install maturin
-pip install maturin
+pip install pytest-impacted[fast]
+```
 
-# Build and install the Rust extension into your environment
-maturin develop --release --manifest-path rust/Cargo.toml
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add pytest-impacted[fast]
+```
+
+For development from source (requires a [Rust toolchain](https://rustup.rs/) and [maturin](https://www.maturin.rs/)):
+
+```bash
+pip install maturin
+cd rust && maturin develop --release
 ```
 
 ### How It Works

@@ -16,9 +16,12 @@ This project uses `uv` for dependency and virtualenv management.
 # Install/sync development environment
 uv sync --all-extras --dev
 
-# Build optional Rust extension (requires Rust toolchain + maturin)
+# Install with Rust acceleration (pre-built wheels)
+pip install pytest-impacted[fast]
+
+# Or build Rust extension from source (requires Rust toolchain + maturin)
 pip install maturin
-maturin develop --release --manifest-path rust/Cargo.toml
+cd rust && maturin develop --release
 
 # Add a new dependency
 uv add <package_name>

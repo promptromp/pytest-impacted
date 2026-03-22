@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pytest-impacted-rs"
+description = "Rust-accelerated import parsing for pytest-impacted (ruff parser + rayon parallelism)."
+requires-python = ">=3.11"
+authors = [
+    { name = "PromptRomp", email = "promptromp.contact@gmail.com" },
+]
+license = "MIT"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Testing",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/promptromp/pytest-impacted"
+Issues = "https://github.com/promptromp/pytest-impacted/issues"
+
+[tool.maturin]
+features = ["pyo3/extension-module", "pyo3/abi3-py311"]
