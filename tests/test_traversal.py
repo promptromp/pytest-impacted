@@ -354,8 +354,6 @@ def test_find_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
 
 def test_discover_submodules_src_layout(tmp_path, monkeypatch):
     """discover_submodules with src-layout produces importable module names, not src-prefixed."""
-    import importlib
-
     # Create src/srcpkg_a/ layout
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "srcpkg_a").mkdir()
@@ -379,8 +377,6 @@ def test_discover_submodules_src_layout(tmp_path, monkeypatch):
 
 def test_discover_submodules_src_layout_with_subpackage(tmp_path, monkeypatch):
     """Recursive sub-package discovery works correctly in src-layout."""
-    import importlib
-
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "srcpkg_b").mkdir()
     (tmp_path / "src" / "srcpkg_b" / "__init__.py").write_text("")
@@ -401,8 +397,6 @@ def test_discover_submodules_src_layout_with_subpackage(tmp_path, monkeypatch):
 
 def test_discover_submodules_flat_layout_backward_compat(tmp_path, monkeypatch):
     """Flat layout (no src/) continues to work as before."""
-    import importlib
-
     (tmp_path / "flatpkg_a").mkdir()
     (tmp_path / "flatpkg_a" / "__init__.py").write_text("")
     (tmp_path / "flatpkg_a" / "module.py").write_text("x = 1\n")
