@@ -95,7 +95,6 @@ def test_build_dep_tree():
         assert dep_tree.has_edge("module_c", "module_b")
 
 
-
 def test_pruned_singleton_init_triggers_run_all():
     """A changed __init__.py singleton should not cause all tests to run."""
     mock_submodules = {
@@ -111,9 +110,9 @@ def test_pruned_singleton_init_triggers_run_all():
         # pkg/__init__.py imports nothing, pkg.core imports nothing,
         # tests.test_core imports pkg.core
         mock_parse.side_effect = [
-            [],             # pkg/__init__.py
-            [],             # pkg.core
-            ["pkg.core"],   # tests.test_core
+            [],  # pkg/__init__.py
+            [],  # pkg.core
+            ["pkg.core"],  # tests.test_core
         ]
 
         dep_tree = graph.build_dep_tree("pkg")
@@ -138,10 +137,10 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
         mock_parse.side_effect = [
-            [],             # pkg/__init__.py
-            [],             # pkg.core
-            [],             # pkg.utils
-            ["pkg.core"],   # tests.test_core
+            [],  # pkg/__init__.py
+            [],  # pkg.core
+            [],  # pkg.utils
+            ["pkg.core"],  # tests.test_core
             ["pkg.utils"],  # tests.test_utils
         ]
 

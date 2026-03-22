@@ -103,7 +103,6 @@ def display_digraph(digraph: nx.DiGraph) -> None:
         print(f"{node} -> {edges}")
 
 
-
 def inverted(digraph: nx.DiGraph) -> nx.DiGraph:
     """Invert the graph."""
     return digraph.reverse()
