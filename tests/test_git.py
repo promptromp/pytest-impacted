@@ -1,10 +1,12 @@
 """Unit tests for the git module."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from pytest_impacted import git
+from pytest_impacted.git import _normalize_git_paths, find_repo
 
 
 class DummyRepo:
@@ -15,6 +17,7 @@ class DummyRepo:
         diff_branch_result=None,
         untracked_files=None,
         current_branch="feature/some-feature-branch",
+        working_tree_dir=None,
     ):
         self._dirty = dirty
         self._diff_result = diff_result or []
@@ -27,6 +30,7 @@ class DummyRepo:
         self.commit = MagicMock()
         self.head = MagicMock()
         self.head.reference = current_branch
+        self.working_tree_dir = working_tree_dir or str(Path.cwd())
 
     def is_dirty(self, **kwargs):
         if kwargs.get("untracked_files"):
@@ -379,9 +383,11 @@ def test_git_available_warning_not_called(mock_warn):
 
 def test_git_unavailable_warning():
     """Test that warning is triggered when GitPython is not available."""
-    with patch("pytest_impacted.git.GIT_AVAILABLE", False):
-        with pytest.warns(UserWarning, match="Git functionality is disabled"):
-            git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+    with (
+        patch("pytest_impacted.git.GIT_AVAILABLE", False),
+        pytest.warns(UserWarning, match="Git functionality is disabled"),
+    ):
+        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
 
 
 def test_git_status_from_git_diff_name_status_edge_cases():
@@ -424,16 +430,14 @@ def test_changeset_from_git_diff_name_status_output_malformed():
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_with_path_object(mock_repo):
     """Test find_impacted_files_in_repo with Path object instead of string."""
-    from pathlib import Path
-
     diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
     diff_result = [diff1]
     mock_repo.return_value = DummyRepo(dirty=True, diff_result=diff_result)
 
     result = git.find_impacted_files_in_repo(Path("."), git.GitMode.UNSTAGED, None)
     assert result == ["file1.py"]
-    # Verify that Repo was called with a Path object
-    mock_repo.assert_called_once_with(path=Path("."))
+    # find_repo passes search_parent_directories=True
+    mock_repo.assert_called_once_with(path=Path("."), search_parent_directories=True)
 
 
 def test_change_name_property_with_both_paths():
@@ -604,3 +608,92 @@ def test_impacted_files_for_branch_mode_detached_head(mock_repo):
     assert result == ["file1.py"]
     # Verify git.diff was called with the commit hash fallback
     repo.git.diff.assert_called_once_with("main", "abc123", name_status=True)
+
+
+# --- Tests for find_repo and _normalize_git_paths (monorepo support) ---
+
+
+@patch("pytest_impacted.git.Repo")
+def test_find_repo_uses_search_parent_directories(mock_repo):
+    """find_repo passes search_parent_directories=True to GitPython."""
+    find_repo("/some/path")
+    mock_repo.assert_called_once_with(path=Path("/some/path"), search_parent_directories=True)
+
+
+def test_normalize_git_paths_same_dir():
+    """When git_root == working_dir, paths are returned unchanged."""
+    paths = ["src/module.py", "tests/test_foo.py"]
+    result = _normalize_git_paths(paths, Path("/repo"), Path("/repo"))
+    assert result == paths
+
+
+def test_normalize_git_paths_monorepo():
+    """Git-root-relative paths are converted to working-dir-relative."""
+    paths = ["backend/src/pkg/module.py", "backend/tests/test_foo.py"]
+    result = _normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
+    assert result == ["src/pkg/module.py", "tests/test_foo.py"]
+
+
+def test_normalize_git_paths_file_outside_working_dir():
+    """Files outside working_dir are returned as absolute paths."""
+    paths = ["frontend/app.js", "backend/src/module.py"]
+    result = _normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
+    assert result == ["/repo/frontend/app.js", "src/module.py"]
+
+
+def test_normalize_git_paths_deeply_nested():
+    """Works for deeply nested subdirectories."""
+    paths = ["services/backend/python/src/mod.py"]
+    result = _normalize_git_paths(paths, Path("/mono"), Path("/mono/services/backend/python"))
+    assert result == ["src/mod.py"]
+
+
+def test_normalize_git_paths_empty_list():
+    """Empty input returns empty output."""
+    result = _normalize_git_paths([], Path("/repo"), Path("/repo/sub"))
+    assert result == []
+
+
+@patch("pytest_impacted.git.Repo")
+def test_find_impacted_files_monorepo_branch_mode(mock_repo):
+    """In a monorepo, git-relative paths are converted to CWD-relative."""
+    diff_output = "M\tbackend/src/pkg/module.py\nA\tbackend/tests/test_foo.py\n"
+    mock_repo.return_value = DummyRepo(
+        diff_branch_result=diff_output,
+        working_tree_dir="/monorepo",
+    )
+
+    result = git.find_impacted_files_in_repo(Path("/monorepo/backend"), git.GitMode.BRANCH, "main")
+
+    assert set(result) == {"src/pkg/module.py", "tests/test_foo.py"}
+
+
+@patch("pytest_impacted.git.Repo")
+def test_find_impacted_files_monorepo_unstaged_mode(mock_repo):
+    """In a monorepo, unstaged files are also normalized to CWD-relative paths."""
+    diff1 = MagicMock(a_path="backend/src/module.py", b_path=None, change_type="M")
+    mock_repo.return_value = DummyRepo(
+        dirty=True,
+        diff_result=[diff1],
+        untracked_files=["backend/src/new_file.py"],
+        working_tree_dir="/monorepo",
+    )
+
+    result = git.find_impacted_files_in_repo(Path("/monorepo/backend"), git.GitMode.UNSTAGED, None)
+
+    assert set(result) == {"src/module.py", "src/new_file.py"}
+
+
+@patch("pytest_impacted.git.Repo")
+def test_find_impacted_files_monorepo_files_outside_cwd(mock_repo):
+    """Files in sibling directories are returned as absolute paths."""
+    diff_output = "M\tbackend/src/module.py\nM\tfrontend/app.js\n"
+    mock_repo.return_value = DummyRepo(
+        diff_branch_result=diff_output,
+        working_tree_dir="/monorepo",
+    )
+
+    result = git.find_impacted_files_in_repo(Path("/monorepo/backend"), git.GitMode.BRANCH, "main")
+
+    assert "src/module.py" in result
+    assert "/monorepo/frontend/app.js" in result

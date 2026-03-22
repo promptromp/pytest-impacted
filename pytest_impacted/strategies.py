@@ -124,7 +124,7 @@ class PytestImpactStrategy(ImpactStrategy):
         if not conftest_files:
             return []
 
-        impacted_tests = []
+        impacted_tests: list[str] = []
 
         for conftest_file in conftest_files:
             try:
@@ -139,11 +139,12 @@ class PytestImpactStrategy(ImpactStrategy):
                 continue
 
             # Find all test modules in subdirectories that could be affected
-            for test_module in dep_tree.nodes:
-                if is_test_module(test_module):
-                    # Check if this test module is in a subdirectory of the conftest.py
-                    if self._is_test_affected_by_conftest(test_module, conftest_dir, root_dir):
-                        impacted_tests.append(test_module)
+            impacted_tests.extend(
+                test_module
+                for test_module in dep_tree.nodes
+                if is_test_module(test_module)
+                and self._is_test_affected_by_conftest(test_module, conftest_dir, root_dir)
+            )
 
         return impacted_tests
 

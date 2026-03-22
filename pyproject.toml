@@ -30,7 +30,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "astroid>=3.3.10",
+    "astroid>=4.1.1",
     "click>=8.2.0",
     "gitpython>=3.1.44",
     "networkx>=3.4.2",
@@ -84,6 +84,8 @@ select = [
     "G",  # flake8-logging-format
     "I",  # isort
     "PERF",  # perflint
+    "PLC",  # Pylint (Convention)
+    "SIM",  # flake8-simplify
     "T",  # flake8-debugger
 ]
 

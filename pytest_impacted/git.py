@@ -92,15 +92,14 @@ class Change:
         paths separated by a tab.
 
         """
-        if status is not None and status.startswith(("R", "C")):
+        if status is not None and status.startswith(("R", "C")) and name is not None and "\t" in name:
             # For rename/copy operations, split the name into source and destination
-            if name is not None and "\t" in name:
-                a_path, b_path = name.split("\t", 1)
-                return cls(
-                    a_path=a_path,
-                    b_path=b_path,
-                    status=GitStatus.from_git_diff_name_status(status),
-                )
+            a_path, b_path = name.split("\t", 1)
+            return cls(
+                a_path=a_path,
+                b_path=b_path,
+                status=GitStatus.from_git_diff_name_status(status),
+            )
 
         return cls(
             a_path=name,
@@ -168,6 +167,40 @@ def describe_index_diffs(diffs: list[Diff]) -> None:
         print(f"diff: {str(diff)}")
 
 
+def find_repo(path: str | Path) -> "Repo":
+    """Find the git repository by searching the given path and its parent directories.
+
+    Uses ``search_parent_directories=True`` so the caller does not need to be
+    at the exact git root — essential for monorepo layouts where the Python
+    project lives in a subdirectory.
+    """
+    return Repo(path=Path(path), search_parent_directories=True)
+
+
+def _normalize_git_paths(file_paths: list[str], git_root: Path, working_dir: Path) -> list[str]:
+    """Convert git-root-relative file paths to working-dir-relative paths.
+
+    Git returns paths relative to the repository root.  When *working_dir* differs
+    from *git_root* (monorepo layout), the paths must be rebased so that downstream
+    code calling ``os.path.abspath()`` resolves them correctly.
+
+    Files that fall outside *working_dir* are returned as absolute paths so they
+    can still be matched (though they typically won't belong to any discovered module).
+    """
+    if git_root == working_dir:
+        return file_paths  # Fast path: no conversion needed
+
+    result: list[str] = []
+    for file_path in file_paths:
+        abs_path = git_root / file_path
+        try:
+            result.append(str(abs_path.relative_to(working_dir)))
+        except ValueError:
+            # File is outside the working directory — use absolute path
+            result.append(str(abs_path))
+    return result
+
+
 def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:
     """Find impacted files in the repository. The definition of impacted is dependent on the git mode:
 
@@ -179,7 +212,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         - All files that have been modified in the current branch, relative to the base branch.
         - This does *not* include untracked files as the expectation is that this is used for committed changes.
 
-    :param repo_dir: path to the root of the git repository.
+    :param repo_dir: path to the project directory (may be a subdirectory of the git root).
     :param git_mode: the git mode to use.
     :param base_branch: the base branch to compare against.
 
@@ -192,7 +225,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         )
         return None
 
-    repo = Repo(path=Path(repo_dir))
+    repo = find_repo(repo_dir)
 
     match git_mode:
         case GitMode.UNSTAGED:
@@ -207,7 +240,15 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         case _:
             raise ValueError(f"Invalid git mode: {git_mode}")
 
-    return impacted_files
+    if impacted_files is None:
+        return None
+
+    # Normalize git-root-relative paths to working-dir-relative paths
+    if repo.working_tree_dir is None:
+        return impacted_files
+    git_root = Path(repo.working_tree_dir).resolve()
+    working_dir = Path(repo_dir).resolve()
+    return _normalize_git_paths(impacted_files, git_root, working_dir)
 
 
 def _collect_paths_for_change(item: Change) -> list[str | None]:
