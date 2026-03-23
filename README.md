@@ -27,6 +27,7 @@ pytest --impacted --impacted-module=my_package \
 | :wrench: | **conftest.py aware** | Changes to `conftest.py` automatically impact all tests in scope |
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements.txt`, `pyproject.toml` etc. trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
+| :rocket: | **Rust-accelerated** | Optional Rust extension for 37-65x faster import parsing on large codebases |
 | :shield: | **Helpful errors** | Validates config early with clear messages and suggestions |
 
 > [!CAUTION]
@@ -44,6 +45,12 @@ Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv add pytest-impacted
+```
+
+For **37-65x faster** import parsing on large codebases, install with the optional Rust extension:
+
+```bash
+pip install pytest-impacted[fast]
 ```
 
 Requires **Python 3.11+**.
@@ -88,7 +95,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
-3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/)) extracts import relationships from source files
+3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
 5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
 6. **Test filtering** skips tests whose modules are not in the impact set
@@ -216,6 +223,18 @@ CLI flags override these defaults.
 
 ---
 
+## Performance: Optional Rust Acceleration
+
+For large codebases, install the optional Rust extension to accelerate import parsing by **37-65x**:
+
+```bash
+pip install pytest-impacted[fast]
+```
+
+This installs `pytest-impacted-rs`, a pre-built Rust extension using [ruff's parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing. The extension is automatically detected at runtime — no configuration needed. When unavailable, the pure-Python (astroid) implementation is used.
+
+---
+
 ## Development
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
@@ -232,6 +251,16 @@ uv run python -m pytest --cov=pytest_impacted --cov-branch tests
 
 # Lint + format + type check
 pre-commit run --all-files
+
+# Install with Rust acceleration (pre-built wheels, no Rust toolchain needed)
+pip install pytest-impacted[fast]
+
+# Or build from source (requires Rust toolchain)
+pip install maturin
+cd rust && maturin develop --release
+
+# Run parsing benchmarks
+python -m benchmarks.bench_parsing
 ```
 
 ---

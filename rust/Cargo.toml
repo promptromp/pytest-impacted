@@ -1,0 +1,28 @@
+[package]
+name = "pytest-impacted-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-accelerated import parsing for pytest-impacted (ruff parser + rayon parallelism)"
+license = "MIT"
+homepage = "https://github.com/promptromp/pytest-impacted"
+repository = "https://github.com/promptromp/pytest-impacted"
+
+[lib]
+name = "pytest_impacted_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py311"] }
+rayon = "1.10"
+
+[dependencies.ruff_python_parser]
+git = "https://github.com/astral-sh/ruff"
+tag = "0.15.7"
+
+[dependencies.ruff_python_ast]
+git = "https://github.com/astral-sh/ruff"
+tag = "0.15.7"
+
+[profile.release]
+opt-level = 3
+lto = true

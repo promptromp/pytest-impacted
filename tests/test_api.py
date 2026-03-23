@@ -3,58 +3,56 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 
 
-def test_matches_impacted_tests_positive_match():
-    item_path = "tests/test_example.py"
-    impacted_tests = [
-        "project/module/tests/test_example.py",
-        "project/another_module/tests/test_other.py",
-    ]
-    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is True
-
-
-def test_matches_impacted_tests_no_match():
-    item_path = "tests/test_another.py"
-    impacted_tests = [
-        "project/module/tests/test_example.py",
-        "project/another_module/tests/test_other.py",
-    ]
-    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is False
-
-
-def test_matches_impacted_tests_empty_impacted_list():
-    item_path = "tests/test_example.py"
-    impacted_tests = []
-    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is False
-
-
-def test_matches_impacted_tests_exact_match():
-    item_path = "project/module/tests/test_example.py"
-    impacted_tests = ["project/module/tests/test_example.py"]
-    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is True
-
-
-def test_matches_impacted_tests_substring_not_suffix():
-    item_path = "test_example.py"  # item_path is just 'test_example.py'
-    impacted_tests = ["project/module/tests/test_example.pyc"]  # .pyc instead of .py, so not a suffix
-    assert not matches_impacted_tests(item_path, impacted_tests=impacted_tests)
-
-
-def test_matches_impacted_tests_item_path_longer():
-    item_path = "longer/path/to/tests/test_example.py"
-    impacted_tests = ["tests/test_example.py"]  # impacted_tests is shorter
-    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is False
-
-
-def test_matches_impacted_tests_false_suffix_match():
-    """Test that endswith doesn't false-match on non-boundary suffixes."""
-    item_path = "test_example.py"
-    impacted_tests = ["project/module/tests/foo_test_example.py"]
-    # "foo_test_example.py" ends with "test_example.py" but is NOT the same file
-    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is False
+@pytest.mark.parametrize(
+    ("item_path", "impacted_tests", "expected"),
+    [
+        pytest.param(
+            "tests/test_example.py",
+            ["project/module/tests/test_example.py", "project/another_module/tests/test_other.py"],
+            True,
+            id="suffix_match",
+        ),
+        pytest.param(
+            "tests/test_another.py",
+            ["project/module/tests/test_example.py", "project/another_module/tests/test_other.py"],
+            False,
+            id="no_match",
+        ),
+        pytest.param("tests/test_example.py", [], False, id="empty_impacted_list"),
+        pytest.param(
+            "project/module/tests/test_example.py",
+            ["project/module/tests/test_example.py"],
+            True,
+            id="exact_match",
+        ),
+        pytest.param(
+            "test_example.py",
+            ["project/module/tests/test_example.pyc"],
+            False,
+            id="substring_not_suffix",
+        ),
+        pytest.param(
+            "longer/path/to/tests/test_example.py",
+            ["tests/test_example.py"],
+            False,
+            id="item_path_longer_than_impacted",
+        ),
+        pytest.param(
+            "test_example.py",
+            ["project/module/tests/foo_test_example.py"],
+            False,
+            id="false_suffix_no_boundary",
+        ),
+    ],
+)
+def test_matches_impacted_tests(item_path, impacted_tests, expected):
+    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is expected
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")

@@ -80,6 +80,7 @@ def test_pytest_report_header(pytestconfig):
     assert "impacted_git_mode=unstaged" in header[0]
     assert "impacted_base_branch=main" in header[0]
     assert "impacted_tests_dir=tests" in header[0]
+    assert "backend=" in header[0]
 
 
 def test_validate_config_valid(pytestconfig):

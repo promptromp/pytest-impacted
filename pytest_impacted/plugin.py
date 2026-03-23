@@ -116,13 +116,17 @@ def pytest_configure(config: Config):
 @pytest.hookimpl(tryfirst=True)
 def pytest_report_header(config: Config) -> list[str]:
     """Add pytest-impacted config to pytest header."""
+    from pytest_impacted._rust import RUST_AVAILABLE  # noqa: PLC0415
+
     get_option = partial(get_option_from_config, config)
+    backend = "rust (ruff parser + rayon)" if RUST_AVAILABLE else "python (astroid)"
     header = [
         f"impacted_module={get_option('impacted_module')}",
         f"impacted_git_mode={get_option('impacted_git_mode')}",
         f"impacted_base_branch={get_option('impacted_base_branch')}",
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
+        f"backend={backend}",
     ]
     return [
         "pytest-impacted: " + ", ".join(header),
@@ -163,16 +167,11 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(pytest.mark.skip)
         return
 
-    impacted_items = []
     for item in items:
         item_path = item.location[0]
         if matches_impacted_tests(item_path, impacted_tests=impacted_tests):
-            # notify(f"matched impacted item_path:  {item.location}", session)
             item.add_marker(pytest.mark.impacted)
-            impacted_items.append(item)
         else:
-            # Mark the item as skipped if it is not impacted. This will be used to
-            # let pytest know to skip the test.
             item.add_marker(pytest.mark.skip)
 
 
@@ -273,7 +272,7 @@ def _validate_base_branch(base_branch: str, root_dir: str) -> None:
             suffix = f" Available refs: {branch_list}"
             if len(repo.references) > 10:
                 suffix += ", ..."
-        except Exception:
+        except (AttributeError, TypeError):
             suffix = ""
 
         raise UsageError(

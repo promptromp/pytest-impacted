@@ -16,6 +16,13 @@ This project uses `uv` for dependency and virtualenv management.
 # Install/sync development environment
 uv sync --all-extras --dev
 
+# Install with Rust acceleration (pre-built wheels)
+pip install pytest-impacted[fast]
+
+# Or build Rust extension from source (requires Rust toolchain + maturin)
+pip install maturin
+cd rust && maturin develop --release
+
 # Add a new dependency
 uv add <package_name>
 
@@ -53,7 +60,8 @@ The pipeline: Git identifies changed files → Files converted to Python modules
 - **api.py**: Orchestration layer (`get_impacted_tests`, `matches_impacted_tests`); creates the default composite strategy
 - **strategies.py**: Strategy pattern for impact analysis (see below)
 - **git.py**: Git integration for finding changed files (unstaged changes and branch diffs). Key functions: `find_repo` (wraps `Repo()` with `search_parent_directories=True` for monorepo support), `_normalize_git_paths` (converts git-root-relative paths to working-dir-relative paths), `find_impacted_files_in_repo` (main entry point)
-- **graph.py**: Dependency graph construction and querying using NetworkX; uses `discover_submodules` for filesystem-based module discovery and `parse_file_imports` for AST parsing
+- **graph.py**: Dependency graph construction and querying using NetworkX; uses `discover_submodules` for filesystem-based module discovery and `parse_file_imports` for AST parsing. When the Rust extension is available, `build_dep_tree` uses parallel batch parsing via `_rust_parse_all_imports` instead of sequential astroid parsing
+- **_rust.py**: Safe import wrapper for the optional Rust extension (`pytest_impacted_rs`). Exports `RUST_AVAILABLE` flag and `_rust_parse_file_imports` / `_rust_parse_all_imports` functions
 - **parsing.py**: AST parsing using astroid to extract import relationships. Node classes are imported from `astroid.nodes` (required since astroid v4). Key functions: `parse_file_imports` (reads source files directly, uses `_ModuleProxy` for relative import resolution without importing), `is_module_path`, `is_test_module`, `normalize_path`
 - **traversal.py**: Module discovery and path/module name conversion. Key functions: `_find_non_package_prefix` (detects src-layout by splitting path into non-package prefix and importable root), `_discover_pkgutil_impl` (recursive pkgutil-based discovery that handles non-package prefixes for correct module naming), `discover_submodules` (LRU-cached, with `require_init` parameter: `True` uses `pkgutil.iter_modules` for source packages, `False` uses `Path.rglob` for test directories that may lack `__init__.py`; handles src-layout automatically), `path_to_package_name` (pure path manipulation, no imports), `resolve_files_to_modules`, `resolve_modules_to_files` (requires `ns_module` parameter)
 - **cli.py**: Standalone `impacted-tests` CLI tool (Click-based) for CI integration

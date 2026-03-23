@@ -5,8 +5,29 @@ import types
 
 import networkx as nx
 
+from pytest_impacted._rust import RUST_AVAILABLE
 from pytest_impacted.parsing import is_test_module, parse_file_imports
 from pytest_impacted.traversal import discover_submodules
+
+
+def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
+    """Parse imports for all discovered submodules.
+
+    Uses the Rust extension (parallel batch via rayon) when available,
+    falling back to sequential astroid parsing.
+    """
+    if RUST_AVAILABLE:
+        from pytest_impacted._rust import rust_parse_all_imports  # noqa: PLC0415
+
+        modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
+        return rust_parse_all_imports(modules_info)
+
+    result: dict[str, list[str]] = {}
+    for name, file_path in submodules.items():
+        logging.debug("Processing submodule: %s", name)
+        is_pkg = file_path.endswith("__init__.py")
+        result[name] = parse_file_imports(file_path, name, is_package=is_pkg)
+    return result
 
 
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
@@ -73,16 +94,14 @@ def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.M
 
     logging.debug("Building dependency tree for %d submodules", len(submodules))
 
+    # Parse imports — Rust parallel path or Python sequential fallback
+    all_imports = _parse_all_module_imports(submodules)
+
     digraph = nx.DiGraph()
-    for name, file_path in submodules.items():
-        logging.debug("Processing submodule: %s", name)
+    for name in submodules:
         digraph.add_node(name)
-        is_pkg = file_path.endswith("__init__.py")
-        module_imports = parse_file_imports(file_path, name, is_package=is_pkg)
-        for imp in module_imports:
+        for imp in all_imports.get(name, []):
             if imp in submodules:
-                # Nb. We only care about imports that are also submodules
-                # of the package we are analyzing.
                 digraph.add_node(imp)
                 digraph.add_edge(name, imp)
 

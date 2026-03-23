@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v5
+      uses: astral-sh/setup-uv@v7
       with:
         python-version: "3.13"
         version: "latest"
@@ -29,8 +29,8 @@ jobs:
       run: uv sync --all-extras --dev
     - name: Run ruff lint and formatting checks
       run: |
-        ruff check
-        ruff format --check
+        uv run ruff check
+        uv run ruff format --check
     - name: Run mypy
       run: uv run mypy pytest_impacted
 
@@ -40,16 +40,22 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        backend: ["python", "fast"]
 
+    name: test (${{ matrix.python-version }}, ${{ matrix.backend }})
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v5
+      uses: astral-sh/setup-uv@v7
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"
         enable-cache: true
-    - name: Install the project
+    - name: Install the project (python backend)
+      if: matrix.backend == 'python'
+      run: uv sync --dev
+    - name: Install the project (fast/Rust backend)
+      if: matrix.backend == 'fast'
       run: uv sync --all-extras --dev
     - name: Run tests
       run: uv run pytest

@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import networkx as nx
+import pytest
 
 from pytest_impacted.strategies import (
     DependencyFileImpactStrategy,
@@ -14,48 +15,27 @@ from pytest_impacted.strategies import (
 class TestMatchesDependencyFile:
     """Test the _matches_dependency_file helper function."""
 
-    def test_matches_uv_lock(self):
-        assert _matches_dependency_file("uv.lock") is True
-
-    def test_matches_uv_lock_in_subdirectory(self):
-        assert _matches_dependency_file("project/uv.lock") is True
-
-    def test_matches_requirements_txt(self):
-        assert _matches_dependency_file("requirements.txt") is True
-
-    def test_matches_pyproject_toml(self):
-        assert _matches_dependency_file("pyproject.toml") is True
-
-    def test_matches_pipfile(self):
-        assert _matches_dependency_file("Pipfile") is True
-
-    def test_matches_pipfile_lock(self):
-        assert _matches_dependency_file("Pipfile.lock") is True
-
-    def test_matches_poetry_lock(self):
-        assert _matches_dependency_file("poetry.lock") is True
-
-    def test_matches_setup_py(self):
-        assert _matches_dependency_file("setup.py") is True
-
-    def test_matches_setup_cfg(self):
-        assert _matches_dependency_file("setup.cfg") is True
-
-    def test_matches_nested_requirements(self):
-        assert _matches_dependency_file("requirements/prod.txt") is True
-
-    def test_matches_deeply_nested_requirements(self):
-        assert _matches_dependency_file("requirements/sub/dev.txt") is True
-
-    def test_no_match_regular_py_file(self):
-        assert _matches_dependency_file("src/module.py") is False
-
-    def test_no_match_similar_name(self):
-        """Basename must be exact — 'my_requirements.txt' should not match."""
-        assert _matches_dependency_file("my_requirements.txt") is False
-
-    def test_no_match_non_txt_in_requirements_dir(self):
-        assert _matches_dependency_file("requirements/README.md") is False
+    @pytest.mark.parametrize(
+        ("file_path", "expected"),
+        [
+            pytest.param("uv.lock", True, id="uv_lock"),
+            pytest.param("project/uv.lock", True, id="uv_lock_in_subdirectory"),
+            pytest.param("requirements.txt", True, id="requirements_txt"),
+            pytest.param("pyproject.toml", True, id="pyproject_toml"),
+            pytest.param("Pipfile", True, id="pipfile"),
+            pytest.param("Pipfile.lock", True, id="pipfile_lock"),
+            pytest.param("poetry.lock", True, id="poetry_lock"),
+            pytest.param("setup.py", True, id="setup_py"),
+            pytest.param("setup.cfg", True, id="setup_cfg"),
+            pytest.param("requirements/prod.txt", True, id="nested_requirements"),
+            pytest.param("requirements/sub/dev.txt", True, id="deeply_nested_requirements"),
+            pytest.param("src/module.py", False, id="regular_py_file"),
+            pytest.param("my_requirements.txt", False, id="similar_name_no_match"),
+            pytest.param("requirements/README.md", False, id="non_txt_in_requirements_dir"),
+        ],
+    )
+    def test_matches_dependency_file(self, file_path, expected):
+        assert _matches_dependency_file(file_path) is expected
 
     def test_custom_patterns(self):
         assert _matches_dependency_file("custom.lock", patterns=("custom.lock",), glob_patterns=()) is True
