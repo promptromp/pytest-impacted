@@ -29,8 +29,8 @@ jobs:
       run: uv sync --all-extras --dev
     - name: Run ruff lint and formatting checks
       run: |
-        ruff check
-        ruff format --check
+        uv run ruff check
+        uv run ruff format --check
     - name: Run mypy
       run: uv run mypy pytest_impacted
 
