@@ -2,6 +2,10 @@
 name = "pytest-impacted-rs"
 version = "0.1.0"
 edition = "2021"
+description = "Rust-accelerated import parsing for pytest-impacted (ruff parser + rayon parallelism)"
+license = "MIT"
+homepage = "https://github.com/promptromp/pytest-impacted"
+repository = "https://github.com/promptromp/pytest-impacted"
 
 [lib]
 name = "pytest_impacted_rs"
