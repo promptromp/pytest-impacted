@@ -17,10 +17,10 @@ def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]
     falling back to sequential astroid parsing.
     """
     if RUST_AVAILABLE:
-        from pytest_impacted._rust import _rust_parse_all_imports  # noqa: PLC0415
+        from pytest_impacted._rust import rust_parse_all_imports  # noqa: PLC0415
 
         modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
-        return _rust_parse_all_imports(modules_info)
+        return rust_parse_all_imports(modules_info)
 
     result: dict[str, list[str]] = {}
     for name, file_path in submodules.items():
