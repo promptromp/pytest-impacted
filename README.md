@@ -47,6 +47,12 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add pytest-impacted
 ```
 
+For **37-65x faster** import parsing on large codebases, install with the optional Rust extension:
+
+```bash
+pip install pytest-impacted[fast]
+```
+
 Requires **Python 3.11+**.
 
 ---
