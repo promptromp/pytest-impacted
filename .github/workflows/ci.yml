@@ -40,7 +40,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        backend: ["python", "fast"]
 
+    name: test (${{ matrix.python-version }}, ${{ matrix.backend }})
     steps:
     - uses: actions/checkout@v6
     - name: Install uv and set the python version
@@ -49,7 +51,11 @@ jobs:
         python-version: ${{ matrix.python-version }}
         version: "latest"
         enable-cache: true
-    - name: Install the project
+    - name: Install the project (python backend)
+      if: matrix.backend == 'python'
+      run: uv sync --dev
+    - name: Install the project (fast/Rust backend)
+      if: matrix.backend == 'fast'
       run: uv sync --all-extras --dev
     - name: Run tests
       run: uv run pytest
