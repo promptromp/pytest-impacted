@@ -278,10 +278,11 @@ class DependencyFileImpactStrategy(ImpactStrategy):
 
 
 def get_default_strategies(*, watch_dep_files: bool = True) -> list[ImpactStrategy]:
-    """Return the default strategy list for impact analysis.
+    """Return the default (built-in) strategy list for impact analysis.
 
-    This centralizes the knowledge of which strategies form the default
-    pipeline. Add new strategies here rather than in api.py.
+    This centralizes the knowledge of which built-in strategies form the
+    default pipeline. Third-party extensions are added separately via
+    :func:`~pytest_impacted.extensions.build_strategy_with_extensions`.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),

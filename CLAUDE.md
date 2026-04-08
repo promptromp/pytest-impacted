@@ -57,7 +57,8 @@ The pipeline: Git identifies changed files → Files converted to Python modules
 ### Module Responsibilities
 
 - **plugin.py**: pytest plugin entry point via `pytest11` entry point; handles CLI options, config validation (module name, base branch, tests dir), test collection filtering, and extension option registration
-- **api.py**: Orchestration layer (`get_impacted_tests`, `matches_impacted_tests`); creates the default composite strategy
+- **__init__.py**: Public API exports for extension developers (`ImpactStrategy`, `ConfigOption`, `StrategyProtocol`)
+- **api.py**: Orchestration layer (`get_impacted_tests`, `matches_impacted_tests`); accepts an optional pre-built `strategy` parameter, falling back to built-in defaults when none is provided
 - **extensions.py**: Extension/plugin system for third-party strategies. Provides entry-point-based discovery (`pytest_impacted.strategies` group), `ConfigOption` for declarative config, `StrategyProtocol` for duck-typed strategies, and `build_strategy_with_extensions()` to compose built-in + extension strategies
 - **strategies.py**: Strategy pattern for impact analysis (see below)
 - **git.py**: Git integration for finding changed files (unstaged changes and branch diffs). Key functions: `find_repo` (wraps `Repo()` with `search_parent_directories=True` for monorepo support), `_normalize_git_paths` (converts git-root-relative paths to working-dir-relative paths), `find_impacted_files_in_repo` (main entry point)

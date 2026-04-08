@@ -118,6 +118,9 @@ def get_ext_cli_flag(ext_name: str, opt_name: str) -> str:
     return f"--impacted-ext-{ext_name.replace('_', '-')}-{opt_name.replace('_', '-')}"
 
 
+_REQUIRED_PARAMS = {"changed_files", "impacted_modules", "ns_module"}
+
+
 def _validate_strategy_class(name: str, cls: Any) -> bool:
     """Check whether a loaded class conforms to the strategy interface."""
     if not isinstance(cls, type):
@@ -132,6 +135,24 @@ def _validate_strategy_class(name: str, cls: Any) -> bool:
             cls.__qualname__,
         )
         return False
+
+    # Validate that the method signature has the required parameters
+    try:
+        sig = inspect.signature(cls.find_impacted_tests)
+        param_names = {p for p in sig.parameters if p != "self"}
+        # Accept **kwargs as a catch-all
+        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if not has_var_keyword:
+            missing = _REQUIRED_PARAMS - param_names
+            if missing:
+                logger.warning(
+                    "Extension '%s': find_impacted_tests() is missing required parameters: %s. Skipping.",
+                    name,
+                    ", ".join(sorted(missing)),
+                )
+                return False
+    except (ValueError, TypeError):
+        pass  # Can't inspect signature (e.g. built-in) — allow it through
 
     return True
 
@@ -247,6 +268,7 @@ def load_extensions(
 
         # Extract config for this extension: try namespaced keys first, then raw names
         ext_cfg: dict[str, Any] = {}
+        missing_required: list[str] = []
         for opt in ext.config_options:
             ini_name = get_ext_ini_name(ext.name, opt.name)
             if ini_name in config:
@@ -255,6 +277,16 @@ def load_extensions(
                 ext_cfg[opt.name] = _coerce_value(config[opt.name], opt.type)
             elif opt.default is not None:
                 ext_cfg[opt.name] = opt.default
+            elif opt.required:
+                missing_required.append(opt.name)
+
+        if missing_required:
+            logger.warning(
+                "Extension '%s': missing required config option(s): %s. Skipping.",
+                ext.name,
+                ", ".join(missing_required),
+            )
+            continue
 
         try:
             instance = _instantiate_strategy(ext, ext_cfg)

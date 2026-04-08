@@ -61,10 +61,33 @@ class DuckTypedStrategy:
         return ["tests.test_duck"]
 
 
+class RequiredConfigStrategy(ImpactStrategy):
+    """A strategy with a required config option."""
+
+    config_options = [
+        ConfigOption(name="api_key", help="API key (required)", required=True),
+        ConfigOption(name="timeout", help="Timeout in seconds", type=int, default=30),
+    ]
+
+    def __init__(self, api_key: str, timeout: int = 30):
+        self.api_key = api_key
+        self.timeout = timeout
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+        return ["tests.test_required"]
+
+
 class InvalidStrategy:
     """A class that does not implement find_impacted_tests."""
 
     pass
+
+
+class BadSignatureStrategy:
+    """A strategy with an incompatible find_impacted_tests signature."""
+
+    def find_impacted_tests(self, x):
+        return []
 
 
 class HighPriorityStrategy(ImpactStrategy):
@@ -172,6 +195,18 @@ class TestValidateStrategyClass:
 
     def test_instance_not_class(self):
         assert _validate_strategy_class("test", SimpleStrategy()) is False
+
+    def test_bad_signature_rejected(self):
+        assert _validate_strategy_class("test", BadSignatureStrategy) is False
+
+    def test_kwargs_signature_accepted(self):
+        """A method with **kwargs should pass even without named params."""
+
+        class KwargsOnly:
+            def find_impacted_tests(self, **kwargs):
+                return []
+
+        assert _validate_strategy_class("test", KwargsOnly) is True
 
 
 class TestCoerceValue:
@@ -384,6 +419,33 @@ class TestLoadExtensions:
             _make_mock_entry_point("valid", SimpleStrategy),
         ]
         instances = load_extensions()
+        assert len(instances) == 1
+        assert isinstance(instances[0], SimpleStrategy)
+
+    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+    def test_load_required_config_provided(self, mock_entry_points):
+        """Required config option is provided — extension loads successfully."""
+        mock_entry_points.return_value = [_make_mock_entry_point("req", RequiredConfigStrategy)]
+        instances = load_extensions(ext_config={"impacted_ext_req_api_key": "secret123"})
+        assert len(instances) == 1
+        assert instances[0].api_key == "secret123"
+        assert instances[0].timeout == 30  # default
+
+    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+    def test_load_required_config_missing(self, mock_entry_points):
+        """Required config option is missing — extension is skipped."""
+        mock_entry_points.return_value = [_make_mock_entry_point("req", RequiredConfigStrategy)]
+        instances = load_extensions(ext_config={})
+        assert len(instances) == 0
+
+    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+    def test_load_required_config_missing_does_not_block_others(self, mock_entry_points):
+        """A missing required config skips that extension but loads others."""
+        mock_entry_points.return_value = [
+            _make_mock_entry_point("req", RequiredConfigStrategy),
+            _make_mock_entry_point("simple", SimpleStrategy),
+        ]
+        instances = load_extensions(ext_config={})
         assert len(instances) == 1
         assert isinstance(instances[0], SimpleStrategy)
 

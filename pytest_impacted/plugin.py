@@ -133,11 +133,8 @@ def pytest_addoption(parser: Parser):
             if opt.type is bool:
                 add_kwargs["action"] = "store_true"
             group.addoption(flag, **add_kwargs)
-            parser.addini(
-                ini_name,
-                help=opt.help,
-                default=str(opt.default) if opt.default is not None else None,
-            )
+            ini_default = str(opt.default) if opt.default is not None else None
+            parser.addini(ini_name, help=opt.help, default=ini_default)
 
 
 def pytest_configure(config: Config):
