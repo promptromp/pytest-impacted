@@ -78,7 +78,7 @@ class TestImpactedTestsCLI:
             assert result.exit_code == 0
             mock_configure_logging.assert_called_once_with(verbose=True)
             mock_get_impacted_tests.assert_called_once_with(
-                impacted_git_mode="unstaged",
+                impacted_git_mode=GitMode.UNSTAGED,
                 impacted_base_branch="main",
                 root_dir=".",
                 ns_module="test_ns",
@@ -121,7 +121,7 @@ class TestImpactedTestsCLI:
 
             assert result.exit_code == 0
             mock_get_impacted_tests.assert_called_once_with(
-                impacted_git_mode="branch",
+                impacted_git_mode=GitMode.BRANCH,
                 impacted_base_branch="develop",
                 root_dir=".",
                 ns_module="test_ns",
