@@ -3,12 +3,14 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import networkx as nx
 from click.testing import CliRunner
 
+from pytest_impacted import resolve_impacted_tests
 from pytest_impacted.cli import impacted_tests_cli
 from pytest_impacted.extensions import ConfigOption, clear_extension_cache
 from pytest_impacted.plugin import pytest_report_header
-from pytest_impacted.strategies import ImpactStrategy
+from pytest_impacted.strategies import CompositeImpactStrategy, ImpactStrategy
 
 
 class SimpleTestStrategy(ImpactStrategy):
@@ -96,6 +98,71 @@ class TestExtensionPluginIntegration:
 
         result = pytester.runpytest("-v")
         assert not any("extensions=" in line for line in result.outlines)
+
+
+class TestDepTreePassThrough:
+    """Test that dep_tree is built once and passed to all strategies."""
+
+    def test_composite_passes_dep_tree_to_all_strategies(self):
+        """CompositeImpactStrategy builds dep_tree once and shares it."""
+        received_trees: list[nx.DiGraph | None] = []
+
+        class CapturingStrategy(ImpactStrategy):
+            def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+                received_trees.append(kwargs.get("dep_tree"))
+                return []
+
+        composite = CompositeImpactStrategy([CapturingStrategy(), CapturingStrategy()])
+
+        # Build a dep_tree and pass it explicitly
+        graph = nx.DiGraph()
+        graph.add_node("mypackage.core")
+        composite.find_impacted_tests(
+            changed_files=["src/core.py"],
+            impacted_modules=["mypackage.core"],
+            ns_module="mypackage",
+            dep_tree=graph,
+        )
+
+        # Both strategies should have received the same dep_tree
+        assert len(received_trees) == 2
+        assert received_trees[0] is graph
+        assert received_trees[1] is graph
+
+    def test_strategy_receives_dep_tree_with_nodes(self):
+        """A strategy can use the dep_tree to query the dependency graph."""
+
+        class CustomStrategy(ImpactStrategy):
+            def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+                dep_tree = kwargs.get("dep_tree")
+                if dep_tree is None:
+                    return []
+                # Use the public resolve_impacted_tests utility
+                return resolve_impacted_tests(impacted_modules, dep_tree)
+
+        # Build a realistic dep graph (inverted import direction):
+        # core is depended on by api, api is depended on by test_api
+        graph = nx.DiGraph()
+        graph.add_edge("mypackage.core", "mypackage.api")
+        graph.add_edge("mypackage.api", "tests.test_api")
+
+        strategy = CustomStrategy()
+        result = strategy.find_impacted_tests(
+            changed_files=["mypackage/core.py"],
+            impacted_modules=["mypackage.core"],
+            ns_module="mypackage",
+            dep_tree=graph,
+        )
+
+        # Changing core should impact test_api (via api -> core dependency chain)
+        assert "tests.test_api" in result
+
+    def test_resolve_impacted_tests_importable_from_package(self):
+        """resolve_impacted_tests should be importable from pytest_impacted."""
+        graph = nx.DiGraph()
+        graph.add_edge("mypackage.foo", "tests.test_foo")
+        result = resolve_impacted_tests(["mypackage.foo"], graph)
+        assert "tests.test_foo" in result
 
 
 class TestExtensionCLIIntegration:

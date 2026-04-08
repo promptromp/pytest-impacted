@@ -77,9 +77,11 @@ Impact analysis uses a strategy-based architecture defined in `strategies.py`:
 - **`ASTImpactStrategy`**: Default strategy using AST parsing and dependency graph traversal
 - **`PytestImpactStrategy`**: Extends AST analysis with pytest-specific handling—when `conftest.py` files change, all tests in the same directory and subdirectories are considered impacted
 - **`DependencyFileImpactStrategy`**: Detects changes in dependency/config files (`uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg`, `requirements/*.txt`) and marks all test modules as impacted. Accepts custom patterns via constructor. Enabled by default; disable with `--no-impacted-dep-files`
-- **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results
+- **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results. Builds the dependency graph once via `_cached_build_dep_tree` and passes it as `dep_tree` to all sub-strategies
 
 The default strategy composition is built by `get_default_strategies()` in `strategies.py` and wrapped in `CompositeImpactStrategy` by `api.py`. The orchestrator (`api.py`) has no strategy-specific logic—it always passes `changed_files` and `impacted_modules` (which may be empty) to the composite, and each strategy decides what to do. This means strategies like `DependencyFileImpactStrategy` that operate on non-Python files work naturally without special-casing in the orchestrator.
+
+All strategies receive a required keyword-only `dep_tree: nx.DiGraph` parameter containing the pre-built dependency graph. The graph is built once by the orchestration layer (`api.py`) and passed through `CompositeImpactStrategy` to all sub-strategies, avoiding redundant construction. The `resolve_impacted_tests` utility from `graph.py` is exported via `__init__.py` for use by extension developers.
 
 Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation (also clears `discover_submodules` cache).
 
@@ -94,7 +96,7 @@ Third-party packages can register custom strategies via Python entry points in t
 - **`load_extensions()`**: Instantiates discovered strategies with config, using `inspect.signature` to pass matching constructor params
 - **`build_strategy_with_extensions()`**: Main builder—combines `get_default_strategies()` + extensions, sorts by priority, wraps in `CompositeImpactStrategy`
 
-Extension config options are auto-registered as CLI flags (`--impacted-ext-{name}-{option}`) and ini values (`impacted_ext_{name}_{option}`). Extensions can be disabled with `--impacted-disable-ext {name}` (repeatable). The `__init__.py` exports `ImpactStrategy`, `ConfigOption`, and `StrategyProtocol` as the public API for extension developers.
+Extension config options are auto-registered as CLI flags (`--impacted-ext-{name}-{option}`) and ini values (`impacted_ext_{name}_{option}`). Extensions can be disabled with `--impacted-disable-ext {name}` (repeatable). The `__init__.py` exports `ImpactStrategy`, `ConfigOption`, `StrategyProtocol`, and `resolve_impacted_tests` as the public API for extension developers. Strategies receive the pre-built dependency graph as `dep_tree` and can use `resolve_impacted_tests(modules, dep_tree)` for standard graph traversal.
 
 ### Test Structure
 

@@ -175,12 +175,14 @@ An extension is a standard Python package that registers a strategy class via th
 
 ```python
 # my_extension/strategy.py
-from pytest_impacted import ImpactStrategy
+from pytest_impacted import ImpactStrategy, resolve_impacted_tests
 
 class MyStrategy(ImpactStrategy):
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
-        # Custom impact analysis logic
-        return ["tests.test_something"]
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
+        # dep_tree is the pre-built dependency graph (nx.DiGraph), shared across strategies
+        if dep_tree is not None:
+            return resolve_impacted_tests(impacted_modules, dep_tree)
+        return []
 ```
 
 ```toml
@@ -213,8 +215,8 @@ class CoverageStrategy(ImpactStrategy):
         self.coverage_file = coverage_file
         self.threshold = threshold
 
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
-        # Use self.coverage_file and self.threshold
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
+        # dep_tree is the pre-built dependency graph; use self.coverage_file and self.threshold
         ...
 ```
 
@@ -245,7 +247,8 @@ Extensions don't need to inherit from `ImpactStrategy`. Any class with a `find_i
 ```python
 # No import from pytest_impacted at all!
 class MyLightweightStrategy:
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
+        # dep_tree is an nx.DiGraph when provided by the pipeline
         return [...]
 ```
 
@@ -294,6 +297,25 @@ class LateStrategy(ImpactStrategy):
 
 !!! note
     Since `CompositeImpactStrategy` unions all results, execution order rarely matters for correctness. Priority is mainly useful if an extension needs to set up shared state or log information before others run.
+
+### Dependency Graph Access
+
+All strategies receive the pre-built dependency graph as a required keyword-only argument `dep_tree: nx.DiGraph`. The graph is built once by the orchestration layer and passed through `CompositeImpactStrategy` to all sub-strategies, so the expensive graph construction is shared across the pipeline.
+
+The `resolve_impacted_tests` utility is exported from the package root for extensions that want standard graph traversal:
+
+```python
+from pytest_impacted import ImpactStrategy, resolve_impacted_tests
+
+class MyStrategy(ImpactStrategy):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        # Standard traversal: find test modules that transitively depend on changed modules
+        base_tests = resolve_impacted_tests(impacted_modules, dep_tree)
+        # Add custom logic on top...
+        return base_tests
+```
+
+The dependency graph uses inverted edge direction: edges point from imported module to its dependents (e.g. `core -> api -> test_api`). This means `nx.dfs_preorder_nodes(dep_tree, source="core")` finds all modules that transitively depend on `core`.
 
 ### Error Handling
 

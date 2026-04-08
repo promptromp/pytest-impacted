@@ -97,6 +97,8 @@ class StrategyProtocol(Protocol):
         tests_package: str | None = ...,
         root_dir: Path | None = ...,
         session: Any = ...,
+        *,
+        dep_tree: Any,
     ) -> list[str]: ...
 
 

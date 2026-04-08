@@ -125,7 +125,7 @@ my_strategy = "my_package.strategy:MyCustomStrategy"
 ```
 
 ```python
-from pytest_impacted import ImpactStrategy, ConfigOption
+from pytest_impacted import ImpactStrategy, ConfigOption, resolve_impacted_tests
 
 class MyCustomStrategy(ImpactStrategy):
     config_options = [
@@ -135,9 +135,12 @@ class MyCustomStrategy(ImpactStrategy):
     def __init__(self, threshold: int = 80):
         self.threshold = threshold
 
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
-        # your logic here
-        ...
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
+        # dep_tree is the pre-built dependency graph (nx.DiGraph), shared across all strategies
+        # resolve_impacted_tests provides standard graph traversal
+        if dep_tree is not None:
+            return resolve_impacted_tests(impacted_modules, dep_tree)
+        return []
 ```
 
 Users can configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`. See [Usage Guide](https://promptromp.github.io/pytest-impacted/usage/) for details.
