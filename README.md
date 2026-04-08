@@ -114,16 +114,38 @@ Impact analysis is pluggable via a strategy pattern. The default pipeline combin
 
 All strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. Dependency file detection is enabled by default and can be disabled with `--no-impacted-dep-files`.
 
-You can also supply a custom strategy via the `get_impacted_tests()` API:
+#### Custom Strategy Extensions
+
+Third-party packages can register custom strategies as installable plugins via Python entry points. Once installed, they are automatically discovered and composed into the analysis pipeline:
+
+```toml
+# In your extension's pyproject.toml
+[project.entry-points."pytest_impacted.strategies"]
+my_strategy = "my_package.strategy:MyCustomStrategy"
+```
 
 ```python
-from pytest_impacted.api import get_impacted_tests
-from pytest_impacted.strategies import ImpactStrategy
+from pytest_impacted import ImpactStrategy, ConfigOption
 
 class MyCustomStrategy(ImpactStrategy):
+    config_options = [
+        ConfigOption(name="threshold", help="Min score to consider", type=int, default=80),
+    ]
+
+    def __init__(self, threshold: int = 80):
+        self.threshold = threshold
+
     def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
         # your logic here
         ...
+```
+
+Users can configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`. See [Usage Guide](https://promptromp.github.io/pytest-impacted/usage/) for details.
+
+You can also supply a custom strategy programmatically via the `get_impacted_tests()` API:
+
+```python
+from pytest_impacted.api import get_impacted_tests
 
 impacted = get_impacted_tests(
     impacted_git_mode="branch",
@@ -210,6 +232,7 @@ CLI flags override these defaults.
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
+| `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
 ---
 

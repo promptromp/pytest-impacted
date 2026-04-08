@@ -1,9 +1,14 @@
 """Impact analysis strategies."""
 
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+
+if TYPE_CHECKING:
+    from pytest_impacted.extensions import ConfigOption
 
 import networkx as nx
 
@@ -84,7 +89,18 @@ def clear_dep_tree_cache() -> None:
 
 
 class ImpactStrategy(ABC):
-    """Abstract base class for impact analysis strategies."""
+    """Abstract base class for impact analysis strategies.
+
+    Third-party extensions can subclass this and register via entry points.
+    See :mod:`pytest_impacted.extensions` for the plugin system.
+
+    Class-level attributes for extensions:
+        config_options: Declare configuration options the strategy accepts.
+        priority: Ordering weight (lower = runs earlier, default = 100).
+    """
+
+    config_options: ClassVar[list[ConfigOption]] = []
+    priority: ClassVar[int] = 100
 
     @abstractmethod
     def find_impacted_tests(

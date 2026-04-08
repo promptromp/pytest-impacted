@@ -2,12 +2,13 @@
 
 import logging
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from click.testing import CliRunner
 
 from pytest_impacted.cli import configure_logging, impacted_tests_cli
 from pytest_impacted.git import GitMode
+from pytest_impacted.strategies import CompositeImpactStrategy
 
 
 class TestConfigureLogging:
@@ -77,13 +78,15 @@ class TestImpactedTestsCLI:
             assert result.exit_code == 0
             mock_configure_logging.assert_called_once_with(verbose=True)
             mock_get_impacted_tests.assert_called_once_with(
-                impacted_git_mode=GitMode.UNSTAGED,
+                impacted_git_mode="unstaged",
                 impacted_base_branch="main",
                 root_dir=".",
                 ns_module="test_ns",
                 tests_dir=None,
-                watch_dep_files=True,
+                strategy=ANY,
             )
+            call_kwargs = mock_get_impacted_tests.call_args[1]
+            assert isinstance(call_kwargs["strategy"], CompositeImpactStrategy)
 
             # Check that the impacted tests are printed to stdout
             assert "tests/test_example.py" in result.output
@@ -118,12 +121,12 @@ class TestImpactedTestsCLI:
 
             assert result.exit_code == 0
             mock_get_impacted_tests.assert_called_once_with(
-                impacted_git_mode=GitMode.BRANCH,
+                impacted_git_mode="branch",
                 impacted_base_branch="develop",
                 root_dir=".",
                 ns_module="test_ns",
                 tests_dir="tests",
-                watch_dep_files=True,
+                strategy=ANY,
             )
 
     @patch("pytest_impacted.cli.get_impacted_tests")
@@ -270,7 +273,7 @@ class TestImpactedTestsCLI:
                 root_dir=".",  # default
                 ns_module="test_ns",
                 tests_dir=None,  # default
-                watch_dep_files=True,  # default
+                strategy=ANY,  # CompositeImpactStrategy with extensions
             )
 
     @patch("pytest_impacted.cli.get_impacted_tests")

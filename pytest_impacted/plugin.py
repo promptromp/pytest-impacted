@@ -1,10 +1,17 @@
 import os
 from functools import partial
+from typing import Any
 
 import pytest
 from pytest import Config, Parser, UsageError
 
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
+from pytest_impacted.extensions import (
+    build_strategy_with_extensions,
+    discover_extension_metadata,
+    get_ext_cli_flag,
+    get_ext_ini_name,
+)
 from pytest_impacted.git import GIT_AVAILABLE, GitMode, find_repo
 
 
@@ -98,6 +105,40 @@ def pytest_addoption(parser: Parser):
         default=False,
     )
 
+    # Extension management
+    group.addoption(
+        "--impacted-disable-ext",
+        action="append",
+        default=[],
+        dest="impacted_disable_ext",
+        help="Disable a strategy extension by name (repeatable).",
+    )
+    parser.addini(
+        "impacted_disable_ext",
+        help="Strategy extensions to disable",
+        type="args",
+        default=[],
+    )
+
+    # Register config options from discovered extensions
+    for ext in discover_extension_metadata():
+        for opt in ext.config_options:
+            flag = get_ext_cli_flag(ext.name, opt.name)
+            ini_name = get_ext_ini_name(ext.name, opt.name)
+            add_kwargs: dict[str, Any] = {
+                "default": None,
+                "dest": ini_name,
+                "help": f"[ext:{ext.name}] {opt.help}",
+            }
+            if opt.type is bool:
+                add_kwargs["action"] = "store_true"
+            group.addoption(flag, **add_kwargs)
+            parser.addini(
+                ini_name,
+                help=opt.help,
+                default=str(opt.default) if opt.default is not None else None,
+            )
+
 
 def pytest_configure(config: Config):
     """pytest hook to configure the plugin.
@@ -120,6 +161,7 @@ def pytest_report_header(config: Config) -> list[str]:
 
     get_option = partial(get_option_from_config, config)
     backend = "rust (ruff parser + rayon)" if RUST_AVAILABLE else "python (astroid)"
+    ext_names = [e.name for e in discover_extension_metadata()]
     header = [
         f"impacted_module={get_option('impacted_module')}",
         f"impacted_git_mode={get_option('impacted_git_mode')}",
@@ -128,6 +170,8 @@ def pytest_report_header(config: Config) -> list[str]:
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
         f"backend={backend}",
     ]
+    if ext_names:
+        header.append(f"extensions={','.join(ext_names)}")
     return [
         "pytest-impacted: " + ", ".join(header),
     ]
@@ -152,6 +196,14 @@ def pytest_collection_modifyitems(session, config, items):
     no_dep_files = get_option("no_impacted_dep_files")
     root_dir = config.rootdir
 
+    disabled_ext = get_option("impacted_disable_ext") or []
+    ext_config = _collect_ext_config(config)
+    strategy = build_strategy_with_extensions(
+        watch_dep_files=not no_dep_files,
+        disabled=disabled_ext,
+        ext_config=ext_config,
+    )
+
     impacted_tests = get_impacted_tests(
         impacted_git_mode=impacted_git_mode,
         impacted_base_branch=impacted_base_branch,
@@ -159,7 +211,7 @@ def pytest_collection_modifyitems(session, config, items):
         ns_module=ns_module,
         tests_dir=impacted_tests_dir,
         session=session,
-        watch_dep_files=not no_dep_files,
+        strategy=strategy,
     )
     if not impacted_tests:
         # skip all tests
@@ -240,6 +292,18 @@ def _validate_module(module_name: str) -> None:
         f"Module '{module_name}' not found (no '{module_dir}/' directory in the current working directory). "
         f"Make sure --impacted-module is a valid Python package name and you are running from the project root."
     )
+
+
+def _collect_ext_config(config: Config) -> dict[str, Any]:
+    """Collect all extension config values from pytest config."""
+    ext_config: dict[str, Any] = {}
+    for ext in discover_extension_metadata():
+        for opt in ext.config_options:
+            ini_name = get_ext_ini_name(ext.name, opt.name)
+            value = get_option_from_config(config, ini_name)
+            if value is not None:
+                ext_config[ini_name] = value
+    return ext_config
 
 
 def _validate_tests_dir(tests_dir: str) -> None:

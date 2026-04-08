@@ -163,6 +163,148 @@ impacted = get_impacted_tests(
 )
 ```
 
+## Strategy Extensions (Plugin System)
+
+Third-party packages can register custom strategies as installable plugins. Once installed, they are automatically discovered and composed into the analysis pipeline alongside the built-in strategies.
+
+### Creating an Extension
+
+An extension is a standard Python package that registers a strategy class via the `pytest_impacted.strategies` entry point group.
+
+#### Minimal Extension (No Configuration)
+
+```python
+# my_extension/strategy.py
+from pytest_impacted import ImpactStrategy
+
+class MyStrategy(ImpactStrategy):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+        # Custom impact analysis logic
+        return ["tests.test_something"]
+```
+
+```toml
+# pyproject.toml for the extension package
+[project]
+name = "pytest-impacted-my-extension"
+dependencies = ["pytest-impacted>=0.19"]
+
+[project.entry-points."pytest_impacted.strategies"]
+my_extension = "my_extension.strategy:MyStrategy"
+```
+
+The entry point name (`my_extension`) is the user-facing identifier used for enabling/disabling the extension.
+
+#### Extension with Configuration
+
+Extensions can declare configuration options that are automatically registered as CLI flags and ini settings:
+
+```python
+from pytest_impacted import ImpactStrategy, ConfigOption
+
+class CoverageStrategy(ImpactStrategy):
+    config_options = [
+        ConfigOption(name="coverage_file", help="Path to .coverage file", default=".coverage"),
+        ConfigOption(name="threshold", help="Minimum coverage %% to consider", type=int, default=80),
+    ]
+    priority = 50  # Lower = runs earlier (default is 100)
+
+    def __init__(self, coverage_file: str = ".coverage", threshold: int = 80):
+        self.coverage_file = coverage_file
+        self.threshold = threshold
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+        # Use self.coverage_file and self.threshold
+        ...
+```
+
+Config options are automatically namespaced to avoid collisions:
+
+- **CLI flag**: `--impacted-ext-{extension_name}-{option_name}` (hyphens)
+- **ini setting**: `impacted_ext_{extension_name}_{option_name}` (underscores)
+
+For the example above:
+
+```bash
+pytest --impacted --impacted-ext-coverage-threshold 90
+```
+
+```toml
+[tool.pytest.ini_options]
+impacted_ext_coverage_threshold = "90"
+impacted_ext_coverage_coverage_file = ".coverage.ci"
+```
+
+!!! tip
+    The `ConfigOption` dataclass supports `str`, `bool`, `int`, and `float` types. Values from config files are automatically coerced to the declared type.
+
+#### Duck-Typed Extensions (Zero Dependency)
+
+Extensions don't need to inherit from `ImpactStrategy`. Any class with a `find_impacted_tests` method works:
+
+```python
+# No import from pytest_impacted at all!
+class MyLightweightStrategy:
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+        return [...]
+```
+
+This is validated at runtime using the `StrategyProtocol` (a `typing.Protocol`).
+
+### Using Extensions
+
+Once installed, extensions are automatically discovered and added to the strategy pipeline. No additional configuration is needed beyond installing the package.
+
+#### Disabling Extensions
+
+To disable a specific extension, use `--impacted-disable-ext` (repeatable):
+
+```bash
+pytest --impacted --impacted-disable-ext my_extension
+```
+
+Or in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+impacted_disable_ext = ["my_extension"]
+```
+
+#### Viewing Loaded Extensions
+
+Extensions are listed in the pytest report header:
+
+```
+pytest-impacted: ..., extensions=my_extension,coverage
+```
+
+### Extension Priority
+
+Extensions can declare a `priority` class variable to control execution order. Lower values run earlier. The default priority is `100`. Built-in strategies always run first, followed by extensions sorted by priority.
+
+```python
+class EarlyStrategy(ImpactStrategy):
+    priority = 10  # Runs before other extensions
+    ...
+
+class LateStrategy(ImpactStrategy):
+    priority = 200  # Runs after other extensions
+    ...
+```
+
+!!! note
+    Since `CompositeImpactStrategy` unions all results, execution order rarely matters for correctness. Priority is mainly useful if an extension needs to set up shared state or log information before others run.
+
+### Error Handling
+
+The extension system is designed to be fault-tolerant:
+
+- **Import errors**: If an extension package fails to import, it is skipped with a warning log. Other extensions and built-in strategies continue to work.
+- **Instantiation errors**: If a strategy's `__init__` raises an exception, the extension is skipped.
+- **Invalid classes**: If an entry point resolves to a class without `find_impacted_tests`, it is skipped with a warning.
+
+Extensions never prevent the core pytest-impacted functionality from working.
+
 ## CI Integration
 
 For CI pipelines where git analysis and test execution happen in separate stages, use the standalone `impacted-tests` CLI:
@@ -214,6 +356,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
+| `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
 ## How It Works (Pipeline)
 
