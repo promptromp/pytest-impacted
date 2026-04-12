@@ -1,9 +1,14 @@
 """Impact analysis strategies."""
 
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+
+if TYPE_CHECKING:
+    from pytest_impacted.extensions import ConfigOption
 
 import networkx as nx
 
@@ -31,7 +36,7 @@ DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
 )
 
 
-def _matches_dependency_file(
+def matches_dependency_file(
     file_path: str,
     patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
     glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
@@ -49,11 +54,11 @@ def has_dependency_file_changes(
     glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
 ) -> bool:
     """Check if any changed files are dependency/configuration files."""
-    return any(_matches_dependency_file(f, patterns, glob_patterns) for f in changed_files)
+    return any(matches_dependency_file(f, patterns, glob_patterns) for f in changed_files)
 
 
 @lru_cache(maxsize=8)
-def _cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> nx.DiGraph:
+def cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
     Args:
@@ -79,12 +84,23 @@ def clear_dep_tree_cache() -> None:
     after code changes during development. Also clears discovery caches
     since stale submodule data would produce stale dependency trees.
     """
-    _cached_build_dep_tree.cache_clear()
+    cached_build_dep_tree.cache_clear()
     discover_submodules.cache_clear()
 
 
 class ImpactStrategy(ABC):
-    """Abstract base class for impact analysis strategies."""
+    """Abstract base class for impact analysis strategies.
+
+    Third-party extensions can subclass this and register via entry points.
+    See :mod:`pytest_impacted.extensions` for the plugin system.
+
+    Class-level attributes for extensions:
+        config_options: Declare configuration options the strategy accepts.
+        priority: Ordering weight (lower = runs earlier, default = 100).
+    """
+
+    config_options: ClassVar[list[ConfigOption]] = []
+    priority: ClassVar[int] = 100
 
     @abstractmethod
     def find_impacted_tests(
@@ -95,6 +111,8 @@ class ImpactStrategy(ABC):
         tests_package: str | None = None,
         root_dir: Path | None = None,
         session: Any = None,
+        *,
+        dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Find test modules impacted by the given changed files and modules.
 
@@ -105,6 +123,10 @@ class ImpactStrategy(ABC):
             tests_package: Optional tests package name
             root_dir: Root directory of the repository
             session: Optional pytest session object
+            dep_tree: Pre-built dependency graph (NetworkX DiGraph). Built once by
+                :class:`CompositeImpactStrategy` and shared across all strategies
+                in the pipeline. Use :func:`~pytest_impacted.graph.resolve_impacted_tests`
+                for standard graph traversal.
 
         Returns:
             List of impacted test module names
@@ -123,9 +145,10 @@ class ASTImpactStrategy(ImpactStrategy):
         tests_package: str | None = None,
         root_dir: Path | None = None,
         session: Any = None,
+        *,
+        dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Find impacted tests using AST dependency graph analysis."""
-        dep_tree = _cached_build_dep_tree(ns_module, tests_package=tests_package)
         return resolve_impacted_tests(impacted_modules, dep_tree)
 
 
@@ -140,10 +163,11 @@ class PytestImpactStrategy(ImpactStrategy):
         tests_package: str | None = None,
         root_dir: Path | None = None,
         session: Any = None,
+        *,
+        dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Find impacted tests including pytest-specific dependencies."""
         # Start with AST-based analysis
-        dep_tree = _cached_build_dep_tree(ns_module, tests_package=tests_package)
         impacted_tests = resolve_impacted_tests(impacted_modules, dep_tree)
 
         # Add conftest.py impact analysis
@@ -240,16 +264,15 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         tests_package: str | None = None,
         root_dir: Path | None = None,
         session: Any = None,
+        *,
+        dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Return all test modules if dependency files have changed."""
         if not has_dependency_file_changes(changed_files, self.patterns, self.glob_patterns):
             return []
-
-        # Build the dep tree to discover all test modules
-        dep_tree = _cached_build_dep_tree(ns_module, tests_package=tests_package)
         all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
 
-        dep_files = [f for f in changed_files if _matches_dependency_file(f, self.patterns, self.glob_patterns)]
+        dep_files = [f for f in changed_files if matches_dependency_file(f, self.patterns, self.glob_patterns)]
         from pytest_impacted.display import notify  # noqa: PLC0415
 
         notify(
@@ -262,10 +285,11 @@ class DependencyFileImpactStrategy(ImpactStrategy):
 
 
 def get_default_strategies(*, watch_dep_files: bool = True) -> list[ImpactStrategy]:
-    """Return the default strategy list for impact analysis.
+    """Return the default (built-in) strategy list for impact analysis.
 
-    This centralizes the knowledge of which strategies form the default
-    pipeline. Add new strategies here rather than in api.py.
+    This centralizes the knowledge of which built-in strategies form the
+    default pipeline. Third-party extensions are added separately via
+    :func:`~pytest_impacted.extensions.build_strategy_with_extensions`.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),
@@ -291,8 +315,14 @@ class CompositeImpactStrategy(ImpactStrategy):
         tests_package: str | None = None,
         root_dir: Path | None = None,
         session: Any = None,
+        *,
+        dep_tree: nx.DiGraph,
     ) -> list[str]:
-        """Find impacted tests by applying all strategies and combining results."""
+        """Find impacted tests by applying all strategies and combining results.
+
+        Passes the shared ``dep_tree`` to all sub-strategies so the expensive
+        graph construction happens only once in the pipeline.
+        """
         all_impacted = []
 
         for strategy in self.strategies:
@@ -303,6 +333,7 @@ class CompositeImpactStrategy(ImpactStrategy):
                 tests_package=tests_package,
                 root_dir=root_dir,
                 session=session,
+                dep_tree=dep_tree,
             )
             all_impacted.extend(strategy_results)
 

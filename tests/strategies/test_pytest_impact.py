@@ -17,14 +17,12 @@ class TestPytestImpactStrategy:
         self.temp_dir = tempfile.mkdtemp()
         self.root_dir = Path(self.temp_dir)
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
     @patch("pytest_impacted.strategies.resolve_impacted_tests")
     @patch("pytest_impacted.strategies.is_test_module")
-    def test_find_impacted_tests_no_conftest(self, mock_is_test, mock_resolve, mock_build_tree):
+    def test_find_impacted_tests_no_conftest(self, mock_is_test, mock_resolve):
         """Test strategy when no conftest.py files are changed."""
         mock_dep_tree = MagicMock()
         mock_dep_tree.nodes = ["test_module_a", "module_b"]
-        mock_build_tree.return_value = mock_dep_tree
         mock_resolve.return_value = ["test_module_a"]
         mock_is_test.side_effect = lambda x: x.startswith("test_")
 
@@ -35,16 +33,15 @@ class TestPytestImpactStrategy:
             ns_module="mypackage",
             tests_package="tests",
             root_dir=self.root_dir,
+            dep_tree=mock_dep_tree,
         )
 
         assert result == ["test_module_a"]
-        mock_build_tree.assert_called_once()
         mock_resolve.assert_called_once()
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
     @patch("pytest_impacted.strategies.resolve_impacted_tests")
     @patch("pytest_impacted.strategies.is_test_module")
-    def test_find_impacted_tests_with_conftest(self, mock_is_test, mock_resolve, mock_build_tree):
+    def test_find_impacted_tests_with_conftest(self, mock_is_test, mock_resolve):
         """Test strategy when conftest.py files are changed."""
         # Create test directory structure
         test_dir = self.root_dir / "tests"
@@ -60,7 +57,6 @@ class TestPytestImpactStrategy:
 
         mock_dep_tree = MagicMock()
         mock_dep_tree.nodes = ["tests.subdir.test_example", "tests.test_other", "module_b"]
-        mock_build_tree.return_value = mock_dep_tree
         mock_resolve.return_value = []  # No AST-based impacts
         mock_is_test.side_effect = lambda x: x.startswith("tests.") and "test_" in x
 
@@ -71,6 +67,7 @@ class TestPytestImpactStrategy:
             ns_module="mypackage",
             tests_package="tests",
             root_dir=self.root_dir,
+            dep_tree=mock_dep_tree,
         )
 
         # Should include test modules affected by conftest.py

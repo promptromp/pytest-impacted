@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import networkx as nx
+
 from pytest_impacted.strategies import (
     ASTImpactStrategy,
     CompositeImpactStrategy,
@@ -17,34 +19,29 @@ class TestCompositeImpactStrategy:
 
     def test_find_impacted_tests_combines_strategies(self):
         """Test that composite strategy combines results from multiple strategies."""
-        # Create mock strategies
         strategy1 = MagicMock(spec=ImpactStrategy)
         strategy1.find_impacted_tests.return_value = ["test_a", "test_b"]
 
         strategy2 = MagicMock(spec=ImpactStrategy)
         strategy2.find_impacted_tests.return_value = ["test_b", "test_c"]
 
+        dep_tree = nx.DiGraph()
         composite = CompositeImpactStrategy([strategy1, strategy2])
         result = composite.find_impacted_tests(
             changed_files=["src/module.py"],
             impacted_modules=["module"],
             ns_module="mypackage",
+            dep_tree=dep_tree,
         )
 
         # Should combine and deduplicate results
         assert sorted(result) == ["test_a", "test_b", "test_c"]
 
-        # Both strategies should have been called with the same parameters
-        expected_call_args = {
-            "changed_files": ["src/module.py"],
-            "impacted_modules": ["module"],
-            "ns_module": "mypackage",
-            "tests_package": None,
-            "root_dir": None,
-            "session": None,
-        }
-        strategy1.find_impacted_tests.assert_called_once_with(**expected_call_args)
-        strategy2.find_impacted_tests.assert_called_once_with(**expected_call_args)
+        # Both strategies should receive the same dep_tree instance
+        dep_tree_1 = strategy1.find_impacted_tests.call_args[1]["dep_tree"]
+        dep_tree_2 = strategy2.find_impacted_tests.call_args[1]["dep_tree"]
+        assert dep_tree_1 is dep_tree
+        assert dep_tree_2 is dep_tree
 
     def test_find_impacted_tests_empty_strategies(self):
         """Test composite strategy with no sub-strategies."""
@@ -53,6 +50,7 @@ class TestCompositeImpactStrategy:
             changed_files=["src/module.py"],
             impacted_modules=["module"],
             ns_module="mypackage",
+            dep_tree=nx.DiGraph(),
         )
         assert result == []
 
@@ -66,6 +64,7 @@ class TestCompositeImpactStrategy:
             changed_files=["src/module.py"],
             impacted_modules=["module"],
             ns_module="mypackage",
+            dep_tree=nx.DiGraph(),
         )
 
         assert result == ["test_a"]

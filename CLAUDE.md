@@ -56,14 +56,16 @@ The pipeline: Git identifies changed files → Files converted to Python modules
 
 ### Module Responsibilities
 
-- **plugin.py**: pytest plugin entry point via `pytest11` entry point; handles CLI options, config validation (module name, base branch, tests dir), and test collection filtering
-- **api.py**: Orchestration layer (`get_impacted_tests`, `matches_impacted_tests`); creates the default composite strategy
+- **plugin.py**: pytest plugin entry point via `pytest11` entry point; handles CLI options, config validation (module name, base branch, tests dir), test collection filtering, and extension option registration
+- **__init__.py**: Public API exports for extension developers (`ImpactStrategy`, `ConfigOption`, `StrategyProtocol`)
+- **api.py**: Orchestration layer (`get_impacted_tests`, `matches_impacted_tests`); accepts an optional pre-built `strategy` parameter, falling back to built-in defaults when none is provided
+- **extensions.py**: Extension/plugin system for third-party strategies. Provides entry-point-based discovery (`pytest_impacted.strategies` group), `ConfigOption` for declarative config, `StrategyProtocol` for duck-typed strategies, and `build_strategy_with_extensions()` to compose built-in + extension strategies
 - **strategies.py**: Strategy pattern for impact analysis (see below)
-- **git.py**: Git integration for finding changed files (unstaged changes and branch diffs). Key functions: `find_repo` (wraps `Repo()` with `search_parent_directories=True` for monorepo support), `_normalize_git_paths` (converts git-root-relative paths to working-dir-relative paths), `find_impacted_files_in_repo` (main entry point)
-- **graph.py**: Dependency graph construction and querying using NetworkX; uses `discover_submodules` for filesystem-based module discovery and `parse_file_imports` for AST parsing. When the Rust extension is available, `build_dep_tree` uses parallel batch parsing via `_rust_parse_all_imports` instead of sequential astroid parsing
-- **_rust.py**: Safe import wrapper for the optional Rust extension (`pytest_impacted_rs`). Exports `RUST_AVAILABLE` flag and `_rust_parse_file_imports` / `_rust_parse_all_imports` functions
+- **git.py**: Git integration for finding changed files (unstaged changes and branch diffs). Key functions: `find_repo` (wraps `Repo()` with `search_parent_directories=True` for monorepo support), `normalize_git_paths` (converts git-root-relative paths to working-dir-relative paths), `find_impacted_files_in_repo` (main entry point)
+- **graph.py**: Dependency graph construction and querying using NetworkX; uses `discover_submodules` for filesystem-based module discovery and `parse_file_imports` for AST parsing. When the Rust extension is available, `build_dep_tree` uses parallel batch parsing via `rust_parse_all_imports` instead of sequential astroid parsing
+- **_rust.py**: Safe import wrapper for the optional Rust extension (`pytest_impacted_rs`). Exports `RUST_AVAILABLE` flag and `rust_parse_file_imports` / `rust_parse_all_imports` functions
 - **parsing.py**: AST parsing using astroid to extract import relationships. Node classes are imported from `astroid.nodes` (required since astroid v4). Key functions: `parse_file_imports` (reads source files directly, uses `_ModuleProxy` for relative import resolution without importing), `is_module_path`, `is_test_module`, `normalize_path`
-- **traversal.py**: Module discovery and path/module name conversion. Key functions: `_find_non_package_prefix` (detects src-layout by splitting path into non-package prefix and importable root), `_discover_pkgutil_impl` (recursive pkgutil-based discovery that handles non-package prefixes for correct module naming), `discover_submodules` (LRU-cached, with `require_init` parameter: `True` uses `pkgutil.iter_modules` for source packages, `False` uses `Path.rglob` for test directories that may lack `__init__.py`; handles src-layout automatically), `path_to_package_name` (pure path manipulation, no imports), `resolve_files_to_modules`, `resolve_modules_to_files` (requires `ns_module` parameter)
+- **traversal.py**: Module discovery and path/module name conversion. Key functions: `find_non_package_prefix` (detects src-layout by splitting path into non-package prefix and importable root), `_discover_pkgutil_impl` (recursive pkgutil-based discovery that handles non-package prefixes for correct module naming), `discover_submodules` (LRU-cached, with `require_init` parameter: `True` uses `pkgutil.iter_modules` for source packages, `False` uses `Path.rglob` for test directories that may lack `__init__.py`; handles src-layout automatically), `path_to_package_name` (pure path manipulation, no imports), `resolve_files_to_modules`, `resolve_modules_to_files` (requires `ns_module` parameter)
 - **cli.py**: Standalone `impacted-tests` CLI tool (Click-based) for CI integration
 - **display.py**: Console output formatting using pytest's `terminalreporter`
 
@@ -71,19 +73,34 @@ The pipeline: Git identifies changed files → Files converted to Python modules
 
 Impact analysis uses a strategy-based architecture defined in `strategies.py`:
 
-- **`ImpactStrategy`** (ABC): Base class defining `find_impacted_tests()` interface
+- **`ImpactStrategy`** (ABC): Base class defining `find_impacted_tests()` interface. Has optional `config_options: ClassVar[list[ConfigOption]]` and `priority: ClassVar[int]` for extension metadata
 - **`ASTImpactStrategy`**: Default strategy using AST parsing and dependency graph traversal
 - **`PytestImpactStrategy`**: Extends AST analysis with pytest-specific handling—when `conftest.py` files change, all tests in the same directory and subdirectories are considered impacted
 - **`DependencyFileImpactStrategy`**: Detects changes in dependency/config files (`uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg`, `requirements/*.txt`) and marks all test modules as impacted. Accepts custom patterns via constructor. Enabled by default; disable with `--no-impacted-dep-files`
-- **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results
+- **`CompositeImpactStrategy`**: Combines multiple strategies, deduplicates and sorts results. Builds the dependency graph once via `cached_build_dep_tree` and passes it as `dep_tree` to all sub-strategies
 
 The default strategy composition is built by `get_default_strategies()` in `strategies.py` and wrapped in `CompositeImpactStrategy` by `api.py`. The orchestrator (`api.py`) has no strategy-specific logic—it always passes `changed_files` and `impacted_modules` (which may be empty) to the composite, and each strategy decides what to do. This means strategies like `DependencyFileImpactStrategy` that operate on non-Python files work naturally without special-casing in the orchestrator.
 
-Dependency tree building uses an LRU cache (`_cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation (also clears `discover_submodules` cache).
+All strategies receive a required keyword-only `dep_tree: nx.DiGraph` parameter containing the pre-built dependency graph. The graph is built once by the orchestration layer (`api.py`) and passed through `CompositeImpactStrategy` to all sub-strategies, avoiding redundant construction. The `resolve_impacted_tests` utility from `graph.py` is exported via `__init__.py` for use by extension developers.
+
+Dependency tree building uses an LRU cache (`cached_build_dep_tree` in `strategies.py`, maxsize=8) with `clear_dep_tree_cache()` for invalidation (also clears `discover_submodules` cache).
+
+### Extension System
+
+Third-party packages can register custom strategies via Python entry points in the `pytest_impacted.strategies` group. The extension system is in `extensions.py` and provides:
+
+- **`ConfigOption`**: Frozen dataclass for declaring extension config options (name, help, type, default, required)
+- **`ExtensionMetadata`**: Metadata about a discovered extension (name, strategy_class, config_options, priority)
+- **`StrategyProtocol`**: `runtime_checkable` Protocol for duck-typed strategies (no ABC inheritance needed)
+- **`discover_extension_metadata()`**: LRU-cached discovery via `importlib.metadata.entry_points()`. Validates classes, extracts `config_options` and `priority` ClassVars
+- **`load_extensions()`**: Instantiates discovered strategies with config, using `inspect.signature` to pass matching constructor params
+- **`build_strategy_with_extensions()`**: Main builder—combines `get_default_strategies()` + extensions, sorts by priority, wraps in `CompositeImpactStrategy`
+
+Extension config options are auto-registered as CLI flags (`--impacted-ext-{name}-{option}`) and ini values (`impacted_ext_{name}_{option}`). Extensions can be disabled with `--impacted-disable-ext {name}` (repeatable). The `__init__.py` exports `ImpactStrategy`, `ConfigOption`, `StrategyProtocol`, and `resolve_impacted_tests` as the public API for extension developers. Strategies receive the pre-built dependency graph as a required keyword-only `dep_tree` parameter on `find_impacted_tests()` and can use `resolve_impacted_tests(modules, dep_tree)` for standard graph traversal. Built-in strategies always run first, followed by extensions sorted by the `priority` ClassVar (default `100`, lower runs earlier) — ordering rarely affects correctness since `CompositeImpactStrategy` unions all results.
 
 ### Test Structure
 
-Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_dependency_file_impact.py`, `test_caching.py`, `test_integration.py`). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
+Tests mirror the source structure. The `tests/strategies/` subdirectory contains per-strategy tests (`test_ast_impact.py`, `test_pytest_impact.py`, `test_composite_impact.py`, `test_dependency_file_impact.py`, `test_caching.py`, `test_integration.py`). Extension system tests are in `tests/test_extensions.py` (unit tests) and `tests/test_extension_integration.py` (pytester integration). Tests use `unittest.mock` extensively and the `pytester` pytest plugin (enabled in `conftest.py`) for testing plugin behavior. Some tests are marked `@pytest.mark.slow`.
 
 ## Documentation
 

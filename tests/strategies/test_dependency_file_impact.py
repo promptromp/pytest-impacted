@@ -1,19 +1,17 @@
 """Unit-tests for the dependency file impact strategy module."""
 
-from unittest.mock import patch
-
 import networkx as nx
 import pytest
 
 from pytest_impacted.strategies import (
     DependencyFileImpactStrategy,
-    _matches_dependency_file,
     has_dependency_file_changes,
+    matches_dependency_file,
 )
 
 
 class TestMatchesDependencyFile:
-    """Test the _matches_dependency_file helper function."""
+    """Test the matches_dependency_file helper function."""
 
     @pytest.mark.parametrize(
         ("file_path", "expected"),
@@ -34,12 +32,12 @@ class TestMatchesDependencyFile:
             pytest.param("requirements/README.md", False, id="non_txt_in_requirements_dir"),
         ],
     )
-    def test_matches_dependency_file(self, file_path, expected):
-        assert _matches_dependency_file(file_path) is expected
+    def testmatches_dependency_file(self, file_path, expected):
+        assert matches_dependency_file(file_path) is expected
 
     def test_custom_patterns(self):
-        assert _matches_dependency_file("custom.lock", patterns=("custom.lock",), glob_patterns=()) is True
-        assert _matches_dependency_file("uv.lock", patterns=("custom.lock",), glob_patterns=()) is False
+        assert matches_dependency_file("custom.lock", patterns=("custom.lock",), glob_patterns=()) is True
+        assert matches_dependency_file("uv.lock", patterns=("custom.lock",), glob_patterns=()) is False
 
 
 class TestHasDependencyFileChanges:
@@ -73,12 +71,9 @@ class TestDependencyFileImpactStrategy:
         graph.add_nodes_from(nodes)
         return graph
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
-    def test_returns_all_tests_when_dep_file_changed(self, mock_build_dep_tree):
+    def test_returns_all_tests_when_dep_file_changed(self):
         """When a dependency file changes, all test modules should be returned."""
-        mock_build_dep_tree.return_value = self._make_dep_tree(
-            ["mypackage.api", "mypackage.utils", "tests.test_api", "tests.test_utils"]
-        )
+        dep_tree = self._make_dep_tree(["mypackage.api", "mypackage.utils", "tests.test_api", "tests.test_utils"])
 
         strategy = DependencyFileImpactStrategy()
         result = strategy.find_impacted_tests(
@@ -86,43 +81,43 @@ class TestDependencyFileImpactStrategy:
             impacted_modules=[],
             ns_module="mypackage",
             tests_package="tests",
+            dep_tree=dep_tree,
         )
 
         assert result == ["tests.test_api", "tests.test_utils"]
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
-    def test_returns_empty_when_no_dep_file_changed(self, mock_build_dep_tree):
+    def test_returns_empty_when_no_dep_file_changed(self):
         """When no dependency files changed, should return empty list."""
+        dep_tree = self._make_dep_tree(["mypackage.module"])
+
         strategy = DependencyFileImpactStrategy()
         result = strategy.find_impacted_tests(
             changed_files=["src/module.py"],
             impacted_modules=["mypackage.module"],
             ns_module="mypackage",
+            dep_tree=dep_tree,
         )
 
         assert result == []
-        # Dep tree should not even be built
-        mock_build_dep_tree.assert_not_called()
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
-    def test_works_with_empty_impacted_modules(self, mock_build_dep_tree):
+    def test_works_with_empty_impacted_modules(self):
         """The key scenario: only dep files changed, so impacted_modules is empty."""
-        mock_build_dep_tree.return_value = self._make_dep_tree(["mypackage.core", "tests.test_core"])
+        dep_tree = self._make_dep_tree(["mypackage.core", "tests.test_core"])
 
         strategy = DependencyFileImpactStrategy()
         result = strategy.find_impacted_tests(
             changed_files=["pyproject.toml", "uv.lock"],
-            impacted_modules=[],  # No .py files changed
+            impacted_modules=[],
             ns_module="mypackage",
             tests_package="tests",
+            dep_tree=dep_tree,
         )
 
         assert result == ["tests.test_core"]
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
-    def test_custom_patterns(self, mock_build_dep_tree):
+    def test_custom_patterns(self):
         """Custom patterns should be used instead of defaults."""
-        mock_build_dep_tree.return_value = self._make_dep_tree(["mypackage.api", "tests.test_api"])
+        dep_tree = self._make_dep_tree(["mypackage.api", "tests.test_api"])
 
         strategy = DependencyFileImpactStrategy(
             patterns=("custom.lock",),
@@ -135,6 +130,7 @@ class TestDependencyFileImpactStrategy:
             impacted_modules=[],
             ns_module="mypackage",
             tests_package="tests",
+            dep_tree=dep_tree,
         )
         assert result == []
 
@@ -144,15 +140,13 @@ class TestDependencyFileImpactStrategy:
             impacted_modules=[],
             ns_module="mypackage",
             tests_package="tests",
+            dep_tree=dep_tree,
         )
         assert result == ["tests.test_api"]
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
-    def test_mixed_dep_and_py_changes(self, mock_build_dep_tree):
+    def test_mixed_dep_and_py_changes(self):
         """When both dep files and .py files change, all tests should be returned."""
-        mock_build_dep_tree.return_value = self._make_dep_tree(
-            ["mypackage.api", "mypackage.utils", "tests.test_api", "tests.test_utils"]
-        )
+        dep_tree = self._make_dep_tree(["mypackage.api", "mypackage.utils", "tests.test_api", "tests.test_utils"])
 
         strategy = DependencyFileImpactStrategy()
         result = strategy.find_impacted_tests(
@@ -160,17 +154,15 @@ class TestDependencyFileImpactStrategy:
             impacted_modules=["mypackage.api"],
             ns_module="mypackage",
             tests_package="tests",
+            dep_tree=dep_tree,
         )
 
         # All tests returned because requirements.txt changed
         assert result == ["tests.test_api", "tests.test_utils"]
 
-    @patch("pytest_impacted.strategies._cached_build_dep_tree")
-    def test_results_are_sorted(self, mock_build_dep_tree):
+    def test_results_are_sorted(self):
         """Results should be sorted alphabetically."""
-        mock_build_dep_tree.return_value = self._make_dep_tree(
-            ["pkg.mod", "tests.test_z", "tests.test_a", "tests.test_m"]
-        )
+        dep_tree = self._make_dep_tree(["pkg.mod", "tests.test_z", "tests.test_a", "tests.test_m"])
 
         strategy = DependencyFileImpactStrategy()
         result = strategy.find_impacted_tests(
@@ -178,6 +170,7 @@ class TestDependencyFileImpactStrategy:
             impacted_modules=[],
             ns_module="pkg",
             tests_package="tests",
+            dep_tree=dep_tree,
         )
 
         assert result == ["tests.test_a", "tests.test_m", "tests.test_z"]

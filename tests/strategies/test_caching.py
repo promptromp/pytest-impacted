@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from pytest_impacted.strategies import _cached_build_dep_tree, clear_dep_tree_cache
+from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache
 from pytest_impacted.traversal import discover_submodules
 
 
@@ -24,8 +24,8 @@ class TestCaching:
         mock_build_tree.return_value = mock_dep_tree
 
         # Call the cached function twice with the same parameters
-        result1 = _cached_build_dep_tree("mypackage", "tests")
-        result2 = _cached_build_dep_tree("mypackage", "tests")
+        result1 = cached_build_dep_tree("mypackage", "tests")
+        result2 = cached_build_dep_tree("mypackage", "tests")
 
         # build_dep_tree should only be called once due to caching
         mock_build_tree.assert_called_once_with("mypackage", tests_package="tests")
@@ -42,8 +42,8 @@ class TestCaching:
         mock_build_tree.side_effect = [mock_dep_tree1, mock_dep_tree2]
 
         # Call with different parameters
-        result1 = _cached_build_dep_tree("mypackage", "tests")
-        result2 = _cached_build_dep_tree("mypackage", "other_tests")
+        result1 = cached_build_dep_tree("mypackage", "tests")
+        result2 = cached_build_dep_tree("mypackage", "other_tests")
 
         # build_dep_tree should be called twice with different parameters
         assert mock_build_tree.call_count == 2
@@ -62,16 +62,16 @@ class TestCaching:
         mock_build_tree.return_value = mock_dep_tree
 
         # Call the cached function
-        _cached_build_dep_tree("mypackage", "tests")
+        cached_build_dep_tree("mypackage", "tests")
         assert mock_build_tree.call_count == 1
 
         # Call again - should use cache
-        _cached_build_dep_tree("mypackage", "tests")
+        cached_build_dep_tree("mypackage", "tests")
         assert mock_build_tree.call_count == 1
 
         # Clear cache and call again - should call build_dep_tree again
         clear_dep_tree_cache()
-        _cached_build_dep_tree("mypackage", "tests")
+        cached_build_dep_tree("mypackage", "tests")
         assert mock_build_tree.call_count == 2
 
     @patch("pytest_impacted.strategies.build_dep_tree")
@@ -81,8 +81,8 @@ class TestCaching:
         mock_build_tree.return_value = mock_dep_tree
 
         # Call with None tests_package
-        result1 = _cached_build_dep_tree("mypackage", None)
-        result2 = _cached_build_dep_tree("mypackage", None)
+        result1 = cached_build_dep_tree("mypackage", None)
+        result2 = cached_build_dep_tree("mypackage", None)
 
         # Should only call build_dep_tree once
         mock_build_tree.assert_called_once_with("mypackage", tests_package=None)

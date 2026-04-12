@@ -7,7 +7,21 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from pytest_impacted.api import get_impacted_tests
+from pytest_impacted.extensions import (
+    build_strategy_with_extensions,
+    discover_extension_metadata,
+    get_ext_cli_flag,
+    get_ext_ini_name,
+)
 from pytest_impacted.git import GitMode
+
+
+_CLICK_TYPE_MAP: dict[type, click.ParamType] = {
+    str: click.STRING,
+    int: click.INT,
+    float: click.FLOAT,
+    bool: click.BOOL,
+}
 
 
 def configure_logging(verbose: bool) -> None:
@@ -47,7 +61,11 @@ def configure_logging(verbose: bool) -> None:
 )
 @click.option("--verbose", is_flag=True, help="Verbose output.")
 @click.option("--no-dep-files", is_flag=True, default=False, help="Disable dependency file change detection.")
-def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbose, no_dep_files):
+@click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
+@click.pass_context
+def impacted_tests_cli(
+    ctx, git_mode, base_branch, root_dir, module, tests_dir, verbose, no_dep_files, disable_ext, **ext_kwargs
+):
     """CLI entrypoint for impacted-tests console script."""
     click.echo("impacted-tests", err=True)
     click.secho("  base-branch: {}".format(base_branch), fg="blue", bold=True, err=True)
@@ -56,8 +74,16 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbo
     click.secho("  root-dir: {}".format(root_dir), fg="blue", bold=True, err=True)
     click.secho("  tests-dir: {}".format(tests_dir), fg="blue", bold=True, err=True)
     click.secho("  no-dep-files: {}".format(no_dep_files), fg="blue", bold=True, err=True)
+    if disable_ext:
+        click.secho("  disable-ext: {}".format(", ".join(disable_ext)), fg="blue", bold=True, err=True)
 
     configure_logging(verbose=verbose)
+
+    strategy = build_strategy_with_extensions(
+        watch_dep_files=not no_dep_files,
+        disabled=disable_ext,
+        ext_config=ext_kwargs,
+    )
 
     impacted_tests = get_impacted_tests(
         impacted_git_mode=git_mode,
@@ -65,7 +91,7 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbo
         root_dir=root_dir,
         ns_module=module,
         tests_dir=tests_dir,
-        watch_dep_files=not no_dep_files,
+        strategy=strategy,
     )
 
     if impacted_tests:
@@ -73,3 +99,22 @@ def impacted_tests_cli(git_mode, base_branch, root_dir, module, tests_dir, verbo
             print(impacted_test)
     else:
         click.secho("No impacted tests found.", fg="red", bold=True, err=True)
+
+
+def _register_extension_options(cmd: click.Command) -> None:
+    """Dynamically add extension config options to the Click command."""
+    for ext in discover_extension_metadata():
+        for opt in ext.config_options:
+            flag = get_ext_cli_flag(ext.name, opt.name)
+            param_name = get_ext_ini_name(ext.name, opt.name)
+            click_opt = click.Option(
+                [flag],
+                default=opt.default,
+                help=f"[ext:{ext.name}] {opt.help}",
+                type=_CLICK_TYPE_MAP.get(opt.type, click.STRING),
+            )
+            click_opt.name = param_name
+            cmd.params.append(click_opt)
+
+
+_register_extension_options(impacted_tests_cli)

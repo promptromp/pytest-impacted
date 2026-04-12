@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pytest_impacted import git
-from pytest_impacted.git import _normalize_git_paths, find_repo
+from pytest_impacted.git import find_repo, normalize_git_paths
 
 
 class DummyRepo:
@@ -610,7 +610,7 @@ def test_impacted_files_for_branch_mode_detached_head(mock_repo):
     repo.git.diff.assert_called_once_with("main", "abc123", name_status=True)
 
 
-# --- Tests for find_repo and _normalize_git_paths (monorepo support) ---
+# --- Tests for find_repo and normalize_git_paths (monorepo support) ---
 
 
 @patch("pytest_impacted.git.Repo")
@@ -620,37 +620,37 @@ def test_find_repo_uses_search_parent_directories(mock_repo):
     mock_repo.assert_called_once_with(path=Path("/some/path"), search_parent_directories=True)
 
 
-def test_normalize_git_paths_same_dir():
+def testnormalize_git_paths_same_dir():
     """When git_root == working_dir, paths are returned unchanged."""
     paths = ["src/module.py", "tests/test_foo.py"]
-    result = _normalize_git_paths(paths, Path("/repo"), Path("/repo"))
+    result = normalize_git_paths(paths, Path("/repo"), Path("/repo"))
     assert result == paths
 
 
-def test_normalize_git_paths_monorepo():
+def testnormalize_git_paths_monorepo():
     """Git-root-relative paths are converted to working-dir-relative."""
     paths = ["backend/src/pkg/module.py", "backend/tests/test_foo.py"]
-    result = _normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
+    result = normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
     assert result == ["src/pkg/module.py", "tests/test_foo.py"]
 
 
-def test_normalize_git_paths_file_outside_working_dir():
+def testnormalize_git_paths_file_outside_working_dir():
     """Files outside working_dir are returned as absolute paths."""
     paths = ["frontend/app.js", "backend/src/module.py"]
-    result = _normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
+    result = normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
     assert result == ["/repo/frontend/app.js", "src/module.py"]
 
 
-def test_normalize_git_paths_deeply_nested():
+def testnormalize_git_paths_deeply_nested():
     """Works for deeply nested subdirectories."""
     paths = ["services/backend/python/src/mod.py"]
-    result = _normalize_git_paths(paths, Path("/mono"), Path("/mono/services/backend/python"))
+    result = normalize_git_paths(paths, Path("/mono"), Path("/mono/services/backend/python"))
     assert result == ["src/mod.py"]
 
 
-def test_normalize_git_paths_empty_list():
+def testnormalize_git_paths_empty_list():
     """Empty input returns empty output."""
-    result = _normalize_git_paths([], Path("/repo"), Path("/repo/sub"))
+    result = normalize_git_paths([], Path("/repo"), Path("/repo/sub"))
     assert result == []
 
 
