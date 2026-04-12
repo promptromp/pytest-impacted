@@ -123,7 +123,7 @@ def get_ext_cli_flag(ext_name: str, opt_name: str) -> str:
 _REQUIRED_PARAMS = {"changed_files", "impacted_modules", "ns_module"}
 
 
-def _validate_strategy_class(name: str, cls: Any) -> bool:
+def validate_strategy_class(name: str, cls: Any) -> bool:
     """Check whether a loaded class conforms to the strategy interface."""
     if not isinstance(cls, type):
         logger.warning("Extension '%s': entry point resolved to %r, expected a class. Skipping.", name, type(cls))
@@ -185,7 +185,7 @@ def discover_extension_metadata() -> tuple[ExtensionMetadata, ...]:
             logger.exception("Extension '%s': failed to load entry point '%s'. Skipping.", ep.name, ep.value)
             continue
 
-        if not _validate_strategy_class(ep.name, cls):
+        if not validate_strategy_class(ep.name, cls):
             continue
 
         config_options = list(getattr(cls, "config_options", []))
@@ -214,7 +214,7 @@ def clear_extension_cache() -> None:
     discover_extension_metadata.cache_clear()
 
 
-def _coerce_value(value: Any, target_type: type) -> Any:
+def coerce_value(value: Any, target_type: type) -> Any:
     """Coerce a config value to the target type."""
     if value is None:
         return None
@@ -227,7 +227,7 @@ def _coerce_value(value: Any, target_type: type) -> Any:
     return target_type(value)
 
 
-def _instantiate_strategy(ext: ExtensionMetadata, config: dict[str, Any]) -> Any:
+def instantiate_strategy(ext: ExtensionMetadata, config: dict[str, Any]) -> Any:
     """Instantiate a strategy class, passing config values to matching constructor params."""
     cls = ext.strategy_class
     sig = inspect.signature(cls)
@@ -274,9 +274,9 @@ def load_extensions(
         for opt in ext.config_options:
             ini_name = get_ext_ini_name(ext.name, opt.name)
             if ini_name in config:
-                ext_cfg[opt.name] = _coerce_value(config[ini_name], opt.type)
+                ext_cfg[opt.name] = coerce_value(config[ini_name], opt.type)
             elif opt.name in config:
-                ext_cfg[opt.name] = _coerce_value(config[opt.name], opt.type)
+                ext_cfg[opt.name] = coerce_value(config[opt.name], opt.type)
             elif opt.default is not None:
                 ext_cfg[opt.name] = opt.default
             elif opt.required:
@@ -291,7 +291,7 @@ def load_extensions(
             continue
 
         try:
-            instance = _instantiate_strategy(ext, ext_cfg)
+            instance = instantiate_strategy(ext, ext_cfg)
         except Exception:
             logger.exception("Extension '%s': failed to instantiate. Skipping.", ext.name)
             continue

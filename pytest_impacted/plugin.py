@@ -250,18 +250,18 @@ def validate_config(config: Config):
 
     module_name = get_option("impacted_module")
     assert module_name is not None  # guarded by the check above
-    _validate_module(module_name)
+    validate_module(module_name)
 
     tests_dir = get_option("impacted_tests_dir")
     if tests_dir:
-        _validate_tests_dir(tests_dir)
+        validate_tests_dir(tests_dir)
 
     base_branch = get_option("impacted_base_branch")
     if get_option("impacted_git_mode") == GitMode.BRANCH and base_branch:
-        _validate_base_branch(base_branch, str(config.rootdir))  # type: ignore[attr-defined]
+        validate_base_branch(base_branch, str(config.rootdir))  # type: ignore[attr-defined]
 
 
-def _validate_module(module_name: str) -> None:
+def validate_module(module_name: str) -> None:
     """Validate that --impacted-module refers to a discoverable Python package."""
     module_dir = module_name.replace(".", os.sep)
     if os.path.isdir(module_dir):
@@ -303,7 +303,7 @@ def _collect_ext_config(config: Config) -> dict[str, Any]:
     return ext_config
 
 
-def _validate_tests_dir(tests_dir: str) -> None:
+def validate_tests_dir(tests_dir: str) -> None:
     """Validate that --impacted-tests-dir refers to an existing directory."""
     if not os.path.isdir(tests_dir):
         raise UsageError(
@@ -311,7 +311,7 @@ def _validate_tests_dir(tests_dir: str) -> None:
         )
 
 
-def _validate_base_branch(base_branch: str, root_dir: str) -> None:
+def validate_base_branch(base_branch: str, root_dir: str) -> None:
     """Validate that --impacted-base-branch refers to a valid git ref."""
     if not GIT_AVAILABLE:
         return

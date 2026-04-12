@@ -4,13 +4,13 @@ import pytest
 
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
-    _validate_base_branch,
-    _validate_module,
-    _validate_tests_dir,
     pytest_addoption,
     pytest_configure,
     pytest_report_header,
+    validate_base_branch,
     validate_config,
+    validate_module,
+    validate_tests_dir,
 )
 
 
@@ -122,67 +122,67 @@ def test_validate_config_branch_mode_missing_base(pytestconfig):
         validate_config(pytestconfig)
 
 
-def test_validate_module_hyphen_suggests_underscore():
+def testvalidate_module_hyphen_suggests_underscore():
     """Test that a hyphenated module name suggests the underscore version."""
     with pytest.raises(pytest.UsageError, match="Did you mean: --impacted-module=pytest_impacted"):
-        _validate_module("pytest-impacted")
+        validate_module("pytest-impacted")
 
 
-def test_validate_module_nonexistent():
+def testvalidate_module_nonexistent():
     """Test that a completely unknown module gives a helpful error."""
     with pytest.raises(pytest.UsageError, match="Module 'doesnotexist' not found"):
-        _validate_module("doesnotexist")
+        validate_module("doesnotexist")
 
 
-def test_validate_module_valid():
+def testvalidate_module_valid():
     """Test that a valid module name passes validation."""
-    _validate_module("pytest_impacted")  # Should not raise
+    validate_module("pytest_impacted")  # Should not raise
 
 
-def test_validate_tests_dir_nonexistent():
+def testvalidate_tests_dir_nonexistent():
     """Test that a non-existent tests directory gives a helpful error."""
     with pytest.raises(pytest.UsageError, match="Tests directory 'nonexistent_dir' does not exist"):
-        _validate_tests_dir("nonexistent_dir")
+        validate_tests_dir("nonexistent_dir")
 
 
-def test_validate_tests_dir_valid():
+def testvalidate_tests_dir_valid():
     """Test that a valid tests directory passes validation."""
-    _validate_tests_dir("tests")  # Should not raise
+    validate_tests_dir("tests")  # Should not raise
 
 
-def test_validate_tests_dir_without_init(tmp_path, monkeypatch):
+def testvalidate_tests_dir_without_init(tmp_path, monkeypatch):
     """Test that a tests directory without __init__.py passes validation."""
     test_dir = tmp_path / "my_tests"
     test_dir.mkdir()
     (test_dir / "test_example.py").write_text("def test_it(): pass\n")
     monkeypatch.chdir(tmp_path)
-    _validate_tests_dir("my_tests")  # Should not raise
+    validate_tests_dir("my_tests")  # Should not raise
 
 
-def test_validate_base_branch_nonexistent():
+def testvalidate_base_branch_nonexistent():
     """Test that a non-existent base branch gives a helpful error with available refs."""
     with pytest.raises(pytest.UsageError, match="Base branch 'nonexistent_branch_xyz' does not exist"):
-        _validate_base_branch("nonexistent_branch_xyz", ".")
+        validate_base_branch("nonexistent_branch_xyz", ".")
 
 
-def test_validate_base_branch_valid():
+def testvalidate_base_branch_valid():
     """Test that a valid base branch passes validation."""
-    _validate_base_branch("HEAD", ".")  # Should not raise — HEAD exists in any git checkout
+    validate_base_branch("HEAD", ".")  # Should not raise — HEAD exists in any git checkout
 
 
-def test_validate_base_branch_from_subdirectory():
-    """_validate_base_branch works from a subdirectory of the git root (monorepo)."""
+def testvalidate_base_branch_from_subdirectory():
+    """validate_base_branch works from a subdirectory of the git root (monorepo)."""
     # tests/ is a subdirectory of the project; .git is at the project root
-    _validate_base_branch("HEAD", "tests")  # Should not raise
+    validate_base_branch("HEAD", "tests")  # Should not raise
 
 
-def test_validate_base_branch_no_git_repo(tmp_path):
-    """_validate_base_branch gives a helpful error when no git repo is found."""
+def testvalidate_base_branch_no_git_repo(tmp_path):
+    """validate_base_branch gives a helpful error when no git repo is found."""
     with pytest.raises(pytest.UsageError, match="No git repository found"):
-        _validate_base_branch("main", str(tmp_path))
+        validate_base_branch("main", str(tmp_path))
 
 
-def test_validate_module_src_layout_suggestion(tmp_path, monkeypatch):
+def testvalidate_module_src_layout_suggestion(tmp_path, monkeypatch):
     """When a module exists under src/, suggest the src-layout path."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "mypackage").mkdir()
@@ -190,4 +190,4 @@ def test_validate_module_src_layout_suggestion(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(pytest.UsageError, match="--impacted-module=src/mypackage"):
-        _validate_module("mypackage")
+        validate_module("mypackage")

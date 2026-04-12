@@ -8,15 +8,15 @@ from pytest_impacted.extensions import (
     ConfigOption,
     ExtensionMetadata,
     StrategyProtocol,
-    _coerce_value,
-    _instantiate_strategy,
-    _validate_strategy_class,
     build_strategy_with_extensions,
     clear_extension_cache,
+    coerce_value,
     discover_extension_metadata,
     get_ext_cli_flag,
     get_ext_ini_name,
+    instantiate_strategy,
     load_extensions,
+    validate_strategy_class,
 )
 from pytest_impacted.strategies import (
     ASTImpactStrategy,
@@ -182,22 +182,22 @@ class TestValidateStrategyClass:
     """Test strategy class validation."""
 
     def test_valid_abc_class(self):
-        assert _validate_strategy_class("test", SimpleStrategy) is True
+        assert validate_strategy_class("test", SimpleStrategy) is True
 
     def test_valid_duck_typed_class(self):
-        assert _validate_strategy_class("test", DuckTypedStrategy) is True
+        assert validate_strategy_class("test", DuckTypedStrategy) is True
 
     def test_invalid_class_no_method(self):
-        assert _validate_strategy_class("test", InvalidStrategy) is False
+        assert validate_strategy_class("test", InvalidStrategy) is False
 
     def test_non_class(self):
-        assert _validate_strategy_class("test", "not a class") is False
+        assert validate_strategy_class("test", "not a class") is False
 
     def test_instance_not_class(self):
-        assert _validate_strategy_class("test", SimpleStrategy()) is False
+        assert validate_strategy_class("test", SimpleStrategy()) is False
 
     def test_bad_signature_rejected(self):
-        assert _validate_strategy_class("test", BadSignatureStrategy) is False
+        assert validate_strategy_class("test", BadSignatureStrategy) is False
 
     def test_kwargs_signature_accepted(self):
         """A method with **kwargs should pass even without named params."""
@@ -206,32 +206,32 @@ class TestValidateStrategyClass:
             def find_impacted_tests(self, **kwargs):
                 return []
 
-        assert _validate_strategy_class("test", KwargsOnly) is True
+        assert validate_strategy_class("test", KwargsOnly) is True
 
 
 class TestCoerceValue:
     """Test config value coercion."""
 
     def test_none_passthrough(self):
-        assert _coerce_value(None, str) is None
+        assert coerce_value(None, str) is None
 
     def test_already_correct_type(self):
-        assert _coerce_value(42, int) == 42
-        assert _coerce_value("hello", str) == "hello"
+        assert coerce_value(42, int) == 42
+        assert coerce_value("hello", str) == "hello"
 
     def test_str_to_int(self):
-        assert _coerce_value("42", int) == 42
+        assert coerce_value("42", int) == 42
 
     def test_str_to_float(self):
-        assert _coerce_value("3.14", float) == pytest.approx(3.14)
+        assert coerce_value("3.14", float) == pytest.approx(3.14)
 
     def test_str_to_bool_true(self):
         for val in ("true", "True", "TRUE", "1", "yes", "Yes"):
-            assert _coerce_value(val, bool) is True
+            assert coerce_value(val, bool) is True
 
     def test_str_to_bool_false(self):
         for val in ("false", "False", "0", "no", ""):
-            assert _coerce_value(val, bool) is False
+            assert coerce_value(val, bool) is False
 
 
 class TestInstantiateStrategy:
@@ -239,24 +239,24 @@ class TestInstantiateStrategy:
 
     def test_no_config(self):
         ext = ExtensionMetadata(name="test", strategy_class=SimpleStrategy)
-        instance = _instantiate_strategy(ext, {})
+        instance = instantiate_strategy(ext, {})
         assert isinstance(instance, SimpleStrategy)
 
     def test_with_config(self):
         ext = ExtensionMetadata(name="test", strategy_class=ConfigurableStrategy)
-        instance = _instantiate_strategy(ext, {"threshold": 90, "data_file": "/tmp/data"})
+        instance = instantiate_strategy(ext, {"threshold": 90, "data_file": "/tmp/data"})
         assert instance.threshold == 90
         assert instance.data_file == "/tmp/data"
 
     def test_partial_config(self):
         ext = ExtensionMetadata(name="test", strategy_class=ConfigurableStrategy)
-        instance = _instantiate_strategy(ext, {"threshold": 50})
+        instance = instantiate_strategy(ext, {"threshold": 50})
         assert instance.threshold == 50
         assert instance.data_file == ".data"  # default
 
     def test_extra_config_ignored(self):
         ext = ExtensionMetadata(name="test", strategy_class=ConfigurableStrategy)
-        instance = _instantiate_strategy(ext, {"threshold": 50, "unknown_param": "ignored"})
+        instance = instantiate_strategy(ext, {"threshold": 50, "unknown_param": "ignored"})
         assert instance.threshold == 50
 
 

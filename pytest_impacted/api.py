@@ -8,7 +8,7 @@ from pytest_impacted.git import GitMode, find_impacted_files_in_repo
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
-    _cached_build_dep_tree,
+    cached_build_dep_tree,
     get_default_strategies,
 )
 from pytest_impacted.traversal import (
@@ -72,7 +72,7 @@ def get_impacted_tests(
         )
 
     # Build the dependency graph once and pass it to the strategy pipeline
-    dep_tree = _cached_build_dep_tree(ns_module, tests_package=tests_package)
+    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package)
 
     # Use the strategy to find impacted test modules
     impacted_test_modules = strategy.find_impacted_tests(

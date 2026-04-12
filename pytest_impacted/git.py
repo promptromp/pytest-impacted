@@ -177,7 +177,7 @@ def find_repo(path: str | Path) -> "Repo":
     return Repo(path=Path(path), search_parent_directories=True)
 
 
-def _normalize_git_paths(file_paths: list[str], git_root: Path, working_dir: Path) -> list[str]:
+def normalize_git_paths(file_paths: list[str], git_root: Path, working_dir: Path) -> list[str]:
     """Convert git-root-relative file paths to working-dir-relative paths.
 
     Git returns paths relative to the repository root.  When *working_dir* differs
@@ -248,7 +248,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         return impacted_files
     git_root = Path(repo.working_tree_dir).resolve()
     working_dir = Path(repo_dir).resolve()
-    return _normalize_git_paths(impacted_files, git_root, working_dir)
+    return normalize_git_paths(impacted_files, git_root, working_dir)
 
 
 def _collect_paths_for_change(item: Change) -> list[str | None]:

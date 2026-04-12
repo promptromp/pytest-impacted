@@ -5,13 +5,13 @@ import pytest
 
 from pytest_impacted.strategies import (
     DependencyFileImpactStrategy,
-    _matches_dependency_file,
     has_dependency_file_changes,
+    matches_dependency_file,
 )
 
 
 class TestMatchesDependencyFile:
-    """Test the _matches_dependency_file helper function."""
+    """Test the matches_dependency_file helper function."""
 
     @pytest.mark.parametrize(
         ("file_path", "expected"),
@@ -32,12 +32,12 @@ class TestMatchesDependencyFile:
             pytest.param("requirements/README.md", False, id="non_txt_in_requirements_dir"),
         ],
     )
-    def test_matches_dependency_file(self, file_path, expected):
-        assert _matches_dependency_file(file_path) is expected
+    def testmatches_dependency_file(self, file_path, expected):
+        assert matches_dependency_file(file_path) is expected
 
     def test_custom_patterns(self):
-        assert _matches_dependency_file("custom.lock", patterns=("custom.lock",), glob_patterns=()) is True
-        assert _matches_dependency_file("uv.lock", patterns=("custom.lock",), glob_patterns=()) is False
+        assert matches_dependency_file("custom.lock", patterns=("custom.lock",), glob_patterns=()) is True
+        assert matches_dependency_file("uv.lock", patterns=("custom.lock",), glob_patterns=()) is False
 
 
 class TestHasDependencyFileChanges:

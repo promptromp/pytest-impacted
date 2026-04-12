@@ -36,7 +36,7 @@ DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
 )
 
 
-def _matches_dependency_file(
+def matches_dependency_file(
     file_path: str,
     patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
     glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
@@ -54,11 +54,11 @@ def has_dependency_file_changes(
     glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
 ) -> bool:
     """Check if any changed files are dependency/configuration files."""
-    return any(_matches_dependency_file(f, patterns, glob_patterns) for f in changed_files)
+    return any(matches_dependency_file(f, patterns, glob_patterns) for f in changed_files)
 
 
 @lru_cache(maxsize=8)
-def _cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> nx.DiGraph:
+def cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
     Args:
@@ -84,7 +84,7 @@ def clear_dep_tree_cache() -> None:
     after code changes during development. Also clears discovery caches
     since stale submodule data would produce stale dependency trees.
     """
-    _cached_build_dep_tree.cache_clear()
+    cached_build_dep_tree.cache_clear()
     discover_submodules.cache_clear()
 
 
@@ -272,7 +272,7 @@ class DependencyFileImpactStrategy(ImpactStrategy):
             return []
         all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
 
-        dep_files = [f for f in changed_files if _matches_dependency_file(f, self.patterns, self.glob_patterns)]
+        dep_files = [f for f in changed_files if matches_dependency_file(f, self.patterns, self.glob_patterns)]
         from pytest_impacted.display import notify  # noqa: PLC0415
 
         notify(

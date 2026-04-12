@@ -23,7 +23,7 @@ def path_to_package_name(path: Path | str) -> str:
     return ".".join(Path(normalized).parts)
 
 
-def _find_non_package_prefix(fs_path: str) -> tuple[str, str]:
+def find_non_package_prefix(fs_path: str) -> tuple[str, str]:
     """Split a filesystem path into non-package prefix and importable package root.
 
     Directories that do not contain ``__init__.py`` are treated as non-package
@@ -84,7 +84,7 @@ def _discover_via_pkgutil(package: str) -> dict[str, str]:
     in filesystem paths.
     """
     fs_path = package_name_to_path(package)
-    non_pkg_prefix, importable_path = _find_non_package_prefix(fs_path)
+    non_pkg_prefix, importable_path = find_non_package_prefix(fs_path)
     importable_name = path_to_package_name(importable_path)
     return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix)
 
