@@ -96,7 +96,7 @@ Third-party packages can register custom strategies via Python entry points in t
 - **`load_extensions()`**: Instantiates discovered strategies with config, using `inspect.signature` to pass matching constructor params
 - **`build_strategy_with_extensions()`**: Main builder—combines `get_default_strategies()` + extensions, sorts by priority, wraps in `CompositeImpactStrategy`
 
-Extension config options are auto-registered as CLI flags (`--impacted-ext-{name}-{option}`) and ini values (`impacted_ext_{name}_{option}`). Extensions can be disabled with `--impacted-disable-ext {name}` (repeatable). The `__init__.py` exports `ImpactStrategy`, `ConfigOption`, `StrategyProtocol`, and `resolve_impacted_tests` as the public API for extension developers. Strategies receive the pre-built dependency graph as `dep_tree` and can use `resolve_impacted_tests(modules, dep_tree)` for standard graph traversal.
+Extension config options are auto-registered as CLI flags (`--impacted-ext-{name}-{option}`) and ini values (`impacted_ext_{name}_{option}`). Extensions can be disabled with `--impacted-disable-ext {name}` (repeatable). The `__init__.py` exports `ImpactStrategy`, `ConfigOption`, `StrategyProtocol`, and `resolve_impacted_tests` as the public API for extension developers. Strategies receive the pre-built dependency graph as a required keyword-only `dep_tree` parameter on `find_impacted_tests()` and can use `resolve_impacted_tests(modules, dep_tree)` for standard graph traversal. Built-in strategies always run first, followed by extensions sorted by the `priority` ClassVar (default `100`, lower runs earlier) — ordering rarely affects correctness since `CompositeImpactStrategy` unions all results.
 
 ### Test Structure
 

@@ -28,6 +28,7 @@ pytest --impacted --impacted-module=my_package \
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements.txt`, `pyproject.toml` etc. trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
 | :rocket: | **Rust-accelerated** | Optional Rust extension for 37-65x faster import parsing on large codebases |
+| :electric_plug: | **Extensible** | Third-party strategies installable as plugins via Python entry points |
 | :shield: | **Helpful errors** | Validates config early with clear messages and suggestions |
 
 > [!CAUTION]
@@ -135,15 +136,13 @@ class MyCustomStrategy(ImpactStrategy):
     def __init__(self, threshold: int = 80):
         self.threshold = threshold
 
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
-        # dep_tree is the pre-built dependency graph (nx.DiGraph), shared across all strategies
-        # resolve_impacted_tests provides standard graph traversal
-        if dep_tree is not None:
-            return resolve_impacted_tests(impacted_modules, dep_tree)
-        return []
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        # dep_tree is the pre-built dependency graph (nx.DiGraph), shared across all strategies.
+        # resolve_impacted_tests provides standard graph traversal.
+        return resolve_impacted_tests(impacted_modules, dep_tree)
 ```
 
-Users can configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`. See [Usage Guide](https://promptromp.github.io/pytest-impacted/usage/) for details.
+Users can configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`. Extensions can alternatively use duck-typing (any class with a `find_impacted_tests` method — no inheritance required) and can set a `priority` class variable to control execution order. See the [Usage Guide](https://promptromp.github.io/pytest-impacted/usage/#strategy-extensions-plugin-system) for the full reference.
 
 You can also supply a custom strategy programmatically via the `get_impacted_tests()` API:
 

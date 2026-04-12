@@ -178,11 +178,9 @@ An extension is a standard Python package that registers a strategy class via th
 from pytest_impacted import ImpactStrategy, resolve_impacted_tests
 
 class MyStrategy(ImpactStrategy):
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
         # dep_tree is the pre-built dependency graph (nx.DiGraph), shared across strategies
-        if dep_tree is not None:
-            return resolve_impacted_tests(impacted_modules, dep_tree)
-        return []
+        return resolve_impacted_tests(impacted_modules, dep_tree)
 ```
 
 ```toml
@@ -215,7 +213,7 @@ class CoverageStrategy(ImpactStrategy):
         self.coverage_file = coverage_file
         self.threshold = threshold
 
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
         # dep_tree is the pre-built dependency graph; use self.coverage_file and self.threshold
         ...
 ```
@@ -247,8 +245,8 @@ Extensions don't need to inherit from `ImpactStrategy`. Any class with a `find_i
 ```python
 # No import from pytest_impacted at all!
 class MyLightweightStrategy:
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, dep_tree=None, **kwargs):
-        # dep_tree is an nx.DiGraph when provided by the pipeline
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        # dep_tree is an nx.DiGraph supplied by the pipeline
         return [...]
 ```
 
@@ -326,6 +324,64 @@ The extension system is designed to be fault-tolerant:
 - **Invalid classes**: If an entry point resolves to a class without `find_impacted_tests`, it is skipped with a warning.
 
 Extensions never prevent the core pytest-impacted functionality from working.
+
+### Testing Extensions
+
+Extensions are just Python classes, so they can be unit-tested in isolation. Two patterns work well:
+
+#### Unit-testing `find_impacted_tests` directly
+
+Construct a small `networkx.DiGraph` by hand and invoke the strategy's method directly. This is fast, hermetic, and doesn't require a real project layout.
+
+```python
+import networkx as nx
+from my_extension.strategy import MyStrategy
+
+
+def test_my_strategy_returns_impacted_tests():
+    # Build a minimal dep graph: edges point from imported module to its dependents
+    dep_tree = nx.DiGraph()
+    dep_tree.add_edge("mypkg.core", "mypkg.api")
+    dep_tree.add_edge("mypkg.api", "tests.test_api")
+
+    strategy = MyStrategy()
+    impacted = strategy.find_impacted_tests(
+        changed_files=["mypkg/core.py"],
+        impacted_modules=["mypkg.core"],
+        ns_module="mypkg",
+        dep_tree=dep_tree,
+    )
+
+    assert "tests.test_api" in impacted
+```
+
+!!! tip
+    The graph's inverted edge direction (imported module → dependents) is what makes `resolve_impacted_tests(["mypkg.core"], dep_tree)` return everything that transitively depends on `mypkg.core`. A handful of `add_edge()` calls is usually enough to cover your strategy's branches.
+
+#### Integration testing with `pytester`
+
+For end-to-end coverage — including entry-point discovery and CLI flag registration — use pytest's built-in `pytester` fixture. Patch `importlib.metadata.entry_points` to inject your strategy without having to `pip install` it.
+
+```python
+from unittest.mock import MagicMock, patch
+from pytest_impacted.extensions import clear_extension_cache
+from my_extension.strategy import MyStrategy
+
+
+@patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+def test_extension_discovered_by_plugin(mock_eps, pytester):
+    ep = MagicMock()
+    ep.name = "my_extension"
+    ep.load.return_value = MyStrategy
+    mock_eps.return_value = [ep]
+    clear_extension_cache()
+
+    pytester.makepyfile(test_smoke="def test_ok(): pass")
+    result = pytester.runpytest("-v", "--impacted", "--impacted-module=pytest_impacted")
+    result.stdout.fnmatch_lines(["*extensions=my_extension*"])
+```
+
+See `tests/test_extensions.py` and `tests/test_extension_integration.py` in the pytest-impacted repo for the canonical patterns used by the built-in test suite.
 
 ## CI Integration
 
