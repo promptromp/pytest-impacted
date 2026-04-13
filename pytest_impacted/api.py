@@ -74,16 +74,29 @@ def get_impacted_tests(
     # Build the dependency graph once and pass it to the strategy pipeline
     dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package)
 
-    # Use the strategy to find impacted test modules
-    impacted_test_modules = strategy.find_impacted_tests(
-        changed_files=impacted_files,
-        impacted_modules=impacted_modules,
+    # Lifecycle: setup → find_impacted_tests → teardown. The try/finally
+    # guarantees teardown runs even if find_impacted_tests raises, so
+    # strategies that allocated resources in setup always get a chance to
+    # release them.
+    strategy.setup(
         ns_module=ns_module,
         tests_package=tests_package,
         root_dir=root_dir,
         session=session,
         dep_tree=dep_tree,
     )
+    try:
+        impacted_test_modules = strategy.find_impacted_tests(
+            changed_files=impacted_files,
+            impacted_modules=impacted_modules,
+            ns_module=ns_module,
+            tests_package=tests_package,
+            root_dir=root_dir,
+            session=session,
+            dep_tree=dep_tree,
+        )
+    finally:
+        strategy.teardown()
 
     if not impacted_test_modules:
         warn(
