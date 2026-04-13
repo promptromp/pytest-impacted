@@ -1,6 +1,7 @@
 """Impact analysis strategies."""
 
 from __future__ import annotations
+import logging
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,9 @@ import networkx as nx
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
 from pytest_impacted.traversal import discover_submodules
+
+
+logger = logging.getLogger(__name__)
 
 
 # Default dependency file basenames that trigger all tests when changed
@@ -97,10 +101,61 @@ class ImpactStrategy(ABC):
     Class-level attributes for extensions:
         config_options: Declare configuration options the strategy accepts.
         priority: Ordering weight (lower = runs earlier, default = 100).
+
+    Lifecycle:
+        :meth:`setup` runs once per pytest run, before any
+        :meth:`find_impacted_tests` call. Strategies can use it to build
+        expensive indices, read config files, or warm caches — work that
+        would otherwise have to live in a lazy-init guard inside
+        :meth:`find_impacted_tests`.
+
+        :meth:`teardown` runs once per pytest run, after all
+        :meth:`find_impacted_tests` calls have completed. It fires even if
+        :meth:`find_impacted_tests` raises. Strategies can use it to release
+        resources or reset per-run state.
+
+        Both hooks have no-op default implementations, so existing strategies
+        need no changes to adopt the new lifecycle.
     """
 
     config_options: ClassVar[list[ConfigOption]] = []
     priority: ClassVar[int] = 100
+
+    def setup(  # noqa: B027  — intentional no-op default; subclasses override if needed
+        self,
+        *,
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session: Any = None,
+        dep_tree: nx.DiGraph,
+    ) -> None:
+        """Prepare the strategy for a pytest run.
+
+        Called exactly once per :func:`~pytest_impacted.api.get_impacted_tests`
+        invocation, before any :meth:`find_impacted_tests` call. Default
+        implementation is a no-op — override when you need to build per-run
+        indices or warm caches. Receives the same context kwargs as
+        :meth:`find_impacted_tests` except ``changed_files`` /
+        ``impacted_modules``, which are not known at setup time.
+
+        Args:
+            ns_module: The namespace module being analyzed.
+            tests_package: Optional tests package name.
+            root_dir: Root directory of the repository.
+            session: Optional pytest session object.
+            dep_tree: The pre-built dependency graph for this run. Safe to
+                inspect; do not mutate (see :meth:`enrich_dep_tree` in a
+                future release for the sanctioned mutation hook).
+        """
+
+    def teardown(self) -> None:  # noqa: B027  — intentional no-op default
+        """Release any state built during :meth:`setup`.
+
+        Called exactly once per run after all :meth:`find_impacted_tests`
+        calls have completed, even if one of them raises. Default
+        implementation is a no-op.
+        """
 
     @abstractmethod
     def find_impacted_tests(
@@ -306,6 +361,58 @@ class CompositeImpactStrategy(ImpactStrategy):
     def __init__(self, strategies: list[ImpactStrategy]):
         """Initialize with a list of strategies to apply."""
         self.strategies = strategies
+
+    def setup(
+        self,
+        *,
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session: Any = None,
+        dep_tree: nx.DiGraph,
+    ) -> None:
+        """Propagate :meth:`setup` to every sub-strategy in list order.
+
+        Exceptions raised by individual sub-strategies are logged at WARNING
+        level and swallowed — one misbehaving extension must not prevent the
+        others from running. This matches the fault-tolerance applied to
+        entry-point discovery in :mod:`pytest_impacted.extensions`.
+        """
+        for strategy in self.strategies:
+            try:
+                strategy.setup(
+                    ns_module=ns_module,
+                    tests_package=tests_package,
+                    root_dir=root_dir,
+                    session=session,
+                    dep_tree=dep_tree,
+                )
+            except Exception:
+                logger.warning(
+                    "Strategy %s.%s raised in setup(); skipping its setup phase.",
+                    strategy.__class__.__module__,
+                    strategy.__class__.__qualname__,
+                    exc_info=True,
+                )
+
+    def teardown(self) -> None:
+        """Propagate :meth:`teardown` to every sub-strategy in reverse order.
+
+        Reverse order follows the LIFO convention used by context managers
+        and ``ExitStack``: the last strategy set up is the first torn down.
+        Exceptions are logged and swallowed for the same fault-tolerance
+        reason as :meth:`setup`.
+        """
+        for strategy in reversed(self.strategies):
+            try:
+                strategy.teardown()
+            except Exception:
+                logger.warning(
+                    "Strategy %s.%s raised in teardown(); continuing with remaining strategies.",
+                    strategy.__class__.__module__,
+                    strategy.__class__.__qualname__,
+                    exc_info=True,
+                )
 
     def find_impacted_tests(
         self,

@@ -341,6 +341,39 @@ class MyScanningStrategy(ImpactStrategy):
 !!! tip
     `discover_submodules` is LRU-cached by `(package, require_init)` so calling it multiple times within a single pytest run is cheap. The cache is cleared by `clear_dep_tree_cache()` alongside the dependency graph cache.
 
+### Lifecycle Hooks
+
+`ImpactStrategy` exposes two optional lifecycle methods that run once per pytest invocation — `setup` and `teardown`. They are the right place for one-time work like building indices, reading config files, or warming caches.
+
+```python
+from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+
+class IndexingStrategy(ImpactStrategy):
+    def setup(self, *, ns_module, tests_package=None, root_dir=None, session=None, dep_tree):
+        # One-time O(source-tree) work happens here, not in find_impacted_tests
+        self._index = {}
+        for module_name, file_path in discover_submodules(ns_module).items():
+            self._index[module_name] = parse_file_imports(file_path, module_name)
+
+    def teardown(self):
+        # Release per-run state. Fires even if find_impacted_tests raises.
+        self._index = None
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        # Cheap lookups against self._index — no scanning.
+        ...
+        return []
+```
+
+**When they fire.** `pytest_impacted.api.get_impacted_tests` invokes `strategy.setup(...)` immediately before `strategy.find_impacted_tests(...)`, and `strategy.teardown()` in a `finally` block immediately after. Teardown always runs, even if `find_impacted_tests` raises — so strategies can allocate resources in `setup` with confidence they will be released.
+
+**Signature.** `setup` takes only keyword arguments: `ns_module`, `tests_package`, `root_dir`, `session`, `dep_tree`. These are the same context kwargs as `find_impacted_tests` minus `changed_files` / `impacted_modules` (which are not known at setup time). Both hooks have no-op default implementations on `ImpactStrategy`, so existing strategies adopt the new lifecycle without any changes.
+
+**Composition and ordering.** `CompositeImpactStrategy` propagates `setup` to its children in list order and `teardown` in reverse order (LIFO, matching the convention used by context managers and `ExitStack`). If any sub-strategy's `setup` or `teardown` raises, the composite logs a warning on the `pytest_impacted.strategies` logger and continues with the remaining sub-strategies — one misbehaving extension cannot prevent the others from running.
+
+!!! tip
+    If you find yourself writing a lazy-init guard at the top of `find_impacted_tests` (`if self._index is None: ...`), that's the signal to move the work into `setup`. The hook also makes timing and profiling cleaner — you can measure setup cost independently from per-call work.
+
 ### Error Handling
 
 The extension system is designed to be fault-tolerant:

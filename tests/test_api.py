@@ -313,3 +313,89 @@ def test_get_impacted_tests_mixed_dep_and_py_changes(
     call_args = mock_strategy.find_impacted_tests.call_args
     assert "uv.lock" in call_args.kwargs["changed_files"]
     assert "src/module.py" in call_args.kwargs["changed_files"]
+
+
+# --- Lifecycle hooks (issue #43 Gap 2) --------------------------------------
+
+
+from pytest_impacted.strategies import ImpactStrategy  # noqa: E402  (grouped at bottom of file)
+
+
+class _LifecycleSpy(ImpactStrategy):
+    """Records every lifecycle method call in the order it fired."""
+
+    def __init__(self, *, find_raises=False, result=None):
+        self.events: list[str] = []
+        self._find_raises = find_raises
+        self._result = result or ["test_module1"]
+
+    def setup(self, *, ns_module, tests_package=None, root_dir=None, session=None, dep_tree):
+        self.events.append("setup")
+
+    def teardown(self):
+        self.events.append("teardown")
+
+    def find_impacted_tests(
+        self,
+        changed_files,
+        impacted_modules,
+        ns_module,
+        tests_package=None,
+        root_dir=None,
+        session=None,
+        *,
+        dep_tree,
+    ):
+        self.events.append("find")
+        if self._find_raises:
+            raise RuntimeError("boom from find_impacted_tests")
+        return self._result
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+@patch("pytest_impacted.api.resolve_modules_to_files")
+def test_get_impacted_tests_calls_setup_find_teardown_in_order(
+    mock_resolve_modules_to_files,
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+):
+    """api.get_impacted_tests must invoke setup → find → teardown on the strategy."""
+    mock_find_impacted_files.return_value = ["src/mod.py"]
+    mock_resolve_files_to_modules.return_value = ["pkg.mod"]
+    mock_resolve_modules_to_files.return_value = ["tests/test_mod.py"]
+
+    spy = _LifecycleSpy()
+    get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=Path("."),
+        ns_module="pkg",
+        tests_dir="tests",
+        strategy=spy,
+    )
+    assert spy.events == ["setup", "find", "teardown"]
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+def test_get_impacted_tests_teardown_fires_even_when_find_raises(
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+):
+    """The try/finally in api.py must guarantee teardown when find_impacted_tests raises."""
+    mock_find_impacted_files.return_value = ["src/mod.py"]
+    mock_resolve_files_to_modules.return_value = ["pkg.mod"]
+
+    spy = _LifecycleSpy(find_raises=True)
+    with pytest.raises(RuntimeError, match="boom from find_impacted_tests"):
+        get_impacted_tests(
+            impacted_git_mode=GitMode.UNSTAGED,
+            impacted_base_branch="main",
+            root_dir=Path("."),
+            ns_module="pkg",
+            tests_dir="tests",
+            strategy=spy,
+        )
+    # teardown must have fired despite the exception in find
+    assert spy.events == ["setup", "find", "teardown"]

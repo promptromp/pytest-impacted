@@ -96,3 +96,124 @@ class TestGetDefaultStrategies:
         strategies_b = get_default_strategies()
         assert strategies_a is not strategies_b
         assert strategies_a[0] is not strategies_b[0]
+
+
+class _Spy(ImpactStrategy):
+    """Test double that records every lifecycle call it receives."""
+
+    def __init__(self, name, events, *, setup_raises=False, teardown_raises=False):
+        self.name = name
+        self.events = events
+        self.setup_raises = setup_raises
+        self.teardown_raises = teardown_raises
+
+    def setup(self, *, ns_module, tests_package=None, root_dir=None, session=None, dep_tree):
+        self.events.append(("setup", self.name))
+        if self.setup_raises:
+            raise RuntimeError(f"{self.name} setup boom")
+
+    def teardown(self):
+        self.events.append(("teardown", self.name))
+        if self.teardown_raises:
+            raise RuntimeError(f"{self.name} teardown boom")
+
+    def find_impacted_tests(
+        self,
+        changed_files,
+        impacted_modules,
+        ns_module,
+        tests_package=None,
+        root_dir=None,
+        session=None,
+        *,
+        dep_tree,
+    ):
+        self.events.append(("find", self.name))
+        return [f"test_from_{self.name}"]
+
+
+class TestCompositeLifecycle:
+    """Tests for setup/teardown propagation through CompositeImpactStrategy."""
+
+    def test_setup_propagates_to_children_in_list_order(self):
+        events = []
+        composite = CompositeImpactStrategy([_Spy("a", events), _Spy("b", events), _Spy("c", events)])
+        composite.setup(ns_module="pkg", dep_tree=nx.DiGraph())
+        assert events == [("setup", "a"), ("setup", "b"), ("setup", "c")]
+
+    def test_teardown_propagates_to_children_in_reverse_order(self):
+        events = []
+        composite = CompositeImpactStrategy([_Spy("a", events), _Spy("b", events), _Spy("c", events)])
+        composite.teardown()
+        # LIFO: last set up is first torn down
+        assert events == [("teardown", "c"), ("teardown", "b"), ("teardown", "a")]
+
+    def test_setup_exception_does_not_abort_remaining_children(self, caplog):
+        events = []
+        composite = CompositeImpactStrategy(
+            [_Spy("a", events), _Spy("b", events, setup_raises=True), _Spy("c", events)]
+        )
+        with caplog.at_level("WARNING", logger="pytest_impacted.strategies"):
+            composite.setup(ns_module="pkg", dep_tree=nx.DiGraph())
+
+        # All three setups were attempted
+        assert events == [("setup", "a"), ("setup", "b"), ("setup", "c")]
+        # And the failure was logged
+        assert any("raised in setup()" in rec.getMessage() for rec in caplog.records)
+
+    def test_teardown_exception_does_not_abort_remaining_children(self, caplog):
+        events = []
+        composite = CompositeImpactStrategy(
+            [_Spy("a", events), _Spy("b", events, teardown_raises=True), _Spy("c", events)]
+        )
+        with caplog.at_level("WARNING", logger="pytest_impacted.strategies"):
+            composite.teardown()
+
+        # Reverse order, all three attempted even though b raised
+        assert events == [("teardown", "c"), ("teardown", "b"), ("teardown", "a")]
+        assert any("raised in teardown()" in rec.getMessage() for rec in caplog.records)
+
+    def test_default_setup_teardown_are_no_ops_on_base_class(self):
+        """Existing strategies that don't override the hooks must keep working.
+
+        Regression guard: adding setup/teardown to ImpactStrategy must not
+        force any downstream subclass to implement them.
+        """
+
+        class LegacyStrategy(ImpactStrategy):
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        s = LegacyStrategy()
+        # Neither call should raise
+        s.setup(ns_module="pkg", dep_tree=nx.DiGraph())
+        s.teardown()
+
+    def test_setup_passes_all_context_kwargs_to_children(self):
+        """All kwargs supplied to the composite's setup should reach each child."""
+        received = {}
+
+        class Capturing(ImpactStrategy):
+            def setup(self, **kwargs):
+                received.update(kwargs)
+
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        dep_tree = nx.DiGraph()
+        session = object()
+        composite = CompositeImpactStrategy([Capturing()])
+        composite.setup(
+            ns_module="mypkg",
+            tests_package="tests",
+            root_dir=None,
+            session=session,
+            dep_tree=dep_tree,
+        )
+        assert received == {
+            "ns_module": "mypkg",
+            "tests_package": "tests",
+            "root_dir": None,
+            "session": session,
+            "dep_tree": dep_tree,
+        }
