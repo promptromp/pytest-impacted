@@ -8,6 +8,9 @@ matching CLAUDE.md / README / docs entries in the same commit.
 from __future__ import annotations
 
 import pytest_impacted
+from pytest_impacted.parsing import parse_file_imports as _canonical_parse_file_imports
+from pytest_impacted.traversal import discover_submodules as _canonical_discover_submodules
+
 
 EXPECTED_PUBLIC_API = frozenset(
     {
@@ -32,12 +35,8 @@ def test_each_public_name_is_importable_from_package_root():
 
 
 def test_discover_submodules_is_the_canonical_traversal_helper():
-    from pytest_impacted.traversal import discover_submodules as canonical
-
-    assert pytest_impacted.discover_submodules is canonical
+    assert pytest_impacted.discover_submodules is _canonical_discover_submodules
 
 
 def test_parse_file_imports_is_the_canonical_parsing_helper():
-    from pytest_impacted.parsing import parse_file_imports as canonical
-
-    assert pytest_impacted.parse_file_imports is canonical
+    assert pytest_impacted.parse_file_imports is _canonical_parse_file_imports
