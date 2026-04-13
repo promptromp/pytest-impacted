@@ -217,3 +217,97 @@ class TestCompositeLifecycle:
             "session": session,
             "dep_tree": dep_tree,
         }
+
+    def test_enrich_dep_tree_propagates_to_children_in_list_order(self):
+        """Composite.enrich_dep_tree calls each child's enrich_dep_tree in list order."""
+        events = []
+
+        class Enricher(ImpactStrategy):
+            def __init__(self, name, events_list):
+                self.name = name
+                self.events = events_list
+
+            def enrich_dep_tree(self, dep_tree):
+                self.events.append(("enrich", self.name))
+                dep_tree.add_edge(f"src.{self.name}", f"tests.test_{self.name}")
+
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        dep_tree = nx.DiGraph()
+        composite = CompositeImpactStrategy([Enricher("a", events), Enricher("b", events), Enricher("c", events)])
+        composite.enrich_dep_tree(dep_tree)
+
+        assert events == [("enrich", "a"), ("enrich", "b"), ("enrich", "c")]
+        # All three synthetic edges are present
+        assert dep_tree.has_edge("src.a", "tests.test_a")
+        assert dep_tree.has_edge("src.b", "tests.test_b")
+        assert dep_tree.has_edge("src.c", "tests.test_c")
+
+    def test_enrich_dep_tree_edges_visible_to_later_children(self):
+        """Edges added by one child's enrich_dep_tree must be visible to later children."""
+        observed_by_second = {"nodes": None, "edges": None}
+
+        class FirstEnricher(ImpactStrategy):
+            def enrich_dep_tree(self, dep_tree):
+                dep_tree.add_edge("foo", "bar")
+
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        class SecondObserver(ImpactStrategy):
+            def enrich_dep_tree(self, dep_tree):
+                observed_by_second["nodes"] = set(dep_tree.nodes)
+                observed_by_second["edges"] = set(dep_tree.edges)
+
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        composite = CompositeImpactStrategy([FirstEnricher(), SecondObserver()])
+        composite.enrich_dep_tree(nx.DiGraph())
+
+        assert observed_by_second["nodes"] == {"foo", "bar"}
+        assert observed_by_second["edges"] == {("foo", "bar")}
+
+    def test_enrich_dep_tree_exception_does_not_abort_remaining_children(self, caplog):
+        events = []
+
+        class GoodEnricher(ImpactStrategy):
+            def __init__(self, name, events_list):
+                self.name = name
+                self.events = events_list
+
+            def enrich_dep_tree(self, dep_tree):
+                self.events.append(("enrich", self.name))
+
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        class BadEnricher(ImpactStrategy):
+            def enrich_dep_tree(self, dep_tree):
+                events.append(("enrich", "b"))
+                raise RuntimeError("b enrich boom")
+
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        composite = CompositeImpactStrategy([GoodEnricher("a", events), BadEnricher(), GoodEnricher("c", events)])
+        with caplog.at_level("WARNING", logger="pytest_impacted.strategies"):
+            composite.enrich_dep_tree(nx.DiGraph())
+
+        assert events == [("enrich", "a"), ("enrich", "b"), ("enrich", "c")]
+        assert any("raised in enrich_dep_tree()" in rec.getMessage() for rec in caplog.records)
+
+    def test_default_enrich_dep_tree_is_noop_on_base_class(self):
+        """Legacy strategies that don't override enrich_dep_tree must keep working."""
+
+        class LegacyStrategy(ImpactStrategy):
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        tree = nx.DiGraph()
+        tree.add_node("preexisting")
+        LegacyStrategy().enrich_dep_tree(tree)
+        # Graph is unchanged
+        assert set(tree.nodes) == {"preexisting"}
+        assert set(tree.edges) == set()

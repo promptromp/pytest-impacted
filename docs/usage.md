@@ -343,7 +343,9 @@ class MyScanningStrategy(ImpactStrategy):
 
 ### Lifecycle Hooks
 
-`ImpactStrategy` exposes two optional lifecycle methods that run once per pytest invocation — `setup` and `teardown`. They are the right place for one-time work like building indices, reading config files, or warming caches.
+`ImpactStrategy` exposes three optional lifecycle methods that run once per pytest invocation: `enrich_dep_tree`, `setup`, and `teardown`. They give extensions proper places to hang one-time work and — critically — to inject synthetic dependency edges that the built-in AST traversal will then follow automatically.
+
+#### `setup` and `teardown` — one-time work per run
 
 ```python
 from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
@@ -373,6 +375,38 @@ class IndexingStrategy(ImpactStrategy):
 
 !!! tip
     If you find yourself writing a lazy-init guard at the top of `find_impacted_tests` (`if self._index is None: ...`), that's the signal to move the work into `setup`. The hook also makes timing and profiling cleaner — you can measure setup cost independently from per-call work.
+
+#### `enrich_dep_tree` — inject synthetic edges
+
+Some dependency relationships are invisible to static import analysis: runtime DI bindings, codegen outputs, plugin discovery, config-driven wiring. The `enrich_dep_tree` hook lets an extension add those relationships as explicit edges in the shared dependency graph **before** any strategy runs its impact analysis. The built-in AST strategy then traverses those synthetic edges exactly as if they had been real imports.
+
+```python
+import networkx as nx
+from pytest_impacted import ImpactStrategy
+
+class DIBindingStrategy(ImpactStrategy):
+    def enrich_dep_tree(self, dep_tree: nx.DiGraph) -> None:
+        # Scan your codebase (or a precomputed manifest) and add edges
+        # for each runtime binding: producer → consumer. The graph uses
+        # inverted edge direction, so the producer points at the file
+        # that would be impacted when the producer changes.
+        dep_tree.add_edge("myapp.bindings.database", "myapp.services.user_service")
+        dep_tree.add_edge("myapp.bindings.database", "tests.test_user_service")
+
+    def find_impacted_tests(self, *args, **kwargs):
+        # Often unnecessary — the AST strategy already traverses the
+        # edges you added above. Return [] to contribute nothing extra.
+        return []
+```
+
+**When it fires.** `enrich_dep_tree` runs once per pytest invocation, on a **per-run copy** of the LRU-cached base graph, **before** any strategy's `setup` is called. The ordering is: build cached graph → copy → `enrich_dep_tree(all strategies)` → `setup(all strategies)` → `find_impacted_tests(all strategies)` → `teardown(all strategies)`.
+
+**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached by `(ns_module, tests_package)`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
+
+**Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
+
+!!! tip
+    Prefer `enrich_dep_tree` over doing your own DFS inside `find_impacted_tests` when the relationships you're modeling can be expressed as edges. You get the built-in traversal, deduplication, and transitive closure for free, and the edges are visible to every other strategy in the pipeline — not just yours.
 
 ### Error Handling
 
