@@ -142,7 +142,7 @@ class MyCustomStrategy(ImpactStrategy):
         return resolve_impacted_tests(impacted_modules, dep_tree)
 ```
 
-Users can configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`. Extensions can alternatively use duck-typing (any class with a `find_impacted_tests` method — no inheritance required) and can set a `priority` class variable to control execution order. See the [Usage Guide](https://promptromp.github.io/pytest-impacted/usage/#strategy-extensions-plugin-system) for the full reference.
+Users can configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`. Extensions can alternatively use duck-typing (any class with a `find_impacted_tests` method — no inheritance required) and can set a `priority` class variable to control execution order. For extensions that need to walk the source tree or reuse the core AST parser, `discover_submodules` and `parse_file_imports` are also exported from `pytest_impacted`. See the [Usage Guide](https://promptromp.github.io/pytest-impacted/usage/#strategy-extensions-plugin-system) for the full reference.
 
 You can also supply a custom strategy programmatically via the `get_impacted_tests()` API:
 

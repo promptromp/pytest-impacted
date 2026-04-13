@@ -315,6 +315,32 @@ class MyStrategy(ImpactStrategy):
 
 The dependency graph uses inverted edge direction: edges point from imported module to its dependents (e.g. `core -> api -> test_api`). This means `nx.dfs_preorder_nodes(dep_tree, source="core")` finds all modules that transitively depend on `core`.
 
+### Extension Utilities
+
+Beyond `resolve_impacted_tests`, two additional helpers are exported from the package root for extensions that need to do their own file or import analysis:
+
+- **`discover_submodules(package, require_init=True)`** — walks a Python package and returns a `{module_name: file_path}` dict. Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout, namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files. This is the right primitive for any extension that needs to scan the full source tree.
+
+- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a `list[str]` of the modules it imports. Uses pytest-impacted's own astroid-based parser, so extensions that call it will interpret imports the same way the core does (including relative imports, star imports, and conditional imports inside `if TYPE_CHECKING` blocks). No module execution — imports are extracted from the AST without running code.
+
+Example: a strategy that enumerates all source files and scans them for a custom pattern:
+
+```python
+from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+
+class MyScanningStrategy(ImpactStrategy):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        # Walk every source file in the package
+        modules = discover_submodules(ns_module)
+        for module_name, file_path in modules.items():
+            imports = parse_file_imports(file_path, module_name)
+            # ... do something with imports ...
+        return []
+```
+
+!!! tip
+    `discover_submodules` is LRU-cached by `(package, require_init)` so calling it multiple times within a single pytest run is cheap. The cache is cleared by `clear_dep_tree_cache()` alongside the dependency graph cache.
+
 ### Error Handling
 
 The extension system is designed to be fault-tolerant:
