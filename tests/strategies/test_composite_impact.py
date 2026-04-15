@@ -1,5 +1,6 @@
 """unit-tests for the composite impact strategy module."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import networkx as nx
@@ -227,7 +228,7 @@ class TestCompositeLifecycle:
                 self.name = name
                 self.events = events_list
 
-            def enrich_dep_tree(self, dep_tree):
+            def enrich_dep_tree(self, dep_tree, **_kwargs):
                 self.events.append(("enrich", self.name))
                 dep_tree.add_edge(f"src.{self.name}", f"tests.test_{self.name}")
 
@@ -236,7 +237,7 @@ class TestCompositeLifecycle:
 
         dep_tree = nx.DiGraph()
         composite = CompositeImpactStrategy([Enricher("a", events), Enricher("b", events), Enricher("c", events)])
-        composite.enrich_dep_tree(dep_tree)
+        composite.enrich_dep_tree(dep_tree, ns_module="pkg")
 
         assert events == [("enrich", "a"), ("enrich", "b"), ("enrich", "c")]
         # All three synthetic edges are present
@@ -249,14 +250,14 @@ class TestCompositeLifecycle:
         observed_by_second = {"nodes": None, "edges": None}
 
         class FirstEnricher(ImpactStrategy):
-            def enrich_dep_tree(self, dep_tree):
+            def enrich_dep_tree(self, dep_tree, **_kwargs):
                 dep_tree.add_edge("foo", "bar")
 
             def find_impacted_tests(self, *args, **kwargs):
                 return []
 
         class SecondObserver(ImpactStrategy):
-            def enrich_dep_tree(self, dep_tree):
+            def enrich_dep_tree(self, dep_tree, **_kwargs):
                 observed_by_second["nodes"] = set(dep_tree.nodes)
                 observed_by_second["edges"] = set(dep_tree.edges)
 
@@ -264,7 +265,7 @@ class TestCompositeLifecycle:
                 return []
 
         composite = CompositeImpactStrategy([FirstEnricher(), SecondObserver()])
-        composite.enrich_dep_tree(nx.DiGraph())
+        composite.enrich_dep_tree(nx.DiGraph(), ns_module="pkg")
 
         assert observed_by_second["nodes"] == {"foo", "bar"}
         assert observed_by_second["edges"] == {("foo", "bar")}
@@ -277,14 +278,14 @@ class TestCompositeLifecycle:
                 self.name = name
                 self.events = events_list
 
-            def enrich_dep_tree(self, dep_tree):
+            def enrich_dep_tree(self, dep_tree, **_kwargs):
                 self.events.append(("enrich", self.name))
 
             def find_impacted_tests(self, *args, **kwargs):
                 return []
 
         class BadEnricher(ImpactStrategy):
-            def enrich_dep_tree(self, dep_tree):
+            def enrich_dep_tree(self, dep_tree, **_kwargs):
                 events.append(("enrich", "b"))
                 raise RuntimeError("b enrich boom")
 
@@ -293,7 +294,7 @@ class TestCompositeLifecycle:
 
         composite = CompositeImpactStrategy([GoodEnricher("a", events), BadEnricher(), GoodEnricher("c", events)])
         with caplog.at_level("WARNING", logger="pytest_impacted.strategies"):
-            composite.enrich_dep_tree(nx.DiGraph())
+            composite.enrich_dep_tree(nx.DiGraph(), ns_module="pkg")
 
         assert events == [("enrich", "a"), ("enrich", "b"), ("enrich", "c")]
         assert any("raised in enrich_dep_tree()" in rec.getMessage() for rec in caplog.records)
@@ -307,7 +308,41 @@ class TestCompositeLifecycle:
 
         tree = nx.DiGraph()
         tree.add_node("preexisting")
-        LegacyStrategy().enrich_dep_tree(tree)
+        LegacyStrategy().enrich_dep_tree(tree, ns_module="pkg")
         # Graph is unchanged
         assert set(tree.nodes) == {"preexisting"}
         assert set(tree.edges) == set()
+
+    def test_enrich_dep_tree_passes_all_context_kwargs_to_children(self):
+        """All kwargs supplied to composite.enrich_dep_tree reach each child unchanged.
+
+        This is the Stage 3.5 enhancement: scan-based enrichers need
+        ns_module / tests_package / root_dir / session to locate the
+        source tree. The composite must propagate them verbatim.
+        """
+        received = {}
+
+        class Capturing(ImpactStrategy):
+            def enrich_dep_tree(self, dep_tree, **kwargs):
+                received.update(kwargs)
+
+            def find_impacted_tests(self, *args, **kwargs):
+                return []
+
+        dep_tree = nx.DiGraph()
+        session = object()
+        root_dir = Path("/tmp/fake")
+        composite = CompositeImpactStrategy([Capturing()])
+        composite.enrich_dep_tree(
+            dep_tree,
+            ns_module="mypkg",
+            tests_package="tests",
+            root_dir=root_dir,
+            session=session,
+        )
+        assert received == {
+            "ns_module": "mypkg",
+            "tests_package": "tests",
+            "root_dir": root_dir,
+            "session": session,
+        }

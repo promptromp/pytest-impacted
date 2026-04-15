@@ -79,7 +79,14 @@ def get_impacted_tests(
 
     # Enrichment phase — runs before setup so that setup and find_impacted_tests
     # both see the final graph (with any synthetic edges added by extensions).
-    strategy.enrich_dep_tree(dep_tree)
+    # Receives the full context so scan-based enrichers can walk the source tree.
+    strategy.enrich_dep_tree(
+        dep_tree,
+        ns_module=ns_module,
+        tests_package=tests_package,
+        root_dir=root_dir,
+        session=session,
+    )
 
     # Lifecycle: setup → find_impacted_tests → teardown. The try/finally
     # guarantees teardown runs even if find_impacted_tests raises, so

@@ -332,9 +332,16 @@ class _LifecycleSpy(ImpactStrategy):
         self._result = result or ["test_module1"]
         self._enrich_adds_edge = enrich_adds_edge  # tuple(src, dst) or None
         self.dep_tree_seen_by_find = None
+        self.enrich_kwargs_seen: dict | None = None
 
-    def enrich_dep_tree(self, dep_tree):
+    def enrich_dep_tree(self, dep_tree, *, ns_module, tests_package=None, root_dir=None, session=None):
         self.events.append("enrich")
+        self.enrich_kwargs_seen = {
+            "ns_module": ns_module,
+            "tests_package": tests_package,
+            "root_dir": root_dir,
+            "session": session,
+        }
         if self._enrich_adds_edge is not None:
             dep_tree.add_edge(*self._enrich_adds_edge)
 
@@ -487,3 +494,36 @@ def test_get_impacted_tests_does_not_pollute_cached_dep_tree(
     # The base graph the cache returned must NOT contain the synthetic edge.
     assert not base_graph.has_edge("pkg.mod", "leak")
     assert "leak" not in base_graph.nodes
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+@patch("pytest_impacted.api.resolve_modules_to_files")
+def test_get_impacted_tests_enrich_receives_full_context(
+    mock_resolve_modules_to_files,
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+):
+    """api.get_impacted_tests must pass ns_module/tests_package/root_dir/session
+    to strategy.enrich_dep_tree so scan-based enrichers can walk the source tree.
+    """
+    mock_find_impacted_files.return_value = ["src/mod.py"]
+    mock_resolve_files_to_modules.return_value = ["pkg.mod"]
+    mock_resolve_modules_to_files.return_value = ["tests/test_mod.py"]
+
+    spy = _LifecycleSpy()
+    root = Path("/tmp/fake-root")
+    get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=root,
+        ns_module="pkg",
+        tests_dir="tests",
+        strategy=spy,
+    )
+    assert spy.enrich_kwargs_seen is not None
+    assert spy.enrich_kwargs_seen["ns_module"] == "pkg"
+    assert spy.enrich_kwargs_seen["tests_package"] == "tests"
+    assert spy.enrich_kwargs_seen["root_dir"] == root
+    # session is None in this test because we didn't pass one
+    assert spy.enrich_kwargs_seen["session"] is None
