@@ -150,7 +150,7 @@ Strategies may also override three optional **lifecycle hooks** (all with no-op 
 - `setup(*, ns_module, tests_package, root_dir, session, dep_tree)` — one-time per-run warm-up; the right place for expensive O(source-tree) indexing instead of lazy-init inside `find_impacted_tests`.
 - `teardown()` — release per-run state; always fires, even if `find_impacted_tests` raises.
 
-See the [Usage Guide](https://promptromp.github.io/pytest-impacted/usage/#strategy-extensions-plugin-system) for the full reference and worked examples.
+See the [Extensions guide](https://promptromp.github.io/pytest-impacted/extensions/) for the full reference and worked examples.
 
 You can also supply a custom strategy programmatically via the `get_impacted_tests()` API:
 

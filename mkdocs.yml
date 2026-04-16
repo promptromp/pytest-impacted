@@ -52,6 +52,7 @@ markdown_extensions:
 nav:
   - Home: README.md
   - Usage: usage.md
+  - Extensions: extensions.md
 
 
 extra:
