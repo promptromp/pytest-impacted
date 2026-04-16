@@ -100,7 +100,7 @@ Extension config options are auto-registered as CLI flags (`--impacted-ext-{name
 
 **Lifecycle hooks**: `ImpactStrategy` exposes optional `enrich_dep_tree(dep_tree, *, ns_module, tests_package, root_dir, session)`, `setup(*, ns_module, tests_package, root_dir, session, dep_tree)`, and `teardown()` methods with no-op defaults. `api.get_impacted_tests` drives the pipeline as `cached_build_dep_tree → .copy() → strategy.enrich_dep_tree(tree, context) → strategy.setup(...) → strategy.find_impacted_tests(...) → strategy.teardown()` (teardown in a `finally` block so it always fires). The copy step is load-bearing: it prevents enrichment from polluting the LRU-cached base graph, so the same module in the same process (e.g. repeated pytester runs) always starts from a clean base. `enrich_dep_tree` receives the same context kwargs as `setup` so scan-based enrichers can walk the source tree with `discover_submodules` + `parse_file_imports` from inside the hook — a scan-then-enrich pattern that produces synthetic edges the built-in AST strategy then traverses automatically. `CompositeImpactStrategy` propagates `enrich_dep_tree` and `setup` in list order, `teardown` in reverse (LIFO); exceptions in any sub-strategy's hook are logged at WARNING level on `pytest_impacted.strategies` and swallowed so one misbehaving extension cannot prevent the others from running. Extensions doing O(source-tree) scans (e.g. pytest-impacted-microcosm's binding index) should move that work from lazy-init inside `find_impacted_tests` into `enrich_dep_tree` (where they can both scan AND inject the resulting edges in one hook), or into `setup` if they only need per-strategy state and not graph mutation.
 
-**Cross-run caching convention**: pytest-impacted does not expose a built-in cache service for extensions, but documents a filesystem convention in `docs/usage.md` — store per-extension state under `.pytest-impacted-cache/<extension-name>/` next to `.pytest_cache/`, invalidate with an mtime hash of the scanned files, expose the location as a `ConfigOption` so users can override it. `.pytest-impacted-cache/` is in the repo's `.gitignore` so the convention is reinforced by default. This is a convention, not an API — a future integrated `Cache` service may supersede it.
+**Cross-run caching convention**: pytest-impacted does not expose a built-in cache service for extensions, but documents a filesystem convention in `docs/extensions.md` — store per-extension state under `.pytest-impacted-cache/<extension-name>/` next to `.pytest_cache/`, invalidate with an mtime hash of the scanned files, expose the location as a `ConfigOption` so users can override it. `.pytest-impacted-cache/` is in the repo's `.gitignore` so the convention is reinforced by default. This is a convention, not an API — a future integrated `Cache` service may supersede it.
 
 ### Test Structure
 
@@ -108,18 +108,19 @@ Tests mirror the source structure. The `tests/strategies/` subdirectory contains
 
 ## Documentation
 
-The project has three documentation surfaces that must stay in sync:
+The project has four documentation surfaces that must stay in sync:
 
 - **`README.md`** — project home page (also served as MkDocs home via `mkdocs.yml`)
-- **`docs/usage.md`** — detailed usage guide (MkDocs site)
+- **`docs/usage.md`** — detailed usage guide for users running impact analysis (MkDocs site)
+- **`docs/extensions.md`** — dedicated guide for extension authors (MkDocs site): programmatic strategies, packaged-extension entry points, lifecycle hooks, extension API helpers, cache conventions, error handling, testing patterns
 - **`CLAUDE.md`** — this file (architecture reference for Claude Code)
 
 The documentation site uses [MkDocs Material](https://squidfun.github.io/mkdocs-material/) and is published to GitHub Pages at `https://promptromp.github.io/pytest-impacted`. Configuration is in `mkdocs.yml`.
 
 ## Special Instructions
 
-- **Keep docs in sync**: When making significant changes to the codebase (new features, API changes, architectural changes, new CLI options, strategy changes), always update **all three** of `CLAUDE.md`, `README.md`, and `docs/usage.md` to reflect those changes in the same PR.
-- **README.md and docs/usage.md serve different audiences**: `README.md` is a concise overview for GitHub/PyPI visitors; `docs/usage.md` is a comprehensive reference with deeper explanations, code examples, and MkDocs-specific features (admonitions, mermaid diagrams).
+- **Keep docs in sync**: When making significant changes to the codebase (new features, API changes, architectural changes, new CLI options, strategy changes), always update `CLAUDE.md`, `README.md`, and the relevant docs page (`docs/usage.md` for end-user workflow, `docs/extensions.md` for extension/strategy author APIs) to reflect those changes in the same PR.
+- **Different audiences**: `README.md` is a concise overview for GitHub/PyPI visitors; `docs/usage.md` is the user-facing reference for running pytest-impacted; `docs/extensions.md` targets developers building third-party strategies/extensions. Keep extension-author content in `docs/extensions.md` and do not let it grow back into `docs/usage.md`.
 
 ## Configuration Notes
 
