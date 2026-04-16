@@ -343,7 +343,9 @@ class MyScanningStrategy(ImpactStrategy):
 
 ### Lifecycle Hooks
 
-`ImpactStrategy` exposes two optional lifecycle methods that run once per pytest invocation — `setup` and `teardown`. They are the right place for one-time work like building indices, reading config files, or warming caches.
+`ImpactStrategy` exposes three optional lifecycle methods that run once per pytest invocation: `enrich_dep_tree`, `setup`, and `teardown`. They give extensions proper places to hang one-time work and — critically — to inject synthetic dependency edges that the built-in AST traversal will then follow automatically.
+
+#### `setup` and `teardown` — one-time work per run
 
 ```python
 from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
@@ -373,6 +375,85 @@ class IndexingStrategy(ImpactStrategy):
 
 !!! tip
     If you find yourself writing a lazy-init guard at the top of `find_impacted_tests` (`if self._index is None: ...`), that's the signal to move the work into `setup`. The hook also makes timing and profiling cleaner — you can measure setup cost independently from per-call work.
+
+#### `enrich_dep_tree` — inject synthetic edges
+
+Some dependency relationships are invisible to static import analysis: runtime DI bindings, codegen outputs, plugin discovery, config-driven wiring. The `enrich_dep_tree` hook lets an extension add those relationships as explicit edges in the shared dependency graph **before** any strategy runs its impact analysis. The built-in AST strategy then traverses those synthetic edges exactly as if they had been real imports.
+
+Most real extensions need to look at the actual source code to decide which edges to add. `enrich_dep_tree` receives the same context kwargs as `setup` (`ns_module`, `tests_package`, `root_dir`, `session`) so you can walk the tree with [`discover_submodules`](#extension-utilities) and [`parse_file_imports`](#extension-utilities) from inside the hook — a scan-then-enrich pattern that keeps all the logic in one place.
+
+```python
+import re
+from pathlib import Path
+
+import networkx as nx
+from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+
+# Finds @binding("key") decorators used by microcosm-style DI frameworks.
+_BINDING_RE = re.compile(r'@binding\(["\']([^"\']+)["\']\)')
+
+
+class DIBindingStrategy(ImpactStrategy):
+    """Bridge runtime DI bindings into the static dependency graph.
+
+    Walks the source tree once per run, finds ``@binding("key")``
+    producers and ``graph.key`` consumers, and adds a synthetic edge
+    from every producer module to every consumer module. The built-in
+    AST strategy then picks up those edges automatically.
+    """
+
+    def enrich_dep_tree(
+        self,
+        dep_tree: nx.DiGraph,
+        *,
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session=None,
+    ) -> None:
+        # 1. Enumerate every source file the core knows about.
+        modules = dict(discover_submodules(ns_module))
+        if tests_package:
+            modules.update(discover_submodules(tests_package, require_init=False))
+
+        # 2. Scan each file for producers and consumers.
+        producers: dict[str, str] = {}  # binding_key -> producer module
+        consumers: dict[str, set[str]] = {}  # binding_key -> {consumer modules}
+        for module_name, file_path in modules.items():
+            try:
+                source = Path(file_path).read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for match in _BINDING_RE.finditer(source):
+                producers[match.group(1)] = module_name
+            for match in re.finditer(r"\bgraph\.(\w+)\b", source):
+                consumers.setdefault(match.group(1), set()).add(module_name)
+
+            # Reuse the core import parser to stay consistent with AST strategy.
+            parse_file_imports(file_path, module_name)
+
+        # 3. Add producer → consumer edges. The graph uses inverted
+        #    direction, so "producer points at impacted consumer"
+        #    matches how the AST strategy reads its own import edges.
+        for key, producer in producers.items():
+            for consumer in consumers.get(key, ()):
+                if producer != consumer:
+                    dep_tree.add_edge(producer, consumer)
+
+    def find_impacted_tests(self, *args, **kwargs):
+        # Often unnecessary — the AST strategy already traverses the
+        # edges you added above. Return [] to contribute nothing extra.
+        return []
+```
+
+**When it fires.** `enrich_dep_tree` runs once per pytest invocation, on a **per-run copy** of the LRU-cached base graph, **before** any strategy's `setup` is called. The ordering is: build cached graph → copy → `enrich_dep_tree(all strategies)` → `setup(all strategies)` → `find_impacted_tests(all strategies)` → `teardown(all strategies)`.
+
+**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached by `(ns_module, tests_package)`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
+
+**Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order, forwarding all context kwargs unchanged. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
+
+!!! tip
+    Prefer `enrich_dep_tree` over doing your own DFS inside `find_impacted_tests` when the relationships you're modeling can be expressed as edges. You get the built-in traversal, deduplication, and transitive closure for free, and the edges are visible to every other strategy in the pipeline — not just yours.
 
 ### Error Handling
 

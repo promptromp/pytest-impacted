@@ -71,8 +71,22 @@ def get_impacted_tests(
             session,
         )
 
-    # Build the dependency graph once and pass it to the strategy pipeline
-    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package)
+    # Build the dependency graph once and pass it to the strategy pipeline.
+    # The result is LRU-cached and must not be mutated, so we hand each run a
+    # shallow copy. Strategies that implement enrich_dep_tree() mutate the
+    # copy, leaving the cached base graph pristine for subsequent runs.
+    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package).copy()
+
+    # Enrichment phase — runs before setup so that setup and find_impacted_tests
+    # both see the final graph (with any synthetic edges added by extensions).
+    # Receives the full context so scan-based enrichers can walk the source tree.
+    strategy.enrich_dep_tree(
+        dep_tree,
+        ns_module=ns_module,
+        tests_package=tests_package,
+        root_dir=root_dir,
+        session=session,
+    )
 
     # Lifecycle: setup → find_impacted_tests → teardown. The try/finally
     # guarantees teardown runs even if find_impacted_tests raises, so

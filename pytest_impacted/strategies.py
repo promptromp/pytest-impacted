@@ -121,6 +121,52 @@ class ImpactStrategy(ABC):
     config_options: ClassVar[list[ConfigOption]] = []
     priority: ClassVar[int] = 100
 
+    def enrich_dep_tree(  # noqa: B027  — intentional no-op default
+        self,
+        dep_tree: nx.DiGraph,
+        *,
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session: Any = None,
+    ) -> None:
+        """Add nodes or edges to the dependency graph before impact analysis runs.
+
+        Called exactly once per :func:`~pytest_impacted.api.get_impacted_tests`
+        invocation, **before** :meth:`setup` and any :meth:`find_impacted_tests`
+        call, on a per-run copy of the graph (the cached base graph is never
+        mutated). Strategies use this hook to add synthetic edges that
+        represent relationships not visible to static import analysis —
+        e.g. dependency-injection bindings, codegen outputs, plugin
+        discovery, config-driven wiring.
+
+        The hook receives the same context kwargs as :meth:`setup`
+        (``ns_module``, ``tests_package``, ``root_dir``, ``session``) so
+        that scan-based enrichers can walk the source tree with
+        :func:`~pytest_impacted.traversal.discover_submodules` and
+        :func:`~pytest_impacted.parsing.parse_file_imports` before
+        deciding which edges to add.
+
+        Once all strategies have enriched the graph, the final graph is
+        passed by reference to every :meth:`setup` and :meth:`find_impacted_tests`
+        call. This means edges added by one strategy are visible to every
+        later strategy in the pipeline — including the built-in AST
+        strategy, which will traverse them normally.
+
+        Default implementation is a no-op. Override to mutate *dep_tree*
+        in place with :meth:`networkx.DiGraph.add_edge` and similar.
+
+        Args:
+            dep_tree: The per-run dependency graph, mutable. A shallow
+                copy of the LRU-cached base graph produced by
+                :func:`~pytest_impacted.strategies.cached_build_dep_tree`,
+                so mutations do not persist across pytest runs.
+            ns_module: The namespace module being analyzed.
+            tests_package: Optional tests package name.
+            root_dir: Root directory of the repository.
+            session: Optional pytest session object.
+        """
+
     def setup(  # noqa: B027  — intentional no-op default; subclasses override if needed
         self,
         *,
@@ -361,6 +407,45 @@ class CompositeImpactStrategy(ImpactStrategy):
     def __init__(self, strategies: list[ImpactStrategy]):
         """Initialize with a list of strategies to apply."""
         self.strategies = strategies
+
+    def enrich_dep_tree(
+        self,
+        dep_tree: nx.DiGraph,
+        *,
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session: Any = None,
+    ) -> None:
+        """Propagate :meth:`enrich_dep_tree` to every sub-strategy in list order.
+
+        Because the graph is mutated in place, edges added by one
+        sub-strategy are visible to every later sub-strategy's
+        :meth:`enrich_dep_tree` call — and, once enrichment is complete,
+        to every sub-strategy's :meth:`find_impacted_tests` call.
+        Exceptions are logged and swallowed so one misbehaving extension
+        cannot block the others.
+
+        All context kwargs are forwarded unchanged so that scan-based
+        enrichers have the same information available as :meth:`setup`
+        and :meth:`find_impacted_tests`.
+        """
+        for strategy in self.strategies:
+            try:
+                strategy.enrich_dep_tree(
+                    dep_tree,
+                    ns_module=ns_module,
+                    tests_package=tests_package,
+                    root_dir=root_dir,
+                    session=session,
+                )
+            except Exception:
+                logger.warning(
+                    "Strategy %s.%s raised in enrich_dep_tree(); skipping its enrichment phase.",
+                    strategy.__class__.__module__,
+                    strategy.__class__.__qualname__,
+                    exc_info=True,
+                )
 
     def setup(
         self,
