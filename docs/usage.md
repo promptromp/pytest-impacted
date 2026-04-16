@@ -455,6 +455,81 @@ class DIBindingStrategy(ImpactStrategy):
 !!! tip
     Prefer `enrich_dep_tree` over doing your own DFS inside `find_impacted_tests` when the relationships you're modeling can be expressed as edges. You get the built-in traversal, deduplication, and transitive closure for free, and the edges are visible to every other strategy in the pipeline — not just yours.
 
+#### Persisting state across runs
+
+Extensions that build an expensive index — for example, scanning every `.py` file for `@binding` decorators, symbol tables, or any other codebase-wide fingerprint — can easily amortize that cost across pytest runs. pytest-impacted does not ship a built-in cache service for extensions, but there is a recommended **filesystem convention** so every extension does not need to reinvent it.
+
+**Recommended layout.** Store per-extension state under `.pytest-impacted-cache/<extension-name>/` in the project root, next to pytest's own `.pytest_cache/`. This keeps extension state easy to discover, easy to clear (`rm -rf .pytest-impacted-cache/`), and out of the way of unrelated tooling. Extensions should add this directory to `.gitignore`.
+
+**Expose the path as a `ConfigOption`.** Users may want to override the location — to move it onto faster storage, share it across CI workers, or point at an absolute path that survives `tmp`-style workdirs. Declare it as a config option so it is auto-registered as a CLI flag (`--impacted-ext-<name>-cache-dir`) and ini value.
+
+```python
+from pathlib import Path
+
+from pytest_impacted import ConfigOption, ImpactStrategy
+
+
+class MyExtension(ImpactStrategy):
+    config_options = [
+        ConfigOption(
+            name="cache_dir",
+            help="Directory for persisted extension state (default: .pytest-impacted-cache/my_ext)",
+            type=str,
+            default=".pytest-impacted-cache/my_ext",
+        ),
+    ]
+
+    def __init__(self, cache_dir: str = ".pytest-impacted-cache/my_ext"):
+        self._cache_dir = Path(cache_dir)
+```
+
+**Invalidate on mtime.** The simplest invalidation strategy that is also correct-by-default: hash the mtimes of every file the extension scans, compare against a stored manifest, rebuild when anything is newer. This catches code edits, git checkouts, and merges without any special integration with git.
+
+```python
+import json
+from pathlib import Path
+
+
+def _mtime_fingerprint(paths: list[Path]) -> str:
+    """Stable hash of (path, mtime_ns) pairs for cache invalidation."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for p in sorted(paths):
+        try:
+            mtime = p.stat().st_mtime_ns
+        except FileNotFoundError:
+            continue
+        h.update(str(p).encode())
+        h.update(str(mtime).encode())
+    return h.hexdigest()
+
+
+def load_or_build(cache_dir: Path, scanned_files: list[Path], build_index):
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = cache_dir / "manifest.json"
+    index_path = cache_dir / "index.json"
+
+    fingerprint = _mtime_fingerprint(scanned_files)
+    if manifest_path.exists() and index_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("fingerprint") == fingerprint:
+            return json.loads(index_path.read_text())
+
+    index = build_index()
+    index_path.write_text(json.dumps(index))
+    manifest_path.write_text(json.dumps({"fingerprint": fingerprint}))
+    return index
+```
+
+Call this from your `setup` or `enrich_dep_tree` hook so the expensive `build_index()` runs only when something on disk has actually changed.
+
+!!! note
+    This is a **convention, not an API**. pytest-impacted does not validate or manage `.pytest-impacted-cache/` — extensions own their own state. A future release may introduce an integrated `Cache` service that handles invalidation automatically; until then, the filesystem convention above is the recommended pattern and keeps extensions consistent with each other.
+
+!!! warning
+    Do not commit `.pytest-impacted-cache/` to version control. Add it to `.gitignore` in the extension's project template, and document the recommendation in your extension's README so users know what it is when they see it appear.
+
 ### Error Handling
 
 The extension system is designed to be fault-tolerant:
