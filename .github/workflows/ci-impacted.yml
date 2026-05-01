@@ -16,7 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.0.0
+      uses: astral-sh/setup-uv@v8.1.0
       with:
         python-version: "3.13"
         version: "latest"
@@ -44,7 +44,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.0.0
+      uses: astral-sh/setup-uv@v8.1.0
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"
