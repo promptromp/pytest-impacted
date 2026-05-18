@@ -627,28 +627,28 @@ def testnormalize_git_paths_same_dir():
     assert result == paths
 
 
-def testnormalize_git_paths_monorepo():
+def test_normalize_git_paths_monorepo():
     """Git-root-relative paths are converted to working-dir-relative."""
     paths = ["backend/src/pkg/module.py", "backend/tests/test_foo.py"]
     result = normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
     assert result == ["src/pkg/module.py", "tests/test_foo.py"]
 
 
-def testnormalize_git_paths_file_outside_working_dir():
+def test_normalize_git_paths_file_outside_working_dir():
     """Files outside working_dir are returned as absolute paths."""
     paths = ["frontend/app.js", "backend/src/module.py"]
     result = normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
     assert result == ["/repo/frontend/app.js", "src/module.py"]
 
 
-def testnormalize_git_paths_deeply_nested():
+def test_normalize_git_paths_deeply_nested():
     """Works for deeply nested subdirectories."""
     paths = ["services/backend/python/src/mod.py"]
     result = normalize_git_paths(paths, Path("/mono"), Path("/mono/services/backend/python"))
     assert result == ["src/mod.py"]
 
 
-def testnormalize_git_paths_empty_list():
+def test_normalize_git_paths_empty_list():
     """Empty input returns empty output."""
     result = normalize_git_paths([], Path("/repo"), Path("/repo/sub"))
     assert result == []

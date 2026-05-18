@@ -51,7 +51,8 @@ The tests directory does **not** need to contain `__init__.py` — the plugin us
 
 ## Monorepo / src-Layout Support
 
-The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.
+The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.  
+**Note:** Impact analysis only considers changed files within the current working-directory subtree; changes in sibling directories are ignored.
 
 ### src-Layout Projects
 
@@ -105,7 +106,7 @@ The core strategy. It uses static analysis to:
 
 Extends the AST analysis with pytest-specific dependency detection:
 
-- **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and are **not visible through normal import analysis**.
+- **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and **are not captured through static import analysis**.
 - Designed to be extended with additional pytest-specific heuristics in the future.
 
 ### DependencyFileImpactStrategy
@@ -214,7 +215,7 @@ graph LR
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
-3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
+3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
 5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
 6. **Test filtering** skips tests whose modules are not in the impact set
@@ -223,7 +224,7 @@ The philosophy is to **err on the side of caution**: false positives (running a 
 
 ## Performance: Rust Acceleration
 
-For large codebases with many modules, import parsing can become a bottleneck. An optional Rust extension provides **37-65x faster** import parsing using [ruff's Python parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing.
+For large codebases with many modules, import parsing can become a bottleneck. An optional Rust extension can provide **up to 37-65x faster** import parsing on some large codebases (results vary by project and environment) using [ruff's Python parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing.
 
 ### Installation
 
