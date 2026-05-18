@@ -313,7 +313,7 @@ def testfind_non_package_prefix_flat_layout(tmp_path, monkeypatch):
     assert importable == "mypackage"
 
 
-def testfind_non_package_prefix_src_layout(tmp_path, monkeypatch):
+def test_find_non_package_prefix_src_layout(tmp_path, monkeypatch):
     """src-layout: src/ has no __init__.py, src/predicated/ has __init__.py."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "predicated").mkdir()
