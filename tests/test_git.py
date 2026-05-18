@@ -648,7 +648,7 @@ def testnormalize_git_paths_deeply_nested():
     assert result == ["src/mod.py"]
 
 
-def testnormalize_git_paths_empty_list():
+def test_normalize_git_paths_empty_list():
     """Empty input returns empty output."""
     result = normalize_git_paths([], Path("/repo"), Path("/repo/sub"))
     assert result == []
