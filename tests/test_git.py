@@ -634,7 +634,7 @@ def testnormalize_git_paths_monorepo():
     assert result == ["src/pkg/module.py", "tests/test_foo.py"]
 
 
-def testnormalize_git_paths_file_outside_working_dir():
+def test_normalize_git_paths_file_outside_working_dir():
     """Files outside working_dir are returned as absolute paths."""
     paths = ["frontend/app.js", "backend/src/module.py"]
     result = normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
