@@ -302,7 +302,7 @@ def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
 # --- Tests for find_non_package_prefix (src-layout support) ---
 
 
-def testfind_non_package_prefix_flat_layout(tmp_path, monkeypatch):
+def test_find_non_package_prefix_flat_layout(tmp_path, monkeypatch):
     """Flat layout: mypackage/ has __init__.py → no prefix."""
     (tmp_path / "mypackage").mkdir()
     (tmp_path / "mypackage" / "__init__.py").touch()
