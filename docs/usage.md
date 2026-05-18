@@ -105,7 +105,7 @@ The core strategy. It uses static analysis to:
 
 Extends the AST analysis with pytest-specific dependency detection:
 
-- **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and are **not visible through normal import analysis**.
+- **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and **are not captured through static import analysis**.
 - Designed to be extended with additional pytest-specific heuristics in the future.
 
 ### DependencyFileImpactStrategy
