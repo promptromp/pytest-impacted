@@ -641,7 +641,7 @@ def testnormalize_git_paths_file_outside_working_dir():
     assert result == ["/repo/frontend/app.js", "src/module.py"]
 
 
-def testnormalize_git_paths_deeply_nested():
+def test_normalize_git_paths_deeply_nested():
     """Works for deeply nested subdirectories."""
     paths = ["services/backend/python/src/mod.py"]
     result = normalize_git_paths(paths, Path("/mono"), Path("/mono/services/backend/python"))
