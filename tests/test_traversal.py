@@ -338,7 +338,7 @@ def testfind_non_package_prefix_deeply_nested(tmp_path, monkeypatch):
     assert importable == "mypackage"
 
 
-def testfind_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
+def test_find_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
     """No __init__.py found anywhere → fallback: no prefix, whole path is importable."""
     (tmp_path / "ns_pkg").mkdir()
     monkeypatch.chdir(tmp_path)
