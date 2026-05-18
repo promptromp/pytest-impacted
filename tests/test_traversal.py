@@ -302,7 +302,7 @@ def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
 # --- Tests for find_non_package_prefix (src-layout support) ---
 
 
-def testfind_non_package_prefix_flat_layout(tmp_path, monkeypatch):
+def test_find_non_package_prefix_flat_layout(tmp_path, monkeypatch):
     """Flat layout: mypackage/ has __init__.py → no prefix."""
     (tmp_path / "mypackage").mkdir()
     (tmp_path / "mypackage" / "__init__.py").touch()
@@ -313,7 +313,7 @@ def testfind_non_package_prefix_flat_layout(tmp_path, monkeypatch):
     assert importable == "mypackage"
 
 
-def testfind_non_package_prefix_src_layout(tmp_path, monkeypatch):
+def test_find_non_package_prefix_src_layout(tmp_path, monkeypatch):
     """src-layout: src/ has no __init__.py, src/predicated/ has __init__.py."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "predicated").mkdir()
@@ -338,7 +338,7 @@ def testfind_non_package_prefix_deeply_nested(tmp_path, monkeypatch):
     assert importable == "mypackage"
 
 
-def testfind_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
+def test_find_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
     """No __init__.py found anywhere → fallback: no prefix, whole path is importable."""
     (tmp_path / "ns_pkg").mkdir()
     monkeypatch.chdir(tmp_path)
