@@ -2,7 +2,7 @@
 
 This test guards against accidental additions/removals to `pytest_impacted.__all__`.
 When the public API intentionally changes, update ``EXPECTED_PUBLIC_API`` and the
-matching CLAUDE.md / README / docs entries in the same commit.
+matching CLAUDE.md / README / docs/usage.md entries in the same commit.
 """
 
 from __future__ import annotations
