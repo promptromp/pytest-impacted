@@ -223,7 +223,7 @@ The philosophy is to **err on the side of caution**: false positives (running a 
 
 ## Performance: Rust Acceleration
 
-For large codebases with many modules, import parsing can become a bottleneck. An optional Rust extension provides **37-65x faster** import parsing using [ruff's Python parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing.
+For large codebases with many modules, import parsing can become a bottleneck. An optional Rust extension can provide **up to 37-65x faster** import parsing on some large codebases (results vary by project and environment) using [ruff's Python parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing.
 
 ### Installation
 
