@@ -627,7 +627,7 @@ def testnormalize_git_paths_same_dir():
     assert result == paths
 
 
-def testnormalize_git_paths_monorepo():
+def test_normalize_git_paths_monorepo():
     """Git-root-relative paths are converted to working-dir-relative."""
     paths = ["backend/src/pkg/module.py", "backend/tests/test_foo.py"]
     result = normalize_git_paths(paths, Path("/repo"), Path("/repo/backend"))
