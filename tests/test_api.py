@@ -3,10 +3,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import networkx as nx
 import pytest
 
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
+from pytest_impacted.strategies import ImpactStrategy
 
 
 @pytest.mark.parametrize(
@@ -316,11 +318,6 @@ def test_get_impacted_tests_mixed_dep_and_py_changes(
 
 
 # --- Lifecycle hooks (issue #43 Gap 2) --------------------------------------
-
-
-import networkx as nx  # noqa: E402  (grouped with other test-module imports)
-
-from pytest_impacted.strategies import ImpactStrategy  # noqa: E402
 
 
 class _LifecycleSpy(ImpactStrategy):
