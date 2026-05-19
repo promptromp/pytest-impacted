@@ -12,16 +12,16 @@ name = "pytest_impacted_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.24", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py311"] }
 rayon = "1.10"
 
 [dependencies.ruff_python_parser]
 git = "https://github.com/astral-sh/ruff"
-tag = "0.15.7"
+tag = "0.15.13"
 
 [dependencies.ruff_python_ast]
 git = "https://github.com/astral-sh/ruff"
-tag = "0.15.7"
+tag = "0.15.13"
 
 [profile.release]
 opt-level = 3
