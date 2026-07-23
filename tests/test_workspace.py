@@ -15,6 +15,9 @@ from pytest_impacted.workspace import (
 )
 
 
+EXAMPLE_MONOREPO = Path(__file__).parent.parent / "examples" / "monorepo"
+
+
 def _write_pyproject(pkg_dir, text):
     pkg_dir.mkdir(parents=True, exist_ok=True)
     (pkg_dir / "pyproject.toml").write_text(text)
@@ -221,9 +224,6 @@ class TestComputeImpactedPackages:
         assert impacted == {}
 
 
-EXAMPLE_MONOREPO = Path(__file__).parent.parent / "examples" / "monorepo"
-
-
 class TestExampleMonorepoFixture:
     def test_discovers_both_packages_with_correct_config(self):
         packages = discover_packages(EXAMPLE_MONOREPO)
@@ -232,3 +232,30 @@ class TestExampleMonorepoFixture:
             ("pkg-beta", "libs/pkg-beta", "pkg_beta", "tests"),
         ]
         assert packages[1].requirements == frozenset({"pkg-alpha"})
+
+
+class TestOutsideRootChanges:
+    """Changed files outside the monorepo root arrive as absolute paths and must be ignored."""
+
+    def test_absolute_paths_do_not_map_to_packages(self):
+        root_pkg = PackageInfo(name="root-pkg", path=PurePosixPath("."), module="root_pkg", tests_dir=None)
+        mapping = map_files_to_packages(["/elsewhere/sibling/src/mod.py"], [root_pkg, _pkg("pkg-alpha")])
+        assert mapping == {}
+
+    def test_absolute_dependency_file_does_not_impact_packages(self):
+        impacted = compute_impacted_packages(["/elsewhere/sibling/pyproject.toml"], [_pkg("pkg-alpha")])
+        assert impacted == {}
+
+    def test_relative_root_dependency_file_still_impacts(self):
+        impacted = compute_impacted_packages(["uv.lock", "/elsewhere/uv.lock"], [_pkg("pkg-alpha")])
+        assert impacted["pkg-alpha"].reason == "dep-files"
+
+
+class TestScanSymlinkGuard:
+    def test_symlinked_directories_are_not_followed(self, tmp_path):
+        pkg = tmp_path / "libs" / "alpha"
+        _write_pyproject(pkg, '[project]\nname = "pkg-alpha"\nversion = "0.1.0"\n')
+        _make_module(pkg, "pkg_alpha")
+        (tmp_path / "loop").symlink_to(tmp_path, target_is_directory=True)
+        packages = discover_packages(tmp_path)
+        assert [p.name for p in packages] == ["pkg-alpha"]

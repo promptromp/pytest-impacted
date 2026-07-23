@@ -7,6 +7,7 @@ of never importing analyzed code.
 
 import fnmatch
 import logging
+import os
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -70,8 +71,8 @@ def load_package(pkg_dir: Path, root: Path) -> "PackageInfo | None":
 
     ini_options = data.get("tool", {}).get("pytest", {}).get("ini_options", {})
     module = ini_options.get("impacted_module")
+    module_dir = normalize_package_name(name).replace("-", "_")
     if not module:
-        module_dir = normalize_package_name(name).replace("-", "_")
         for candidate in (f"src/{module_dir}", module_dir):
             if (pkg_dir / candidate / "__init__.py").is_file():
                 module = candidate
@@ -81,8 +82,8 @@ def load_package(pkg_dir: Path, root: Path) -> "PackageInfo | None":
             "Skipping package %r at %s: no impacted_module configured and neither src/%s/ nor %s/ is a package",
             name,
             pkg_dir,
-            normalize_package_name(name).replace("-", "_"),
-            normalize_package_name(name).replace("-", "_"),
+            module_dir,
+            module_dir,
         )
         return None
 
@@ -179,7 +180,8 @@ def _scan_package_dirs(root: Path) -> list[Path]:
 
     def _walk(directory: Path) -> None:
         for child in sorted(directory.iterdir()):
-            if not child.is_dir() or child.name.startswith(".") or child.name in PRUNE_DIRS:
+            # Symlinked directories are skipped to guard against traversal cycles.
+            if not child.is_dir() or child.is_symlink() or child.name.startswith(".") or child.name in PRUNE_DIRS:
                 continue
             if (child / "pyproject.toml").is_file():
                 found.append(child)
@@ -221,6 +223,18 @@ class ImpactedPackage:
         return "+".join(reason for reason in REASON_ORDER if reason in self.reasons)
 
 
+def _workspace_relative_files(changed_files: list[str]) -> list[str]:
+    """Keep only files inside the workspace root, normalized to POSIX separators.
+
+    ``normalize_git_paths`` returns *absolute* paths for changed files that fall
+    outside the analysis root (e.g. a sibling project in the enclosing git
+    repository) — those must not influence workspace impact. Relative paths are
+    root-relative by construction; on Windows they arrive with native
+    separators, so they are normalized for ``PurePosixPath`` matching.
+    """
+    return [file_path.replace(os.sep, "/") for file_path in changed_files if not Path(file_path).is_absolute()]
+
+
 def _owning_package(file_path: str, packages_longest_first: list[PackageInfo]) -> "PackageInfo | None":
     path = PurePosixPath(file_path)
     for pkg in packages_longest_first:
@@ -237,7 +251,7 @@ def map_files_to_packages(changed_files: list[str], packages: list[PackageInfo])
     """Map root-relative changed files to the name of their owning package (longest path prefix wins)."""
     ordered = _by_longest_path(packages)
     mapping: dict[str, list[str]] = {}
-    for file_path in changed_files:
+    for file_path in _workspace_relative_files(changed_files):
         owner = _owning_package(file_path, ordered)
         if owner is not None:
             mapping.setdefault(owner.name, []).append(file_path)
@@ -272,7 +286,7 @@ def compute_impacted_packages(
 
     if watch_dep_files:
         ordered = _by_longest_path(packages)
-        for file_path in changed_files:
+        for file_path in _workspace_relative_files(changed_files):
             owner = _owning_package(file_path, ordered)
             is_root_level = owner is None or owner.path == PurePosixPath(".")
             if is_root_level and matches_dependency_file(file_path):

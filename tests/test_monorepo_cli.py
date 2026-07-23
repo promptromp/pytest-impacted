@@ -89,6 +89,23 @@ class TestAnalyzeDirectPackage:
         assert kwargs["tests_dir"] == "tests"
         assert kwargs["root_dir"] == Path(".")
 
+    def test_cwd_is_restored_when_analysis_raises(self):
+        before = os.getcwd()
+        with (
+            patch("pytest_impacted.cli.get_impacted_tests", side_effect=RuntimeError("boom")),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            _analyze_direct_package(
+                PKG_ALPHA,
+                root=EXAMPLE_MONOREPO,
+                git_mode=GitMode.UNSTAGED,
+                base_branch="main",
+                watch_dep_files=True,
+                disable_ext=(),
+                ext_config={},
+            )
+        assert os.getcwd() == before
+
     def test_none_result_is_empty_list(self):
         with patch("pytest_impacted.cli.get_impacted_tests", return_value=None):
             result = _analyze_direct_package(
@@ -224,3 +241,48 @@ class TestMonorepoEndToEnd:
             ("pkg-alpha", "dep-files"),
             ("pkg-beta", "dep-files"),
         ]
+
+
+@pytest.mark.slow
+class TestMonorepoNestedInLargerRepo:
+    """The monorepo root may be a subdirectory of the git root; sibling changes must be ignored."""
+
+    def _make_nested_repo(self, tmp_path):
+        git_root = tmp_path / "bigrepo"
+        git_root.mkdir()
+        shutil.copytree(EXAMPLE_MONOREPO, git_root / "monorepo")
+        sibling = git_root / "sibling"
+        sibling.mkdir()
+        (sibling / "pyproject.toml").write_text('[project]\nname = "sibling"\nversion = "0.1.0"\n')
+        (sibling / "app.py").write_text("VALUE = 1\n")
+        repo = Repo.init(git_root, initial_branch="main")
+        with repo.config_writer() as config:
+            config.set_value("user", "name", "Test User")
+            config.set_value("user", "email", "test@example.com")
+        repo.git.add(A=True)
+        repo.index.commit("initial")
+        return git_root
+
+    def test_sibling_changes_do_not_impact_workspace(self, tmp_path):
+        git_root = self._make_nested_repo(tmp_path)
+        (git_root / "sibling" / "pyproject.toml").write_text('[project]\nname = "sibling"\nversion = "0.2.0"\n')
+        (git_root / "sibling" / "app.py").write_text("VALUE = 2\n")
+
+        result = CliRunner().invoke(
+            impacted_packages_cli, ["--root-dir", str(git_root / "monorepo"), "--format", "json"]
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout) == {"packages": []}
+
+    def test_workspace_changes_are_still_detected(self, tmp_path):
+        git_root = self._make_nested_repo(tmp_path)
+        core = git_root / "monorepo" / "libs/pkg-alpha/src/pkg_alpha/core.py"
+        core.write_text(core.read_text() + "\n\ndef sub(a: int, b: int) -> int:\n    return a - b\n")
+
+        result = CliRunner().invoke(
+            impacted_packages_cli, ["--root-dir", str(git_root / "monorepo"), "--format", "json"]
+        )
+        assert result.exit_code == 0, result.output
+        by_name = {p["name"]: p for p in json.loads(result.stdout)["packages"]}
+        assert by_name["pkg-alpha"]["reason"] == "direct"
+        assert by_name["pkg-beta"]["reason"] == "dependency"
