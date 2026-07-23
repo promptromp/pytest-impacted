@@ -114,3 +114,6 @@ no-lines-before = ["standard-library"]
 # Keep bare `pytest` runs from collecting the examples/ fixture monorepo,
 # whose packages are intentionally not installed in this environment.
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselected in pre-commit via -m 'not slow')",
+]

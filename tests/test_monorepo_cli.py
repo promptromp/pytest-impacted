@@ -2,10 +2,13 @@
 
 import json
 import os
+import shutil
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
+from git import Repo
 
 from pytest_impacted.cli import (
     _all_tests_for_package,
@@ -178,3 +181,46 @@ class TestImpactedPackagesCli:
         by_name = {p["name"]: p for p in data["packages"]}
         assert by_name["pkg-alpha"]["error"] == "boom"
         assert by_name["pkg-beta"]["impacted_tests"] == ["libs/pkg-beta/tests/test_service.py"]
+
+
+def _make_monorepo_git_repo(tmp_path):
+    repo_dir = tmp_path / "monorepo"
+    shutil.copytree(EXAMPLE_MONOREPO, repo_dir)
+    repo = Repo.init(repo_dir, initial_branch="main")
+    with repo.config_writer() as config:
+        config.set_value("user", "name", "Test User")
+        config.set_value("user", "email", "test@example.com")
+    repo.git.add(A=True)
+    repo.index.commit("initial")
+    return repo_dir
+
+
+@pytest.mark.slow
+class TestMonorepoEndToEnd:
+    def test_change_in_alpha_impacts_alpha_directly_and_beta_transitively(self, tmp_path):
+        repo_dir = _make_monorepo_git_repo(tmp_path)
+        core = repo_dir / "libs/pkg-alpha/src/pkg_alpha/core.py"
+        core.write_text(core.read_text() + "\n\ndef sub(a: int, b: int) -> int:\n    return a - b\n")
+
+        result = CliRunner().invoke(impacted_packages_cli, ["--root-dir", str(repo_dir), "--format", "json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        by_name = {p["name"]: p for p in data["packages"]}
+
+        assert by_name["pkg-alpha"]["reason"] == "direct"
+        # AST analysis: test_core.py imports pkg_alpha.core (changed); test_util.py does not.
+        assert by_name["pkg-alpha"]["impacted_tests"] == ["libs/pkg-alpha/tests/test_core.py"]
+        assert by_name["pkg-beta"]["reason"] == "dependency"
+        assert by_name["pkg-beta"]["impacted_tests"] == ["libs/pkg-beta/tests/test_service.py"]
+
+    def test_root_lockfile_change_impacts_everything(self, tmp_path):
+        repo_dir = _make_monorepo_git_repo(tmp_path)
+        (repo_dir / "uv.lock").write_text("# bumped\n")
+
+        result = CliRunner().invoke(impacted_packages_cli, ["--root-dir", str(repo_dir), "--format", "json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert [(p["name"], p["reason"]) for p in data["packages"]] == [
+            ("pkg-alpha", "dep-files"),
+            ("pkg-beta", "dep-files"),
+        ]
