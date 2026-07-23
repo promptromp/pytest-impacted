@@ -2,8 +2,11 @@
 
 from pathlib import PurePosixPath
 
+import networkx as nx
+
 from pytest_impacted.workspace import (
     PackageInfo,
+    build_package_graph,
     discover_packages,
     load_package,
     normalize_package_name,
@@ -138,3 +141,30 @@ class TestDiscoverPackages:
             packages = discover_packages(tmp_path)
         assert [str(p.path) for p in packages] == ["a/dupe"]
         assert "pkg-dupe" in caplog.text
+
+
+def _pkg(name, deps=()):
+    return PackageInfo(
+        name=name,
+        path=PurePosixPath(f"libs/{name}"),
+        module=name.replace("-", "_"),
+        tests_dir="tests",
+        requirements=frozenset(deps),
+    )
+
+
+class TestBuildPackageGraph:
+    def test_edges_point_from_dependency_to_dependent(self):
+        packages = [_pkg("pkg-alpha"), _pkg("pkg-beta", deps={"pkg-alpha", "click"})]
+        graph = build_package_graph(packages)
+        assert set(graph.nodes) == {"pkg-alpha", "pkg-beta"}
+        assert list(graph.edges) == [("pkg-alpha", "pkg-beta")]
+
+    def test_external_dependencies_are_ignored(self):
+        graph = build_package_graph([_pkg("pkg-alpha", deps={"requests", "numpy"})])
+        assert list(graph.edges) == []
+
+    def test_transitive_chain_descendants(self):
+        packages = [_pkg("a"), _pkg("b", deps={"a"}), _pkg("c", deps={"b"})]
+        graph = build_package_graph(packages)
+        assert nx.descendants(graph, "a") == {"b", "c"}

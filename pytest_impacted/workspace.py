@@ -12,6 +12,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+import networkx as nx
 from packaging.requirements import InvalidRequirement, Requirement
 
 
@@ -184,3 +185,19 @@ def _scan_package_dirs(root: Path) -> list[Path]:
 
     _walk(root)
     return found
+
+
+def build_package_graph(packages: list[PackageInfo]) -> nx.DiGraph:
+    """Build the inter-package dependency graph.
+
+    Edge ``B -> A`` means "A depends on workspace package B", so a change in B
+    impacts A. Dependencies on packages outside the workspace are ignored.
+    """
+    graph = nx.DiGraph()
+    workspace_names = {pkg.name for pkg in packages}
+    graph.add_nodes_from(workspace_names)
+    for pkg in packages:
+        for dependency in pkg.requirements & workspace_names:
+            if dependency != pkg.name:
+                graph.add_edge(dependency, pkg.name)
+    return graph
