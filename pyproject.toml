@@ -35,6 +35,7 @@ dependencies = [
     "click>=8.2.0",
     "gitpython>=3.1.44",
     "networkx>=3.4.2",
+    "packaging>=23.2",
     "pytest>=8.0.0",
     "rich>=14.0.0",
 ]
@@ -52,6 +53,7 @@ impacted = "pytest_impacted.plugin"
 
 [project.scripts]
 impacted-tests = "pytest_impacted.cli:impacted_tests_cli"
+impacted-packages = "pytest_impacted.cli:impacted_packages_cli"
 
 [dependency-groups]
 dev = [
@@ -107,3 +109,11 @@ combine-as-imports = true
 known-first-party = ["antelope"]
 lines-after-imports = 2
 no-lines-before = ["standard-library"]
+
+[tool.pytest.ini_options]
+# Keep bare `pytest` runs from collecting the examples/ fixture monorepo,
+# whose packages are intentionally not installed in this environment.
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselected in pre-commit via -m 'not slow')",
+]

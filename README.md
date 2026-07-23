@@ -216,6 +216,19 @@ impacted-tests --module=my_package --git-mode=branch --base-branch=main > impact
 pytest $(cat impacted_tests.txt)
 ```
 
+### Monorepos with Multiple Packages
+
+The `impacted-packages` CLI analyzes an entire multi-package monorepo in one run:
+it discovers packages (uv-workspace globs or `pyproject.toml` scan), tracks
+inter-package dependencies, and emits per-package impacted tests for CI fan-out:
+
+```bash
+impacted-packages --git-mode branch --base-branch origin/main --format json
+```
+
+See the [usage guide](https://promptromp.github.io/pytest-impacted/usage/) for
+discovery rules, impact reasons, and a GitHub Actions matrix example.
+
 ### Configuration via `pyproject.toml`
 
 All CLI options can be set as defaults in your `pyproject.toml` (or `pytest.ini`):

@@ -1,0 +1,3 @@
+# Workspace root for the mock monorepo used in tests and docs examples.
+[tool.uv.workspace]
+members = ["libs/*"]

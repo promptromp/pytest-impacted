@@ -1,0 +1,11 @@
+[project]
+name = "pkg-beta"
+version = "0.1.0"
+dependencies = ["pkg-alpha"]
+
+[tool.uv.sources]
+pkg-alpha = { workspace = true }
+
+[tool.pytest.ini_options]
+impacted_module = "pkg_beta"
+impacted_tests_dir = "tests"

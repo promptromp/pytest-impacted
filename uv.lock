@@ -450,6 +450,7 @@ dependencies = [
     { name = "click" },
     { name = "gitpython" },
     { name = "networkx" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "rich" },
 ]
@@ -473,6 +474,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.2.0" },
     { name = "gitpython", specifier = ">=3.1.44" },
     { name = "networkx", specifier = ">=3.4.2" },
+    { name = "packaging", specifier = ">=23.2" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-impacted-rs", marker = "extra == 'fast'", editable = "rust" },
     { name = "rich", specifier = ">=14.0.0" },

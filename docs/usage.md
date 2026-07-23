@@ -51,7 +51,7 @@ The tests directory does **not** need to contain `__init__.py` — the plugin us
 
 ## Monorepo / src-Layout Support
 
-The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.  
+The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.
 **Note:** Impact analysis only considers changed files within the current working-directory subtree; changes in sibling directories are ignored.
 
 ### src-Layout Projects
@@ -88,6 +88,101 @@ Run pytest from the `backend/` directory as usual. The plugin will:
 1. Find the git repository by searching parent directories
 2. Convert git-relative file paths (e.g. `backend/src/my_package/module.py`) to working-directory-relative paths (e.g. `src/my_package/module.py`)
 3. Only consider changes within the working directory — changes in sibling directories (e.g. `frontend/`) are ignored
+
+### Multi-Package Monorepos: the `impacted-packages` CLI
+
+When a monorepo contains **multiple** Python packages, use the `impacted-packages`
+console script to analyze all of them in one invocation. It discovers every package,
+computes which ones are affected by the current git changes (directly or through
+inter-package dependencies), and emits a per-package list of impacted tests that a
+CI system can fan out into parallel jobs.
+
+```bash
+impacted-packages --root-dir . --git-mode branch --base-branch origin/main --format json
+```
+
+**Package discovery:**
+
+1. If the root `pyproject.toml` declares a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/)
+   (`[tool.uv.workspace]`), its `members`/`exclude` globs are honored. The root itself
+   is included when it has a `[project]` table.
+2. Otherwise the tree is scanned recursively for `pyproject.toml` files (hidden
+   directories, `venv`, `node_modules`, `build`, `dist` are skipped).
+
+**Per-package configuration:** each package's `pyproject.toml` is consulted for
+`[tool.pytest.ini_options]` `impacted_module` / `impacted_tests_dir`. When absent,
+conventional layouts are inferred automatically: the module directory is derived from
+the project name (checking `src/<name>/` then `<name>/`), and `tests/` is used when it
+exists. Packages that cannot be resolved are skipped with a warning.
+
+**Impact reasons:** each reported package carries a `reason`:
+
+| Reason | Meaning | Tests selected |
+|---|---|---|
+| `direct` | Files changed inside the package | Precise AST-based impact analysis |
+| `dependency` | A workspace package it depends on changed | All of the package's tests |
+| `dep-files` | A dependency file changed at the monorepo root (e.g. `uv.lock`) | All of the package's tests |
+
+Reasons combine with `+` (e.g. `direct+dependency`). Inter-package dependencies are
+read from each package's `[project.dependencies]` (and `optional-dependencies`),
+matched against workspace package names. Dependency selection is deliberately
+coarse — all tests run for dependents — consistent with the plugin's philosophy of
+preferring false positives over missed tests. Disable dependency-file triggering
+with `--no-dep-files`.
+
+!!! note
+    Changed files *outside* the monorepo root (e.g. sibling projects in a larger
+    enclosing git repository) are ignored, mirroring the single-package behavior.
+    The all-tests selection for `dependency`/`dep-files` packages enumerates test
+    files matching pytest's default conventions (`test_*.py` / `*_test.py`);
+    custom `python_files` patterns are not consulted. If the workspace root itself
+    is a package, it owns every root-level file — so any root-level change marks
+    it `direct` (and transitively impacts packages that depend on it).
+
+**Output:** results go to stdout, diagnostics to stderr. `--format json` emits:
+
+```json
+{
+  "packages": [
+    {"name": "pkg-alpha", "path": "libs/pkg-alpha", "reason": "direct",
+     "impacted_tests": ["libs/pkg-alpha/tests/test_core.py"]},
+    {"name": "pkg-beta", "path": "libs/pkg-beta", "reason": "dependency",
+     "impacted_tests": ["libs/pkg-beta/tests/test_service.py"]}
+  ]
+}
+```
+
+Test paths are always monorepo-root-relative. A GitHub Actions matrix fan-out:
+
+```yaml
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.impact.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: pip install pytest-impacted
+      - id: impact
+        run: |
+          echo "packages=$(impacted-packages --git-mode branch --base-branch origin/main --format json | jq -c '.packages')" >> "$GITHUB_OUTPUT"
+  test:
+    needs: detect
+    if: ${{ needs.detect.outputs.packages != '[]' }}
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.detect.outputs.packages) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -e ${{ matrix.package.path }}
+      # Test paths are monorepo-root-relative, so run pytest from the checkout root.
+      - run: pytest ${{ join(matrix.package.impacted_tests, ' ') }}
+```
+
+A runnable example monorepo lives in the repository under
+[`examples/monorepo/`](https://github.com/promptromp/pytest-impacted/tree/main/examples/monorepo).
 
 ## Impact Analysis Strategies
 
