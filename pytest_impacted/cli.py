@@ -1,6 +1,7 @@
 """CLI entrypoints for pytest-impacted."""
 
 import contextlib
+import json
 import logging
 from pathlib import Path
 
@@ -15,10 +16,10 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.git import GitMode
+from pytest_impacted.git import GitMode, find_impacted_files_in_repo
 from pytest_impacted.strategies import clear_dep_tree_cache
 from pytest_impacted.traversal import discover_submodules, path_to_package_name
-from pytest_impacted.workspace import PackageInfo
+from pytest_impacted.workspace import PackageInfo, compute_impacted_packages, discover_packages
 
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,87 @@ def impacted_tests_cli(
         click.secho("No impacted tests found.", fg="red", bold=True, err=True)
 
 
+@click.command(context_settings={"show_default": True})
+@click.option("--git-mode", default=GitMode.UNSTAGED, help="Git mode.")
+@click.option("--base-branch", default="main", help="Base branch.")
+@click.option(
+    "--root-dir",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    help="Monorepo root directory.",
+)
+@click.option("--format", "output_format", type=click.Choice(["text", "json"]), default="text", help="Output format.")
+@click.option("--verbose", is_flag=True, help="Verbose output.")
+@click.option("--no-dep-files", is_flag=True, default=False, help="Disable dependency file change detection.")
+@click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
+def impacted_packages_cli(
+    git_mode, base_branch, root_dir, output_format, verbose, no_dep_files, disable_ext, **ext_kwargs
+):
+    """Discover all packages in a monorepo and report impacted tests for each.
+
+    Packages are discovered from [tool.uv.workspace] globs when present,
+    otherwise by scanning for pyproject.toml files. Output goes to stdout;
+    all diagnostics go to stderr.
+    """
+    configure_logging(verbose=verbose)
+    root = Path(root_dir).resolve()
+
+    packages = discover_packages(root)
+    if not packages:
+        raise click.ClickException(f"No packages discovered under {root}")
+    click.secho(
+        "Discovered {} package(s): {}".format(len(packages), ", ".join(pkg.name for pkg in packages)),
+        fg="blue",
+        bold=True,
+        err=True,
+    )
+
+    changed_files = find_impacted_files_in_repo(root, git_mode=git_mode, base_branch=base_branch) or []
+    impacted = compute_impacted_packages(changed_files, packages, watch_dep_files=not no_dep_files)
+
+    results = []
+    for name in sorted(impacted):
+        entry = impacted[name]
+        pkg = entry.package
+        record: dict = {"name": pkg.name, "path": str(pkg.path), "reason": entry.reason}
+        try:
+            if entry.reasons == {"direct"}:
+                tests = _analyze_direct_package(
+                    pkg,
+                    root=root,
+                    git_mode=git_mode,
+                    base_branch=base_branch,
+                    watch_dep_files=not no_dep_files,
+                    disable_ext=disable_ext,
+                    ext_config=ext_kwargs,
+                )
+            else:
+                # Any dependency/dep-files reason selects ALL of the package's tests,
+                # a superset of what direct analysis could return.
+                tests = _all_tests_for_package(pkg, root)
+        except Exception as exc:  # noqa: BLE001 — one broken package must not sink the others
+            logger.warning("Analysis failed for package %r: %s", pkg.name, exc)
+            record["error"] = str(exc)
+            results.append(record)
+            continue
+        if tests:
+            record["impacted_tests"] = tests
+            results.append(record)
+
+    if output_format == "json":
+        print(json.dumps({"packages": results}, indent=2))
+        return
+
+    if not results:
+        click.secho("No impacted packages found.", fg="red", bold=True, err=True)
+    for record in results:
+        print(f"== {record['name']} ({record['path']}) [{record['reason']}]")
+        if "error" in record:
+            click.secho(f"analysis failed: {record['error']}", fg="red", bold=True, err=True)
+        for test_path in record.get("impacted_tests", ()):
+            print(test_path)
+
+
 def _register_extension_options(cmd: click.Command) -> None:
     """Dynamically add extension config options to the Click command."""
     for ext in discover_extension_metadata():
@@ -195,3 +277,4 @@ def _register_extension_options(cmd: click.Command) -> None:
 
 
 _register_extension_options(impacted_tests_cli)
+_register_extension_options(impacted_packages_cli)

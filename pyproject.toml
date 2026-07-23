@@ -53,6 +53,7 @@ impacted = "pytest_impacted.plugin"
 
 [project.scripts]
 impacted-tests = "pytest_impacted.cli:impacted_tests_cli"
+impacted-packages = "pytest_impacted.cli:impacted_packages_cli"
 
 [dependency-groups]
 dev = [
