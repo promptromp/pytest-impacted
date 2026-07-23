@@ -1,6 +1,8 @@
 """CLI entrypoints for pytest-impacted."""
 
+import contextlib
 import logging
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -14,6 +16,12 @@ from pytest_impacted.extensions import (
     get_ext_ini_name,
 )
 from pytest_impacted.git import GitMode
+from pytest_impacted.strategies import clear_dep_tree_cache
+from pytest_impacted.traversal import discover_submodules, path_to_package_name
+from pytest_impacted.workspace import PackageInfo
+
+
+logger = logging.getLogger(__name__)
 
 
 _CLICK_TYPE_MAP: dict[type, click.ParamType] = {
@@ -34,6 +42,75 @@ def configure_logging(verbose: bool) -> None:
         datefmt="[%x]",
         handlers=[RichHandler(console=console, markup=True, rich_tracebacks=True)],
     )
+
+
+@contextlib.contextmanager
+def _package_analysis_context(package_dir: Path):
+    """Run analysis from inside a package directory with fresh caches.
+
+    ``discover_submodules`` and the dep-tree cache are keyed by package *name*
+    but resolve paths against the current working directory, so analyzing
+    multiple packages from one process requires both a chdir and a cache clear
+    on entry AND exit (the exit clear keeps later callers from seeing entries
+    resolved against this package's directory).
+    """
+    with contextlib.chdir(package_dir):
+        clear_dep_tree_cache()
+        try:
+            yield
+        finally:
+            clear_dep_tree_cache()
+
+
+def _rebase_paths(paths: list[str], root: Path) -> list[str]:
+    """Convert absolute file paths to sorted monorepo-root-relative POSIX paths."""
+    resolved_root = root.resolve()
+    return sorted(Path(path).resolve().relative_to(resolved_root).as_posix() for path in paths)
+
+
+def _is_test_file_module(module_name: str) -> bool:
+    """True when the module's leaf name matches pytest's default test file conventions."""
+    leaf = module_name.rsplit(".", 1)[-1]
+    return leaf.startswith("test_") or leaf.endswith("_test")
+
+
+def _all_tests_for_package(pkg: PackageInfo, root: Path) -> list[str]:
+    """Enumerate every test file in a package (dependency/dep-files impact selects them all)."""
+    with _package_analysis_context(root / pkg.path):
+        modules: dict[str, str] = {}
+        if pkg.tests_dir:
+            modules.update(discover_submodules(path_to_package_name(pkg.tests_dir), require_init=False))
+        modules.update(discover_submodules(path_to_package_name(pkg.module), require_init=True))
+        test_paths = [path for name, path in modules.items() if _is_test_file_module(name)]
+        return _rebase_paths(test_paths, root)
+
+
+def _analyze_direct_package(
+    pkg: PackageInfo,
+    *,
+    root: Path,
+    git_mode,
+    base_branch: str,
+    watch_dep_files: bool,
+    disable_ext: tuple,
+    ext_config: dict,
+) -> list[str]:
+    """Run the full single-package impact analysis for a directly-changed package."""
+    strategy = build_strategy_with_extensions(
+        watch_dep_files=watch_dep_files,
+        disabled=disable_ext,
+        ext_config=ext_config,
+    )
+    with _package_analysis_context(root / pkg.path):
+        impacted = get_impacted_tests(
+            impacted_git_mode=git_mode,
+            impacted_base_branch=base_branch,
+            root_dir=Path("."),
+            ns_module=pkg.module,
+            tests_dir=pkg.tests_dir,
+            strategy=strategy,
+        )
+        return _rebase_paths(impacted or [], root)
 
 
 @click.command(context_settings={"show_default": True})
