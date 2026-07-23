@@ -130,6 +130,15 @@ coarse — all tests run for dependents — consistent with the plugin's philoso
 preferring false positives over missed tests. Disable dependency-file triggering
 with `--no-dep-files`.
 
+!!! note
+    Changed files *outside* the monorepo root (e.g. sibling projects in a larger
+    enclosing git repository) are ignored, mirroring the single-package behavior.
+    The all-tests selection for `dependency`/`dep-files` packages enumerates test
+    files matching pytest's default conventions (`test_*.py` / `*_test.py`);
+    custom `python_files` patterns are not consulted. If the workspace root itself
+    is a package, it owns every root-level file — so any root-level change marks
+    it `direct` (and transitively impacts packages that depend on it).
+
 **Output:** results go to stdout, diagnostics to stderr. `--format json` emits:
 
 ```json
@@ -167,7 +176,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cd ${{ matrix.package.path }} && pip install -e . && pytest ${{ matrix.package.impacted_tests }}
+      - run: pip install -e ${{ matrix.package.path }}
+      # Test paths are monorepo-root-relative, so run pytest from the checkout root.
+      - run: pytest ${{ join(matrix.package.impacted_tests, ' ') }}
 ```
 
 A runnable example monorepo lives in the repository under
