@@ -180,7 +180,12 @@ def impacted_tests_cli(
 
 
 @click.command(context_settings={"show_default": True})
-@click.option("--git-mode", default=GitMode.UNSTAGED, help="Git mode.")
+@click.option(
+    "--git-mode",
+    default=GitMode.UNSTAGED.value,
+    type=click.Choice([mode.value for mode in GitMode]),
+    help="Git mode.",
+)
 @click.option("--base-branch", default="main", help="Base branch.")
 @click.option(
     "--root-dir",
