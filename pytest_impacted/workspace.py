@@ -9,11 +9,13 @@ import fnmatch
 import logging
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import networkx as nx
 from packaging.requirements import InvalidRequirement, Requirement
+
+from pytest_impacted.strategies import matches_dependency_file
 
 
 logger = logging.getLogger(__name__)
@@ -201,3 +203,81 @@ def build_package_graph(packages: list[PackageInfo]) -> nx.DiGraph:
             if dependency != pkg.name:
                 graph.add_edge(dependency, pkg.name)
     return graph
+
+
+#: Order in which impact reasons are reported in the composite reason string.
+REASON_ORDER = ("direct", "dependency", "dep-files")
+
+
+@dataclass
+class ImpactedPackage:
+    """A package marked impacted, with the reasons it was selected."""
+
+    package: PackageInfo
+    reasons: set[str] = field(default_factory=set)
+
+    @property
+    def reason(self) -> str:
+        return "+".join(reason for reason in REASON_ORDER if reason in self.reasons)
+
+
+def _owning_package(file_path: str, packages_longest_first: list[PackageInfo]) -> "PackageInfo | None":
+    path = PurePosixPath(file_path)
+    for pkg in packages_longest_first:
+        if pkg.path == PurePosixPath(".") or path.is_relative_to(pkg.path):
+            return pkg
+    return None
+
+
+def _by_longest_path(packages: list[PackageInfo]) -> list[PackageInfo]:
+    return sorted(packages, key=lambda pkg: len(pkg.path.parts), reverse=True)
+
+
+def map_files_to_packages(changed_files: list[str], packages: list[PackageInfo]) -> dict[str, list[str]]:
+    """Map root-relative changed files to the name of their owning package (longest path prefix wins)."""
+    ordered = _by_longest_path(packages)
+    mapping: dict[str, list[str]] = {}
+    for file_path in changed_files:
+        owner = _owning_package(file_path, ordered)
+        if owner is not None:
+            mapping.setdefault(owner.name, []).append(file_path)
+    return mapping
+
+
+def compute_impacted_packages(
+    changed_files: list[str],
+    packages: list[PackageInfo],
+    *,
+    watch_dep_files: bool = True,
+) -> dict[str, ImpactedPackage]:
+    """Compute which packages are impacted by *changed_files* and why.
+
+    Reasons: ``direct`` (files changed inside the package), ``dependency``
+    (a workspace package it depends on changed), ``dep-files`` (a dependency
+    file changed at the monorepo root, outside every non-root package —
+    dependency files *inside* a package are covered by that package's own
+    per-package analysis).
+    """
+    graph = build_package_graph(packages)
+    by_name = {pkg.name: pkg for pkg in packages}
+    impacted: dict[str, ImpactedPackage] = {}
+
+    def _mark(name: str, reason: str) -> None:
+        impacted.setdefault(name, ImpactedPackage(package=by_name[name])).reasons.add(reason)
+
+    for name in map_files_to_packages(changed_files, packages):
+        _mark(name, "direct")
+        for dependent in nx.descendants(graph, name):
+            _mark(dependent, "dependency")
+
+    if watch_dep_files:
+        ordered = _by_longest_path(packages)
+        for file_path in changed_files:
+            owner = _owning_package(file_path, ordered)
+            is_root_level = owner is None or owner.path == PurePosixPath(".")
+            if is_root_level and matches_dependency_file(file_path):
+                for pkg in packages:
+                    _mark(pkg.name, "dep-files")
+                break
+
+    return impacted

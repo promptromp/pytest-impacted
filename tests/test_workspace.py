@@ -7,8 +7,10 @@ import networkx as nx
 from pytest_impacted.workspace import (
     PackageInfo,
     build_package_graph,
+    compute_impacted_packages,
     discover_packages,
     load_package,
+    map_files_to_packages,
     normalize_package_name,
 )
 
@@ -168,3 +170,52 @@ class TestBuildPackageGraph:
         packages = [_pkg("a"), _pkg("b", deps={"a"}), _pkg("c", deps={"b"})]
         graph = build_package_graph(packages)
         assert nx.descendants(graph, "a") == {"b", "c"}
+
+
+class TestMapFilesToPackages:
+    def test_longest_prefix_wins_over_root_package(self):
+        root_pkg = PackageInfo(name="root-pkg", path=PurePosixPath("."), module="root_pkg", tests_dir=None)
+        alpha = _pkg("pkg-alpha")
+        mapping = map_files_to_packages(["libs/pkg-alpha/pkg_alpha/core.py", "tools/script.py"], [root_pkg, alpha])
+        assert mapping == {
+            "pkg-alpha": ["libs/pkg-alpha/pkg_alpha/core.py"],
+            "root-pkg": ["tools/script.py"],
+        }
+
+    def test_files_outside_any_package_are_unowned(self):
+        mapping = map_files_to_packages(["README.md"], [_pkg("pkg-alpha")])
+        assert mapping == {}
+
+
+class TestComputeImpactedPackages:
+    def test_direct_and_transitive_dependency_impact(self):
+        packages = [_pkg("pkg-alpha"), _pkg("pkg-beta", deps={"pkg-alpha"}), _pkg("pkg-gamma")]
+        impacted = compute_impacted_packages(["libs/pkg-alpha/pkg_alpha/core.py"], packages)
+        assert impacted["pkg-alpha"].reason == "direct"
+        assert impacted["pkg-beta"].reason == "dependency"
+        assert "pkg-gamma" not in impacted
+
+    def test_direct_plus_dependency_reason_ordering(self):
+        packages = [_pkg("pkg-alpha"), _pkg("pkg-beta", deps={"pkg-alpha"})]
+        impacted = compute_impacted_packages(
+            ["libs/pkg-alpha/pkg_alpha/core.py", "libs/pkg-beta/pkg_beta/service.py"], packages
+        )
+        assert impacted["pkg-beta"].reason == "direct+dependency"
+
+    def test_root_dependency_file_impacts_all_packages(self):
+        packages = [_pkg("pkg-alpha"), _pkg("pkg-gamma")]
+        impacted = compute_impacted_packages(["uv.lock"], packages)
+        assert {name: entry.reason for name, entry in impacted.items()} == {
+            "pkg-alpha": "dep-files",
+            "pkg-gamma": "dep-files",
+        }
+
+    def test_package_local_dependency_file_is_not_global(self):
+        packages = [_pkg("pkg-alpha"), _pkg("pkg-gamma")]
+        impacted = compute_impacted_packages(["libs/pkg-alpha/pyproject.toml"], packages)
+        assert set(impacted) == {"pkg-alpha"}
+        assert impacted["pkg-alpha"].reason == "direct"
+
+    def test_no_dep_files_flag_disables_global_impact(self):
+        impacted = compute_impacted_packages(["uv.lock"], [_pkg("pkg-alpha")], watch_dep_files=False)
+        assert impacted == {}
