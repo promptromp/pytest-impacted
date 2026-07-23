@@ -4,6 +4,7 @@ from pathlib import PurePosixPath
 
 from pytest_impacted.workspace import (
     PackageInfo,
+    discover_packages,
     load_package,
     normalize_package_name,
 )
@@ -93,3 +94,47 @@ class TestLoadPackage:
         info = load_package(pkg, tmp_path)
         assert info is not None
         assert info.requirements == frozenset({"pkg-alpha"})
+
+
+class TestDiscoverPackages:
+    def _make_package(self, root, rel, name, layout="flat"):
+        pkg = root / rel
+        _write_pyproject(pkg, f'[project]\nname = "{name}"\nversion = "0.1.0"\n')
+        module_dir = name.replace("-", "_")
+        _make_module(pkg, f"src/{module_dir}" if layout == "src" else module_dir)
+        return pkg
+
+    def test_uv_workspace_members_and_exclude(self, tmp_path):
+        _write_pyproject(tmp_path, '[tool.uv.workspace]\nmembers = ["libs/*"]\nexclude = ["libs/skipme"]\n')
+        self._make_package(tmp_path, "libs/alpha", "pkg-alpha", layout="src")
+        self._make_package(tmp_path, "libs/beta", "pkg-beta")
+        self._make_package(tmp_path, "libs/skipme", "pkg-skipme")
+        self._make_package(tmp_path, "unlisted", "pkg-unlisted")  # not in members -> ignored
+        packages = discover_packages(tmp_path)
+        assert [p.name for p in packages] == ["pkg-alpha", "pkg-beta"]
+
+    def test_uv_workspace_includes_root_when_it_has_project(self, tmp_path):
+        _write_pyproject(
+            tmp_path,
+            '[project]\nname = "root-pkg"\nversion = "0.1.0"\n[tool.uv.workspace]\nmembers = ["libs/*"]\n',
+        )
+        _make_module(tmp_path, "root_pkg")
+        self._make_package(tmp_path, "libs/alpha", "pkg-alpha")
+        packages = discover_packages(tmp_path)
+        assert {p.name for p in packages} == {"root-pkg", "pkg-alpha"}
+
+    def test_scan_fallback_finds_nested_packages_and_prunes(self, tmp_path):
+        self._make_package(tmp_path, "libs/alpha", "pkg-alpha")
+        self._make_package(tmp_path, "services/deep/gamma", "pkg-gamma")
+        self._make_package(tmp_path, ".hidden/secret", "pkg-secret")
+        self._make_package(tmp_path, "node_modules/junk", "pkg-junk")
+        packages = discover_packages(tmp_path)
+        assert [p.name for p in packages] == ["pkg-alpha", "pkg-gamma"]
+
+    def test_duplicate_package_names_keep_first(self, tmp_path, caplog):
+        self._make_package(tmp_path, "a/dupe", "pkg-dupe")
+        self._make_package(tmp_path, "b/dupe", "pkg-dupe")
+        with caplog.at_level("WARNING", logger="pytest_impacted.workspace"):
+            packages = discover_packages(tmp_path)
+        assert [str(p.path) for p in packages] == ["a/dupe"]
+        assert "pkg-dupe" in caplog.text

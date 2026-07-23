@@ -5,6 +5,7 @@ imported, no git access happens, consistent with the project's design principle
 of never importing analyzed code.
 """
 
+import fnmatch
 import logging
 import re
 import tomllib
@@ -15,6 +16,9 @@ from packaging.requirements import InvalidRequirement, Requirement
 
 
 logger = logging.getLogger(__name__)
+
+#: Directory names never descended into during filesystem scans.
+PRUNE_DIRS = frozenset({"venv", "node_modules", "build", "dist", "site-packages", "__pycache__"})
 
 
 def normalize_package_name(name: str) -> str:
@@ -107,3 +111,76 @@ def load_package(pkg_dir: Path, root: Path) -> "PackageInfo | None":
         tests_dir=tests_dir,
         requirements=frozenset(requirements),
     )
+
+
+def discover_packages(root: "Path | str") -> list[PackageInfo]:
+    """Discover all packages under *root*.
+
+    Honors ``[tool.uv.workspace]`` members/exclude globs when the root
+    ``pyproject.toml`` declares a workspace; otherwise falls back to a
+    recursive filesystem scan for ``pyproject.toml`` files (pruning hidden
+    directories and PRUNE_DIRS). Results are sorted by path; duplicate
+    package names keep the first occurrence.
+    """
+    root = Path(root).resolve()
+    package_dirs = _uv_workspace_member_dirs(root)
+    if package_dirs is None:
+        package_dirs = _scan_package_dirs(root)
+
+    packages: list[PackageInfo] = []
+    seen_names: set[str] = set()
+    for pkg_dir in sorted(set(package_dirs)):
+        info = load_package(pkg_dir, root)
+        if info is None:
+            continue
+        if info.name in seen_names:
+            logger.warning("Duplicate package name %r at %s — keeping the first occurrence", info.name, pkg_dir)
+            continue
+        seen_names.add(info.name)
+        packages.append(info)
+    return packages
+
+
+def _uv_workspace_member_dirs(root: Path) -> "list[Path] | None":
+    """Expand ``[tool.uv.workspace]`` member globs, or None when no workspace is declared."""
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():
+        return None
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return None
+    workspace = data.get("tool", {}).get("uv", {}).get("workspace")
+    if workspace is None:
+        return None
+
+    excludes = list(workspace.get("exclude") or [])
+    # The workspace root itself is a candidate; load_package drops it when it has no [project].
+    member_dirs: list[Path] = [root]
+    for pattern in workspace.get("members") or []:
+        for match in sorted(root.glob(pattern)):
+            if not (match / "pyproject.toml").is_file():
+                continue
+            rel = match.relative_to(root).as_posix()
+            if any(fnmatch.fnmatch(rel, exclude) for exclude in excludes):
+                continue
+            member_dirs.append(match)
+    return member_dirs
+
+
+def _scan_package_dirs(root: Path) -> list[Path]:
+    """Recursively find directories containing a ``pyproject.toml``."""
+    found: list[Path] = []
+    if (root / "pyproject.toml").is_file():
+        found.append(root)
+
+    def _walk(directory: Path) -> None:
+        for child in sorted(directory.iterdir()):
+            if not child.is_dir() or child.name.startswith(".") or child.name in PRUNE_DIRS:
+                continue
+            if (child / "pyproject.toml").is_file():
+                found.append(child)
+            _walk(child)
+
+    _walk(root)
+    return found
