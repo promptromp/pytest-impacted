@@ -1,6 +1,6 @@
 """Unit tests for the workspace (monorepo) discovery module."""
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import networkx as nx
 
@@ -219,3 +219,16 @@ class TestComputeImpactedPackages:
     def test_no_dep_files_flag_disables_global_impact(self):
         impacted = compute_impacted_packages(["uv.lock"], [_pkg("pkg-alpha")], watch_dep_files=False)
         assert impacted == {}
+
+
+EXAMPLE_MONOREPO = Path(__file__).parent.parent / "examples" / "monorepo"
+
+
+class TestExampleMonorepoFixture:
+    def test_discovers_both_packages_with_correct_config(self):
+        packages = discover_packages(EXAMPLE_MONOREPO)
+        assert [(p.name, str(p.path), p.module, p.tests_dir) for p in packages] == [
+            ("pkg-alpha", "libs/pkg-alpha", "src/pkg_alpha", "tests"),
+            ("pkg-beta", "libs/pkg-beta", "pkg_beta", "tests"),
+        ]
+        assert packages[1].requirements == frozenset({"pkg-alpha"})

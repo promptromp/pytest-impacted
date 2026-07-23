@@ -108,3 +108,8 @@ combine-as-imports = true
 known-first-party = ["antelope"]
 lines-after-imports = 2
 no-lines-before = ["standard-library"]
+
+[tool.pytest.ini_options]
+# Keep bare `pytest` runs from collecting the examples/ fixture monorepo,
+# whose packages are intentionally not installed in this environment.
+testpaths = ["tests"]
