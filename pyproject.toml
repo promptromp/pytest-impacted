@@ -59,6 +59,7 @@ impacted-tests = "pytest_impacted.cli:impacted_tests_cli"
 dev = [
     "coverage>=7.8.0",
     "mypy>=1.15.0",
+    "pre-commit>=4.6.1",
     "pytest-cov>=6.1.1",
     "ruff>=0.11.9",
 ]

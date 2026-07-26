@@ -23,12 +23,16 @@ jobs:
         enable-cache: true
     - name: Install the project
       run: uv sync --all-extras --dev
-    - name: Run ruff lint and formatting checks
-      run: |
-        uv run ruff check
-        uv run ruff format --check
-    - name: Run mypy
-      run: uv run mypy pytest_impacted
+    - name: Cache pre-commit hook environments
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+    # Same single source of truth as ci.yml — see the comment there.
+    - name: Run pre-commit hooks
+      run: uv run pre-commit run --all-files --show-diff-on-failure
+      env:
+        SKIP: pytest
 
   test:
     runs-on: ubuntu-latest

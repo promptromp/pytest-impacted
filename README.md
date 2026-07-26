@@ -217,6 +217,10 @@ impacted-tests --module=my_package --git-mode=branch --base-branch=main > impact
 pytest $(cat impacted_tests.txt)
 ```
 
+The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--root-dir`, `--tests-dir`,
+`--verbose`, `--no-dep-files` and `--disable-ext`. If your tests live outside the package,
+pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
+
 ### Configuration via `pyproject.toml`
 
 All CLI options can be set as defaults in your `pyproject.toml` (or `pytest.ini`):
