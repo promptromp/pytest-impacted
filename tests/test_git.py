@@ -610,6 +610,33 @@ def test_impacted_files_for_branch_mode_detached_head(mock_repo):
     repo.git.diff.assert_called_once_with("main", "abc123", name_status=True)
 
 
+# --- Tests for validate_rev (git option-injection guard) ---
+
+
+@pytest.mark.parametrize("rev", ["main", "origin/main", "HEAD~3", "abc123", "release-1.0"])
+def test_validate_rev_accepts_legitimate_refs(rev):
+    """validate_rev returns ordinary ref names unchanged."""
+    assert git.validate_rev(rev) == rev
+
+
+@pytest.mark.parametrize("rev", ["--output=/tmp/pwned", "--upload-pack=touch /tmp/x", "-o", "--"])
+def test_validate_rev_rejects_option_like_refs(rev):
+    """validate_rev rejects values git would parse as options rather than revisions."""
+    with pytest.raises(git.InvalidGitRefError):
+        git.validate_rev(rev)
+
+
+@patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_branch_mode_rejects_option_like_base_branch(mock_repo):
+    """An option-like base branch never reaches the git CLI."""
+    repo = DummyRepo(diff_branch_result="M\tfile1.py\n")
+
+    with pytest.raises(git.InvalidGitRefError):
+        git.impacted_files_for_branch_mode(repo, "--output=/tmp/pwned")
+
+    repo.git.diff.assert_not_called()
+
+
 # --- Tests for find_repo and normalize_git_paths (monorepo support) ---
 
 
