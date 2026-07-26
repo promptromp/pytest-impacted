@@ -176,6 +176,12 @@ def testvalidate_base_branch_from_subdirectory():
     validate_base_branch("HEAD", "tests")  # Should not raise
 
 
+def testvalidate_base_branch_option_like():
+    """An option-like base branch is rejected as a usage error, not passed to git."""
+    with pytest.raises(pytest.UsageError, match="Invalid base branch"):
+        validate_base_branch("--output=/tmp/pwned", ".")
+
+
 def testvalidate_base_branch_no_git_repo(tmp_path):
     """validate_base_branch gives a helpful error when no git repo is found."""
     with pytest.raises(pytest.UsageError, match="No git repository found"):

@@ -20,6 +20,23 @@ except ImportError:
     )
 
 
+class InvalidGitRefError(ValueError):
+    """A ref name was rejected before it could be handed to the git CLI."""
+
+
+def validate_rev(rev: str) -> str:
+    """Reject refs that git would parse as a command-line option, returning *rev* unchanged.
+
+    Refs reach git as positional arguments, so a value such as ``--output=<path>``
+    would be interpreted as an option rather than a revision.  Git itself forbids
+    ref names beginning with ``-`` (see ``git check-ref-format``), so this rejects
+    nothing a user could legitimately pass.
+    """
+    if rev.startswith("-"):
+        raise InvalidGitRefError(f"Ref names may not begin with '-', got: {rev!r}.")
+    return rev
+
+
 class GitMode(StrEnum):
     """Git modes for the plugin."""
 
@@ -291,7 +308,7 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | 
         # Detached HEAD state (common in CI) — fall back to HEAD commit
         current_ref = repo.head.commit
 
-    diffs = repo.git.diff(base_branch, current_ref, name_status=True)
+    diffs = repo.git.diff(validate_rev(base_branch), current_ref, name_status=True)
     change_set = ChangeSet.from_git_diff_name_status_output(diffs)
 
     impacted_files = []
