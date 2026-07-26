@@ -68,12 +68,12 @@ def impacted_tests_cli(
 ):
     """CLI entrypoint for impacted-tests console script."""
     click.echo("impacted-tests", err=True)
-    click.secho("  base-branch: {}".format(base_branch), fg="blue", bold=True, err=True)
-    click.secho("  git-mode: {}".format(git_mode), fg="blue", bold=True, err=True)
-    click.secho("  module: {}".format(module), fg="blue", bold=True, err=True)
-    click.secho("  root-dir: {}".format(root_dir), fg="blue", bold=True, err=True)
-    click.secho("  tests-dir: {}".format(tests_dir), fg="blue", bold=True, err=True)
-    click.secho("  no-dep-files: {}".format(no_dep_files), fg="blue", bold=True, err=True)
+    click.secho(f"  base-branch: {base_branch}", fg="blue", bold=True, err=True)
+    click.secho(f"  git-mode: {git_mode}", fg="blue", bold=True, err=True)
+    click.secho(f"  module: {module}", fg="blue", bold=True, err=True)
+    click.secho(f"  root-dir: {root_dir}", fg="blue", bold=True, err=True)
+    click.secho(f"  tests-dir: {tests_dir}", fg="blue", bold=True, err=True)
+    click.secho(f"  no-dep-files: {no_dep_files}", fg="blue", bold=True, err=True)
     if disable_ext:
         click.secho("  disable-ext: {}".format(", ".join(disable_ext)), fg="blue", bold=True, err=True)
 

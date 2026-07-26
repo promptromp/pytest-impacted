@@ -51,7 +51,7 @@ The tests directory does **not** need to contain `__init__.py` — the plugin us
 
 ## Monorepo / src-Layout Support
 
-The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.  
+The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.
 **Note:** Impact analysis only considers changed files within the current working-directory subtree; changes in sibling directories are ignored.
 
 ### src-Layout Projects
@@ -134,11 +134,13 @@ pytest --impacted --impacted-module=my_package --no-impacted-dep-files
 Combines multiple strategies, deduplicating and sorting results. The default composition is:
 
 ```python
-CompositeImpactStrategy([
-    ASTImpactStrategy(),
-    PytestImpactStrategy(),
-    DependencyFileImpactStrategy(),
-])
+CompositeImpactStrategy(
+    [
+        ASTImpactStrategy(),
+        PytestImpactStrategy(),
+        DependencyFileImpactStrategy(),
+    ]
+)
 ```
 
 ### Custom strategies and packaged extensions

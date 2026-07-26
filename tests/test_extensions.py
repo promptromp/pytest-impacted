@@ -1,5 +1,6 @@
 """Unit tests for the extension system."""
 
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,7 +41,7 @@ class SimpleStrategy(ImpactStrategy):
 class ConfigurableStrategy(ImpactStrategy):
     """A strategy that accepts configuration."""
 
-    config_options = [
+    config_options: ClassVar[list[ConfigOption]] = [
         ConfigOption(name="threshold", help="Score threshold", type=int, default=80),
         ConfigOption(name="data_file", help="Path to data file", default=".data"),
     ]
@@ -64,7 +65,7 @@ class DuckTypedStrategy:
 class RequiredConfigStrategy(ImpactStrategy):
     """A strategy with a required config option."""
 
-    config_options = [
+    config_options: ClassVar[list[ConfigOption]] = [
         ConfigOption(name="api_key", help="API key (required)", required=True),
         ConfigOption(name="timeout", help="Timeout in seconds", type=int, default=30),
     ]
@@ -79,8 +80,6 @@ class RequiredConfigStrategy(ImpactStrategy):
 
 class InvalidStrategy:
     """A class that does not implement find_impacted_tests."""
-
-    pass
 
 
 class BadSignatureStrategy:

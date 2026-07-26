@@ -46,6 +46,10 @@ ruff format
 # Type checking
 uv run mypy pytest_impacted
 
+# Rust lint and formatting (run from the repo root)
+cargo fmt --manifest-path rust/Cargo.toml --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+
 # Run all pre-commit hooks (fail_fast: true)
 pre-commit run --all-files
 ```
@@ -124,7 +128,11 @@ The documentation site uses [MkDocs Material](https://squidfun.github.io/mkdocs-
 
 ## Configuration Notes
 
-- Ruff: line-length=120, target-version=py311, double quote style, T201 (print) allowed
-- Pre-commit hooks: ruff, mypy, pytest with coverage (fail_fast: true)
+- Ruff: line-length=120, target-version=py311, double quote style, T201 (print) allowed. Rule selection uses `extend-select`, **not** `select` — ruff 0.16 ships a comprehensive default rule set (~394 rules) and `extend-select` layers our extra categories on top of it. Switching back to `select` would silently disable every default rule not named in the list.
+- Ruff 0.16 also formats Python code blocks inside Markdown, so `ruff format` covers `README.md` and `docs/*.md` as well as `.py` files.
+- Logging: every module that logs declares `logger = logging.getLogger(__name__)` and calls `logger.*`. Never call `logging.*` module-level functions — those go to the root logger and are flagged by LOG015.
+- Pre-commit hooks: ruff, mypy, cargo fmt, cargo clippy, pytest with coverage (fail_fast: true). Ruff/mypy/pytest run as `local`/`system` hooks invoking `uv run ...` rather than via `ruff-pre-commit`, so pre-commit and CI resolve the identical binaries from `uv.lock` and cannot drift apart. Upgrade them with `uv lock --upgrade` — there is no hook `rev` to bump. The `uv-lock` hook keeps `uv.lock` in step with `pyproject.toml`.
+- The Rust crate is linted in both pre-commit and CI: `cargo fmt --manifest-path rust/Cargo.toml --check` and `cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings`.
+- The ruff version in `uv.lock` and the `ruff_python_parser`/`ruff_python_ast` git tags in `rust/Cargo.toml` are kept at the same release; bump them together.
 - CI matrix: Python 3.11, 3.12, 3.13, 3.14
 - Python 3.11+ minimum required

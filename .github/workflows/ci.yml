@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.1.0
+      uses: astral-sh/setup-uv@v9.0.0
       with:
         python-version: "3.13"
         version: "latest"
@@ -33,6 +33,11 @@ jobs:
         uv run ruff format --check
     - name: Run mypy
       run: uv run mypy pytest_impacted
+    # Mirrors the cargo-fmt / cargo-clippy pre-commit hooks.
+    - name: Run cargo fmt and clippy checks
+      run: |
+        cargo fmt --manifest-path rust/Cargo.toml --check
+        cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -44,9 +49,9 @@ jobs:
 
     name: test (${{ matrix.python-version }}, ${{ matrix.backend }})
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.1.0
+      uses: astral-sh/setup-uv@v9.0.0
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"

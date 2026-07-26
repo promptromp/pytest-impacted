@@ -17,11 +17,11 @@ rayon = "1.10"
 
 [dependencies.ruff_python_parser]
 git = "https://github.com/astral-sh/ruff"
-tag = "0.15.13"
+tag = "0.16.0"
 
 [dependencies.ruff_python_ast]
 git = "https://github.com/astral-sh/ruff"
-tag = "0.15.13"
+tag = "0.16.0"
 
 [profile.release]
 opt-level = 3

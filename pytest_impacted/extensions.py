@@ -15,10 +15,11 @@ from __future__ import annotations
 import importlib.metadata
 import inspect
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, Sequence, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 
 if TYPE_CHECKING:
@@ -307,7 +308,7 @@ def build_strategy_with_extensions(
     watch_dep_files: bool = True,
     disabled: Sequence[str] = (),
     ext_config: dict[str, Any] | None = None,
-) -> "ImpactStrategy":
+) -> ImpactStrategy:
     """Build a composite strategy combining built-in and extension strategies.
 
     This is the main entry point for constructing the full strategy pipeline.

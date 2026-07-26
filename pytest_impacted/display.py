@@ -3,6 +3,9 @@
 import logging
 
 
+logger = logging.getLogger(__name__)
+
+
 def notify(message: str, session) -> None:
     """Print a message to the console."""
     if session:
@@ -12,7 +15,7 @@ def notify(message: str, session) -> None:
             bold=True,
         )
     else:
-        logging.info("\n%s\n", message)
+        logger.info("\n%s\n", message)
 
 
 def warn(message: str, session) -> None:
@@ -24,4 +27,4 @@ def warn(message: str, session) -> None:
             bold=True,
         )
     else:
-        logging.warning("\nWARNING: %s\n", message)
+        logger.warning("\nWARNING: %s\n", message)

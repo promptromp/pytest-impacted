@@ -128,6 +128,7 @@ my_strategy = "my_package.strategy:MyCustomStrategy"
 ```python
 from pytest_impacted import ImpactStrategy, ConfigOption, resolve_impacted_tests
 
+
 class MyCustomStrategy(ImpactStrategy):
     config_options = [
         ConfigOption(name="threshold", help="Min score to consider", type=int, default=80),

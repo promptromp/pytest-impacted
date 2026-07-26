@@ -232,7 +232,6 @@ class ImpactStrategy(ABC):
         Returns:
             List of impacted test module names
         """
-        pass
 
 
 class ASTImpactStrategy(ImpactStrategy):
@@ -530,4 +529,4 @@ class CompositeImpactStrategy(ImpactStrategy):
             all_impacted.extend(strategy_results)
 
         # Remove duplicates and sort
-        return sorted(list(set(all_impacted)))
+        return sorted(set(all_impacted))

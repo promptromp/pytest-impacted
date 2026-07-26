@@ -5,7 +5,7 @@ via ruff's Python parser and rayon for parallelism. When unavailable, the
 pure-Python astroid-based implementation is used as a fallback.
 """
 
-__all__ = ["RUST_AVAILABLE", "rust_parse_file_imports", "rust_parse_all_imports"]
+__all__ = ["RUST_AVAILABLE", "rust_parse_all_imports", "rust_parse_file_imports"]
 
 try:
     from pytest_impacted_rs import (

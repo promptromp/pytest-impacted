@@ -181,7 +181,7 @@ def without_nones(items: list[Any | None]) -> list[Any]:
 def describe_index_diffs(diffs: list[Diff]) -> None:
     """Describe the index diffs to stdout."""
     for diff in diffs:
-        print(f"diff: {str(diff)}")
+        print(f"diff: {diff!s}")
 
 
 def find_repo(path: str | Path) -> "Repo":
