@@ -1,6 +1,7 @@
 """Integration tests for the extension system using pytester."""
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import networkx as nx
@@ -73,7 +74,7 @@ class TestExtensionPluginIntegration:
         """Extension config options should appear as CLI flags."""
 
         class ConfiguredStrategy(ImpactStrategy):
-            config_options = [
+            config_options: ClassVar[list[ConfigOption]] = [
                 ConfigOption(name="my_flag", help="A test flag", type=str, default="default_val"),
             ]
 

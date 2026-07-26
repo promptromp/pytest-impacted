@@ -95,7 +95,7 @@ def main():
     if rust_available:
         # Benchmark Rust sequential
         print("Running Rust sequential benchmark...")
-        rust_seq_time, rust_seq_results = time_fn(bench_rust_single, submodules, iterations=args.iterations)
+        rust_seq_time, _rust_seq_results = time_fn(bench_rust_single, submodules, iterations=args.iterations)
         print(f"  Rust (sequential):     {rust_seq_time * 1000:8.2f} ms")
 
         # Benchmark Rust parallel

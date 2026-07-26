@@ -59,6 +59,7 @@ impacted-tests = "pytest_impacted.cli:impacted_tests_cli"
 dev = [
     "coverage>=7.8.0",
     "mypy>=1.15.0",
+    "pre-commit>=4.6.1",
     "pytest-cov>=6.1.1",
     "ruff>=0.11.9",
 ]
@@ -88,10 +89,16 @@ ignore = [
     "T201",  # allow print statement
 ]
 
-select = [
+# Ruff 0.16 ships a comprehensive default rule set (~394 rules, up from 59).
+# `extend-select` layers our opt-in categories on top of those defaults rather
+# than replacing them — a plain `select` would silently drop the 286 default
+# rules we do not name here, and dropping this list entirely would lose the ~60
+# rules below that are still not on by default (notably E501, the A00x
+# builtin-shadowing family, G00x logging-format, PERF401/403 and PLC0415).
+extend-select = [
     "A",  # flake8-builtins
     "B",  # flake8-bugbear
-    "E",  # pycodestyle
+    "E",  # pycodestyle (incl. E501 line-too-long, not a default rule)
     "F",  # Pyflakes
     "G",  # flake8-logging-format
     "I",  # isort
@@ -106,6 +113,6 @@ max-complexity = 10
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
-known-first-party = ["antelope"]
+known-first-party = ["pytest_impacted"]
 lines-after-imports = 2
 no-lines-before = ["standard-library"]

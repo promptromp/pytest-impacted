@@ -8,6 +8,9 @@ from functools import lru_cache
 from pathlib import Path
 
 
+logger = logging.getLogger(__name__)
+
+
 def package_name_to_path(package_name: str) -> str:
     """Convert a package name to a path."""
     return package_name.replace(".", "/")
@@ -57,7 +60,7 @@ def iter_namespace(ns_package: str | types.ModuleType, *, scan_path: str | None 
         When provided, the filesystem search uses *scan_path* while module name
         prefixes are still derived from *ns_package*.
     """
-    logging.debug("Iterating over namespace for package: %s", ns_package)
+    logger.debug("Iterating over namespace for package: %s", ns_package)
 
     match ns_package:
         case str():
@@ -71,7 +74,7 @@ def iter_namespace(ns_package: str | types.ModuleType, *, scan_path: str | None 
 
     module_infos = list(pkgutil.iter_modules(path=path, prefix=prefix))
 
-    logging.debug("Materialized module_infos: %s", module_infos)
+    logger.debug("Materialized module_infos: %s", module_infos)
 
     return module_infos
 
@@ -115,7 +118,7 @@ def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str
             if os.path.exists(abs_path):
                 results[name] = abs_path
             else:
-                logging.warning("Module %s not found at expected path %s", name, abs_path)
+                logger.warning("Module %s not found at expected path %s", name, abs_path)
 
             if module_info.ispkg:
                 sub_scan_path = os.path.join(scan_path, module_parts[-1])
@@ -182,7 +185,7 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package
     """
     submodules = discover_submodules(ns_module, require_init=True)
     if tests_package:
-        logging.debug("Adding modules from tests_package: %s", tests_package)
+        logger.debug("Adding modules from tests_package: %s", tests_package)
         test_submodules = discover_submodules(tests_package, require_init=False)
         submodules = {**submodules, **test_submodules}
 
@@ -198,7 +201,7 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package
         if abs_path in path_to_module:
             resolved_modules.append(path_to_module[abs_path])
         else:
-            logging.warning(
+            logger.warning(
                 "File %s could not be resolved to a known module",
                 file,
             )
@@ -224,5 +227,5 @@ def resolve_modules_to_files(
         if module_name in submodules:
             result.append(submodules[module_name])
         else:
-            logging.warning("Module %s not found in discovered submodules", module_name)
+            logger.warning("Module %s not found in discovered submodules", module_name)
     return result

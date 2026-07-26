@@ -17,28 +17,61 @@ repos:
     - id: fix-byte-order-marker
     - id: check-case-conflict
     - id: check-json
+    - id: check-toml
     - id: check-yaml
       args: [ --unsafe ]
+    - id: check-merge-conflict
+    - id: check-shebang-scripts-are-executable
+    - id: mixed-line-ending
+      args: [ --fix=lf ]
     - id: detect-aws-credentials
       args: [ --allow-missing-credentials ]
     - id: detect-private-key
     - id: end-of-file-fixer
     - id: trailing-whitespace
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.15.13
+# Keeps uv.lock in sync with pyproject.toml, so a dependency edit cannot be
+# committed without the corresponding lockfile update.
+- repo: https://github.com/astral-sh/uv-pre-commit
+  rev: 0.11.32
   hooks:
-    # Run the linter.
-    - id: ruff-check
-      args: [ --fix ]
-    # Run the formatter.
-    - id: ruff-format
+    - id: uv-lock
 - repo: local
   hooks:
+  # Ruff, mypy and pytest all run out of the dev dependency group resolved in
+  # uv.lock. That is deliberate: CI runs `uv run ruff check` / `uv run mypy`,
+  # so sourcing the same binaries here makes it structurally impossible for the
+  # pre-commit and CI versions to drift apart. (They previously did: the
+  # ruff-pre-commit rev sat at v0.15.13 while uv.lock resolved ruff 0.15.16.)
+  # Bump ruff/mypy via `uv lock --upgrade` — there is no separate rev to update.
+  - id: ruff-check
+    name: ruff check
+    entry: uv run ruff check --force-exclude --fix
+    language: system
+    types_or: [python, pyi]
+    require_serial: true
+  - id: ruff-format
+    name: ruff format
+    entry: uv run ruff format --force-exclude
+    language: system
+    types_or: [python, pyi, markdown]
+    require_serial: true
   - id: mypy
     name: mypy
     entry: bash -ec "uv run mypy pytest_impacted"
     language: system
     types: [python]
+    pass_filenames: false
+  - id: cargo-fmt
+    name: cargo fmt (rust)
+    entry: cargo fmt --manifest-path rust/Cargo.toml --
+    language: system
+    types: [rust]
+    pass_filenames: false
+  - id: cargo-clippy
+    name: cargo clippy (rust)
+    entry: bash -ec "cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings"
+    language: system
+    types: [rust]
     pass_filenames: false
   - id: pytest
     name: pytest [with coverage, without slow]

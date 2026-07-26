@@ -18,21 +18,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.1.0
+      uses: astral-sh/setup-uv@v9.0.0
       with:
         python-version: "3.13"
         version: "latest"
         enable-cache: true
     - name: Install the project
       run: uv sync --all-extras --dev
-    - name: Run ruff lint and formatting checks
-      run: |
-        uv run ruff check
-        uv run ruff format --check
-    - name: Run mypy
-      run: uv run mypy pytest_impacted
+    - name: Cache pre-commit hook environments
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+    # Runs the full .pre-commit-config.yaml (ruff, mypy, cargo fmt/clippy, and
+    # the hygiene hooks) so CI enforces exactly what pre-commit does locally and
+    # a `git commit --no-verify` cannot slip past it. pytest is skipped here
+    # because the test matrix below covers it across every Python version.
+    - name: Run pre-commit hooks
+      run: uv run pre-commit run --all-files --show-diff-on-failure
+      env:
+        SKIP: pytest
 
   test:
     runs-on: ubuntu-latest
@@ -44,9 +51,9 @@ jobs:
 
     name: test (${{ matrix.python-version }}, ${{ matrix.backend }})
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.1.0
+      uses: astral-sh/setup-uv@v9.0.0
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"

@@ -20,10 +20,12 @@ from pathlib import Path
 from pytest_impacted.api import get_impacted_tests
 from pytest_impacted.strategies import ImpactStrategy
 
+
 class MyCustomStrategy(ImpactStrategy):
     def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
         # your logic here
         ...
+
 
 impacted = get_impacted_tests(
     impacted_git_mode="branch",
@@ -47,6 +49,7 @@ An extension is a standard Python package that registers a strategy class via th
 ```python
 # my_extension/strategy.py
 from pytest_impacted import ImpactStrategy, resolve_impacted_tests
+
 
 class MyStrategy(ImpactStrategy):
     def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
@@ -72,6 +75,7 @@ Extensions can declare configuration options that are automatically registered a
 
 ```python
 from pytest_impacted import ImpactStrategy, ConfigOption
+
 
 class CoverageStrategy(ImpactStrategy):
     config_options = [
@@ -159,6 +163,7 @@ class EarlyStrategy(ImpactStrategy):
     priority = 10  # Runs before other extensions
     ...
 
+
 class LateStrategy(ImpactStrategy):
     priority = 200  # Runs after other extensions
     ...
@@ -175,6 +180,7 @@ The `resolve_impacted_tests` utility is exported from the package root for exten
 
 ```python
 from pytest_impacted import ImpactStrategy, resolve_impacted_tests
+
 
 class MyStrategy(ImpactStrategy):
     def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
@@ -199,6 +205,7 @@ Example: a strategy that enumerates all source files and scans them for a custom
 ```python
 from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
 
+
 class MyScanningStrategy(ImpactStrategy):
     def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
         # Walk every source file in the package
@@ -220,6 +227,7 @@ class MyScanningStrategy(ImpactStrategy):
 
 ```python
 from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+
 
 class IndexingStrategy(ImpactStrategy):
     def setup(self, *, ns_module, tests_package=None, root_dir=None, session=None, dep_tree):

@@ -10,6 +10,9 @@ from pytest_impacted.parsing import is_test_module, parse_file_imports
 from pytest_impacted.traversal import discover_submodules
 
 
+logger = logging.getLogger(__name__)
+
+
 def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
     """Parse imports for all discovered submodules.
 
@@ -24,7 +27,7 @@ def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]
 
     result: dict[str, list[str]] = {}
     for name, file_path in submodules.items():
-        logging.debug("Processing submodule: %s", name)
+        logger.debug("Processing submodule: %s", name)
         is_pkg = file_path.endswith("__init__.py")
         result[name] = parse_file_imports(file_path, name, is_package=is_pkg)
     return result
@@ -48,7 +51,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
 
     for module in impacted_modules:
         if module not in dep_tree.nodes:
-            logging.warning(
+            logger.warning(
                 "Module %s is marked as impacted but was not found in dependency tree "
                 "(possibly outside the analyzed package scope).",
                 module,
@@ -59,7 +62,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
             else:
                 # Production module changed but not in tree — conservatively
                 # mark all known test modules as impacted.
-                logging.warning(
+                logger.warning(
                     "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
                     module,
                 )
@@ -72,7 +75,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
 
     # Remove duplicates and sort the list for good measure.
     # (although the order of the tests should not matter)
-    impacted_tests = sorted(list(set(impacted_tests)))
+    impacted_tests = sorted(set(impacted_tests))
 
     return impacted_tests
 
@@ -88,11 +91,11 @@ def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.M
 
     if tests_package:
         tests_name = tests_package if isinstance(tests_package, str) else tests_package.__name__
-        logging.debug("Adding modules from tests_package: %s", tests_name)
+        logger.debug("Adding modules from tests_package: %s", tests_name)
         test_submodules = discover_submodules(tests_name, require_init=False)
         submodules = {**submodules, **test_submodules}
 
-    logging.debug("Building dependency tree for %d submodules", len(submodules))
+    logger.debug("Building dependency tree for %d submodules", len(submodules))
 
     # Parse imports — Rust parallel path or Python sequential fallback
     all_imports = _parse_all_module_imports(submodules)

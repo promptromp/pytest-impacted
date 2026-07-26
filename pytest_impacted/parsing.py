@@ -10,6 +10,9 @@ import astroid
 from astroid.nodes import Import, ImportFrom
 
 
+logger = logging.getLogger(__name__)
+
+
 class _ModuleProxy:
     """Lightweight stand-in for a real module object.
 
@@ -155,7 +158,7 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
     except (OSError, UnicodeDecodeError):
         if os.path.exists(file_path) and os.stat(file_path).st_size == 0:
             return []
-        logging.error("Error reading file %s", file_path)
+        logger.error("Error reading file %s", file_path)
         return []
 
     if not source.strip():
@@ -166,7 +169,7 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
     try:
         tree = astroid.parse(source)
     except astroid.exceptions.AstroidSyntaxError:
-        logging.warning("Syntax error while parsing %s", file_path)
+        logger.warning("Syntax error while parsing %s", file_path)
         return []
 
     imports: set[str] = set()
@@ -194,14 +197,14 @@ def is_module_path(module_path: str, package: str | None = None) -> bool:
         return False
     except ValueError:
         # find_spec raises ValueError for invalid module names (empty strings, leading dots, etc.)
-        logging.debug(
+        logger.debug(
             "ValueError while trying to find spec for module %s in package %s",
             module_path,
             package,
         )
         return False
     except ImportError:
-        logging.exception(
+        logger.exception(
             "ImportError while trying to find spec for module %s in package %s",
             module_path,
             package,
@@ -234,5 +237,5 @@ def is_test_module(module_name: str) -> bool:
         or "tests" in module_parts
     )
 
-    logging.debug("Module %s is a test module: %s", module_name, is_test)
+    logger.debug("Module %s is a test module: %s", module_name, is_test)
     return is_test

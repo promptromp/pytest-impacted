@@ -16,7 +16,7 @@ pytest --impacted --impacted-module=my_package \
 
 ---
 
-### Key Features
+## Key Features
 
 | | Feature | Details |
 |---|---|---|
@@ -87,87 +87,6 @@ That's it. Unaffected tests are automatically skipped.
 
 ---
 
-## How It Works
-
-```
-Git diff → Changed files → Module resolution → AST import parsing → Dependency graph → Impacted tests
-                         ↘ Dependency file detection → All tests (if dep files changed)
-```
-
-1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
-2. **Filesystem discovery** maps file paths to Python module names — without importing anything
-3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
-4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
-6. **Test filtering** skips tests whose modules are not in the impact set
-
-The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
-
-### Strategy-Based Architecture
-
-Impact analysis is pluggable via a strategy pattern. The default pipeline combines three strategies:
-
-| Strategy | What it does |
-|----------|-------------|
-| **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
-| **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, **all tests in its directory and subdirectories** are marked as impacted |
-| **DependencyFileImpactStrategy** | When dependency files change (`uv.lock`, `requirements.txt`, `pyproject.toml`, etc.), **all tests** are marked as impacted |
-
-All strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. Dependency file detection is enabled by default and can be disabled with `--no-impacted-dep-files`.
-
-#### Custom Strategy Extensions
-
-Third-party packages can register custom strategies as installable plugins via Python entry points. Once installed, they are automatically discovered and composed into the analysis pipeline:
-
-```toml
-# In your extension's pyproject.toml
-[project.entry-points."pytest_impacted.strategies"]
-my_strategy = "my_package.strategy:MyCustomStrategy"
-```
-
-```python
-from pytest_impacted import ImpactStrategy, ConfigOption, resolve_impacted_tests
-
-class MyCustomStrategy(ImpactStrategy):
-    config_options = [
-        ConfigOption(name="threshold", help="Min score to consider", type=int, default=80),
-    ]
-
-    def __init__(self, threshold: int = 80):
-        self.threshold = threshold
-
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
-        # dep_tree is the pre-built dependency graph (nx.DiGraph), shared across all strategies.
-        # resolve_impacted_tests provides standard graph traversal.
-        return resolve_impacted_tests(impacted_modules, dep_tree)
-```
-
-Users can configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`. Extensions can alternatively use duck-typing (any class with a `find_impacted_tests` method — no inheritance required) and can set a `priority` class variable to control execution order. For extensions that need to walk the source tree or reuse the core AST parser, `discover_submodules` and `parse_file_imports` are also exported from `pytest_impacted`.
-
-Strategies may also override three optional **lifecycle hooks** (all with no-op defaults, so existing extensions keep working unchanged):
-
-- `enrich_dep_tree(dep_tree, *, ns_module, tests_package, root_dir, session)` — inject synthetic edges for relationships invisible to static import analysis (DI bindings, codegen, plugin discovery). The hook receives full context so scan-based enrichers can walk the source tree with `discover_submodules` + `parse_file_imports` and add edges the built-in AST traversal will then follow automatically.
-- `setup(*, ns_module, tests_package, root_dir, session, dep_tree)` — one-time per-run warm-up; the right place for expensive O(source-tree) indexing instead of lazy-init inside `find_impacted_tests`.
-- `teardown()` — release per-run state; always fires, even if `find_impacted_tests` raises.
-
-See the [Extensions guide](https://promptromp.github.io/pytest-impacted/extensions/) for the full reference and worked examples.
-
-You can also supply a custom strategy programmatically via the `get_impacted_tests()` API:
-
-```python
-from pytest_impacted.api import get_impacted_tests
-
-impacted = get_impacted_tests(
-    impacted_git_mode="branch",
-    impacted_base_branch="main",
-    root_dir=Path("."),
-    ns_module="my_package",
-    strategy=MyCustomStrategy(),
-)
-```
-
----
-
 ## Usage
 
 ### Git Modes
@@ -216,6 +135,10 @@ impacted-tests --module=my_package --git-mode=branch --base-branch=main > impact
 pytest $(cat impacted_tests.txt)
 ```
 
+The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--root-dir`, `--tests-dir`,
+`--verbose`, `--no-dep-files` and `--disable-ext`. If your tests live outside the package,
+pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
+
 ### Configuration via `pyproject.toml`
 
 All CLI options can be set as defaults in your `pyproject.toml` (or `pytest.ini`):
@@ -246,13 +169,67 @@ CLI flags override these defaults.
 
 ---
 
-## Alternatives
+## How It Works
 
-| Project | Notes |
-|---------|-------|
-| [pytest-testmon](https://testmon.org/) | Most popular option. Uses coverage-based granular change tracking. More precise but heavier; may conflict with other plugins. |
-| [pytest-picked](https://github.com/anapaulagomes/pytest-picked) | Runs tests from directly modified files only — no transitive dependency analysis. |
-| [pytest-affected](https://pypi.org/project/pytest-affected/0.1.6/) | Appears unmaintained, no source repository. |
+```
+Git diff → Changed files → Module resolution → AST import parsing → Dependency graph → Impacted tests
+                         ↘ Dependency file detection → All tests (if dep files changed)
+```
+
+1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
+2. **Filesystem discovery** maps file paths to Python module names — without importing anything
+3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
+4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
+5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
+6. **Test filtering** skips tests whose modules are not in the impact set
+
+The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
+
+### Strategy-Based Architecture
+
+Impact analysis is pluggable via a strategy pattern. The default pipeline combines three strategies:
+
+| Strategy | What it does |
+|----------|-------------|
+| **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
+| **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, **all tests in its directory and subdirectories** are marked as impacted |
+| **DependencyFileImpactStrategy** | When dependency files change (`uv.lock`, `requirements.txt`, `pyproject.toml`, etc.), **all tests** are marked as impacted |
+
+All strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. Dependency file detection is enabled by default and can be disabled with `--no-impacted-dep-files`.
+
+### Custom Strategy Extensions
+
+Third-party packages can register custom strategies as installable plugins via Python entry points. Once installed, they are automatically discovered and composed into the analysis pipeline:
+
+```toml
+# In your extension's pyproject.toml
+[project.entry-points."pytest_impacted.strategies"]
+my_strategy = "my_package.strategy:MyCustomStrategy"
+```
+
+```python
+from pytest_impacted import ImpactStrategy, ConfigOption, resolve_impacted_tests
+
+
+class MyCustomStrategy(ImpactStrategy):
+    config_options = [
+        ConfigOption(name="threshold", help="Min score to consider", type=int, default=80),
+    ]
+
+    def __init__(self, threshold: int = 80):
+        self.threshold = threshold
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        # dep_tree is the pre-built dependency graph (nx.DiGraph), shared across all strategies.
+        # resolve_impacted_tests provides standard graph traversal.
+        return resolve_impacted_tests(impacted_modules, dep_tree)
+```
+
+Users configure extensions via CLI (`--impacted-ext-my-strategy-threshold 90`) or `pyproject.toml`, and disable them with `--impacted-disable-ext my_strategy`.
+
+Extensions can also be duck-typed (any class with a `find_impacted_tests` method — no inheritance required), set a `priority` to control ordering, override the `enrich_dep_tree` / `setup` / `teardown` lifecycle hooks to inject synthetic edges or do one-time indexing, and be supplied programmatically through the `get_impacted_tests()` API.
+
+**→ See the [Extensions guide](https://promptromp.github.io/pytest-impacted/extensions/) for the full reference and worked examples.**
 
 ---
 
@@ -265,6 +242,16 @@ pip install pytest-impacted[fast]
 ```
 
 This installs `pytest-impacted-rs`, a pre-built Rust extension using [ruff's parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing. The extension is automatically detected at runtime — no configuration needed. When unavailable, the pure-Python (astroid) implementation is used.
+
+---
+
+## Alternatives
+
+| Project | Notes |
+|---------|-------|
+| [pytest-testmon](https://testmon.org/) | Most popular option. Uses coverage-based granular change tracking. More precise but heavier; may conflict with other plugins. |
+| [pytest-picked](https://github.com/anapaulagomes/pytest-picked) | Runs tests from directly modified files only — no transitive dependency analysis. |
+| [pytest-affected](https://pypi.org/project/pytest-affected/0.1.6/) | Appears unmaintained, no source repository. |
 
 ---
 

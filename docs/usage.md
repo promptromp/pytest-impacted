@@ -51,7 +51,7 @@ The tests directory does **not** need to contain `__init__.py` — the plugin us
 
 ## Monorepo / src-Layout Support
 
-The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.  
+The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.
 **Note:** Impact analysis only considers changed files within the current working-directory subtree; changes in sibling directories are ignored.
 
 ### src-Layout Projects
@@ -134,11 +134,13 @@ pytest --impacted --impacted-module=my_package --no-impacted-dep-files
 Combines multiple strategies, deduplicating and sorting results. The default composition is:
 
 ```python
-CompositeImpactStrategy([
-    ASTImpactStrategy(),
-    PytestImpactStrategy(),
-    DependencyFileImpactStrategy(),
-])
+CompositeImpactStrategy(
+    [
+        ASTImpactStrategy(),
+        PytestImpactStrategy(),
+        DependencyFileImpactStrategy(),
+    ]
+)
 ```
 
 ### Custom strategies and packaged extensions
@@ -158,6 +160,27 @@ impacted-tests --module=my_package --git-mode=branch --base-branch=main > impact
 # Stage 2: run only those tests
 pytest $(cat impacted_tests.txt)
 ```
+
+If your tests live outside the package, pass `--tests-dir` here too — the CLI needs it
+for the same reason the pytest flag does, otherwise the dependency graph will not
+contain your test modules:
+
+```bash
+impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-branch=main
+```
+
+### `impacted-tests` options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--module` | *(required)* | Namespace (top-level) module for the package under test |
+| `--git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
+| `--base-branch` | `main` | Base branch/ref for branch-mode comparison |
+| `--root-dir` | `.` | Root directory of the project repository |
+| `--tests-dir` | `None` | Directory containing test files outside the namespace module |
+| `--verbose` | `false` | Verbose output (written to stderr, so it will not pollute the piped test list) |
+| `--no-dep-files` | `false` | Disable dependency file change detection |
+| `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
 ## Configuration via `pyproject.toml`
 
@@ -186,6 +209,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-module=nonexistent` | Clear error with instructions to check the package name and working directory |
 | `--impacted-tests-dir=bad_path` | Error indicating the directory doesn't exist |
 | `--impacted-base-branch=no_such_branch` | Error listing available git refs |
+| `--impacted-base-branch=--some-option` | Rejected before reaching git — refs may not begin with `-`, since git would parse them as options rather than revisions |
 | No git repository found | Clear error indicating no `.git` found at or above the working directory |
 
 ## All Options
@@ -199,6 +223,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
+| `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension. Installed extensions register their own flags — run `pytest --help` to list them, or see the [Extensions guide](extensions.md#extension-with-configuration) |
 
 ## How It Works (Pipeline)
 

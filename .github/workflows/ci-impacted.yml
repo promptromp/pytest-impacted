@@ -14,21 +14,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.1.0
+      uses: astral-sh/setup-uv@v9.0.0
       with:
         python-version: "3.13"
         version: "latest"
         enable-cache: true
     - name: Install the project
       run: uv sync --all-extras --dev
-    - name: Run ruff lint and formatting checks
-      run: |
-        uv run ruff check
-        uv run ruff format --check
-    - name: Run mypy
-      run: uv run mypy pytest_impacted
+    - name: Cache pre-commit hook environments
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+    # Same single source of truth as ci.yml — see the comment there.
+    - name: Run pre-commit hooks
+      run: uv run pre-commit run --all-files --show-diff-on-failure
+      env:
+        SKIP: pytest
 
   test:
     runs-on: ubuntu-latest
@@ -40,11 +44,11 @@ jobs:
 
     name: test (${{ matrix.python-version }}, ${{ matrix.backend }})
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
     - name: Install uv and set the python version
-      uses: astral-sh/setup-uv@v8.1.0
+      uses: astral-sh/setup-uv@v9.0.0
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"

@@ -4,7 +4,6 @@ use std::fs;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
-use ruff_python_parser;
 
 /// Resolve a relative import to its absolute module path.
 ///
@@ -167,11 +166,7 @@ fn collect_imports_from_stmts(
 }
 
 /// Core import extraction logic used by both the PyO3 function and the parallel batch function.
-fn parse_file_imports_core(
-    source: &str,
-    module_name: &str,
-    is_package: bool,
-) -> Vec<String> {
+fn parse_file_imports_core(source: &str, module_name: &str, is_package: bool) -> Vec<String> {
     if source.trim().is_empty() {
         return Vec::new();
     }

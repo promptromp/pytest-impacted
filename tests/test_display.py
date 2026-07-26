@@ -1,7 +1,7 @@
 """Unit tests for the display module."""
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from pytest_impacted import display
 
@@ -37,15 +37,23 @@ def test_warn():
     assert kwargs.get("bold") is True
 
 
-def test_notify_without_session():
+def test_notify_without_session(caplog):
     """Test notify function when session is None."""
-    with patch.object(logging, "info") as mock_info:
+    with caplog.at_level(logging.INFO, logger=display.logger.name):
         display.notify("Hello, world!", None)
-        mock_info.assert_called_once_with("\n%s\n", "Hello, world!")
+
+    record = caplog.records[-1]
+    assert record.name == "pytest_impacted.display"
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == "\nHello, world!\n"
 
 
-def test_warn_without_session():
+def test_warn_without_session(caplog):
     """Test warn function when session is None."""
-    with patch.object(logging, "warning") as mock_warning:
+    with caplog.at_level(logging.WARNING, logger=display.logger.name):
         display.warn("Danger!", None)
-        mock_warning.assert_called_once_with("\nWARNING: %s\n", "Danger!")
+
+    record = caplog.records[-1]
+    assert record.name == "pytest_impacted.display"
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "\nWARNING: Danger!\n"
