@@ -54,7 +54,7 @@ For **37-65x faster** import parsing on large codebases, install with the option
 pip install pytest-impacted[fast]
 ```
 
-Requires **Python 3.11+**.
+Requires **Python 3.11+** and a **git 2.24+** CLI on `PATH`.
 
 ---
 

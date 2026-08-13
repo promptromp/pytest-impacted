@@ -33,9 +33,11 @@ classifiers = [
 dependencies = [
     "astroid>=4.1.2",
     "click>=8.2.0",
-    # >=3.1.52 excludes the command-injection / env-exfiltration advisories
-    # affecting GitPython <= 3.1.51 (GHSA CVE-2026-42215 and follow-ups).
-    "gitpython>=3.1.52",
+    # >=3.1.58 excludes the option-injection / arbitrary-file advisories affecting
+    # GitPython <= 3.1.57: GHSA-hmq2-w58f-27jc, GHSA-jm78-9fvv-mhgr,
+    # GHSA-wvpp-8hx9-p66j, GHSA-hh9p-6wh2-4mfc, GHSA-9rj7-rf2p-w77r,
+    # GHSA-4gmw-gg2m-w46p (and the earlier <= 3.1.51 injection advisories).
+    "gitpython>=3.1.58",
     "networkx>=3.4.2",
     "pytest>=8.0.0",
     "rich>=14.0.0",

@@ -1,5 +1,11 @@
 # Usage Guide
 
+## Requirements
+
+Python 3.11+, and a **git 2.24+** CLI available on `PATH`. Revisions are passed to git
+after `--end-of-options` (added in git 2.24) so that a ref can never be parsed as a
+command-line option.
+
 ## Basic Usage
 
 Activate the plugin by passing the `--impacted` flag along with `--impacted-module` to pytest:
