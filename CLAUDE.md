@@ -49,6 +49,12 @@ files, needs no special-casing. Keep it that way.
 keyword-only `dep_tree`. Caches: `cached_build_dep_tree` (maxsize=8) and
 `discover_submodules`; `clear_dep_tree_cache()` clears both.
 
+**Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref
+straight to `repo.git.<cmd>(...)`. It validates each ref with `validate_rev` (rejecting
+option-like values with a clear error) *and* prefixes `--end-of-options` so git cannot parse
+an operand as an option even if the string check is ever bypassed. This is why the project
+requires git >= 2.24, and why tests assert on the `--end-of-options` token in the argv.
+
 **Logging: every module that logs declares `logger = logging.getLogger(__name__)`.**
 Never call `logging.info(...)` and friends — those hit the root logger and are
 flagged by LOG015.

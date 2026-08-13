@@ -12,7 +12,7 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.git import GIT_AVAILABLE, GitMode, InvalidGitRefError, find_repo, validate_rev
+from pytest_impacted.git import GIT_AVAILABLE, GitMode, InvalidGitRefError, find_repo, rev_args
 
 
 def pytest_addoption(parser: Parser):
@@ -319,9 +319,9 @@ def validate_base_branch(base_branch: str, root_dir: str) -> None:
     from git import GitCommandError, InvalidGitRepositoryError  # noqa: PLC0415
 
     try:
-        validate_rev(base_branch)
+        args = rev_args(base_branch)
         repo = find_repo(root_dir)
-        repo.git.rev_parse("--verify", base_branch)
+        repo.git.rev_parse("--verify", *args)
     except InvalidGitRefError as err:
         raise UsageError(
             f"Invalid base branch: {err} Please check the value passed to --impacted-base-branch."

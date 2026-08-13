@@ -37,6 +37,29 @@ def validate_rev(rev: str) -> str:
     return rev
 
 
+#: Tells git that every following token is an operand, never an option.
+#: Supported by git >= 2.24.
+END_OF_OPTIONS = "--end-of-options"
+
+
+def rev_args(*revs: object) -> list[str]:
+    """Build the positional revision arguments for a ``git`` invocation.
+
+    Every revision handed to the git CLI must go through here, so that the
+    option-injection guard is applied uniformly rather than remembered at each
+    call site.  Revisions are stringified (callers may pass GitPython ``Commit``
+    or ``Reference`` objects), validated by :func:`validate_rev`, and prefixed
+    with :data:`END_OF_OPTIONS`.
+
+    The two guards are deliberately redundant: ``validate_rev`` rejects an
+    option-like value outright so the user gets a clear error instead of a
+    confusing git failure, while ``--end-of-options`` makes the guarantee
+    structural — git will not parse these tokens as options even if a value
+    ever slips past the string check.
+    """
+    return [END_OF_OPTIONS, *(validate_rev(str(rev)) for rev in revs)]
+
+
 class GitMode(StrEnum):
     """Git modes for the plugin."""
 
@@ -308,7 +331,7 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | 
         # Detached HEAD state (common in CI) — fall back to HEAD commit
         current_ref = repo.head.commit
 
-    diffs = repo.git.diff(validate_rev(base_branch), current_ref, name_status=True)
+    diffs = repo.git.diff(*rev_args(base_branch, current_ref), name_status=True)
     change_set = ChangeSet.from_git_diff_name_status_output(diffs)
 
     impacted_files = []

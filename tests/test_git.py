@@ -607,7 +607,7 @@ def test_impacted_files_for_branch_mode_detached_head(mock_repo):
 
     assert result == ["file1.py"]
     # Verify git.diff was called with the commit hash fallback
-    repo.git.diff.assert_called_once_with("main", "abc123", name_status=True)
+    repo.git.diff.assert_called_once_with("--end-of-options", "main", "abc123", name_status=True)
 
 
 # --- Tests for validate_rev (git option-injection guard) ---
@@ -633,6 +633,42 @@ def test_impacted_files_for_branch_mode_rejects_option_like_base_branch(mock_rep
 
     with pytest.raises(git.InvalidGitRefError):
         git.impacted_files_for_branch_mode(repo, "--output=/tmp/pwned")
+
+    repo.git.diff.assert_not_called()
+
+
+# --- Tests for rev_args (the shared revision-argument convention) ---
+
+
+def test_rev_args_prefixes_end_of_options():
+    """Revisions are passed as operands, so git cannot parse them as options."""
+    assert git.rev_args("main", "HEAD") == ["--end-of-options", "main", "HEAD"]
+
+
+def test_rev_args_stringifies_non_str_revisions():
+    """Callers may pass GitPython Commit/Reference objects rather than plain strings."""
+
+    class Commit:
+        def __str__(self):
+            return "abc123"
+
+    assert git.rev_args(Commit()) == ["--end-of-options", "abc123"]
+
+
+@pytest.mark.parametrize("rev", ["--upload-pack=touch /tmp/x", "-o"])
+def test_rev_args_rejects_option_like_revisions(rev):
+    """validate_rev is applied to every revision, not just the first."""
+    with pytest.raises(git.InvalidGitRefError):
+        git.rev_args("main", rev)
+
+
+def test_rev_args_validates_every_revision_including_the_current_ref():
+    """The second operand is guarded too — the guard is uniform, not per-call-site."""
+    repo = DummyRepo(diff_branch_result="M\tfile1.py\n")
+    repo.head.reference = "--output=/tmp/pwned"
+
+    with pytest.raises(git.InvalidGitRefError):
+        git.impacted_files_for_branch_mode(repo, "main")
 
     repo.git.diff.assert_not_called()
 
