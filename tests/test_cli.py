@@ -92,6 +92,43 @@ class TestImpactedTestsCLI:
             assert "tests/test_example.py" in result.output
             assert "tests/test_other.py" in result.output
 
+    @patch("pytest_impacted.cli.build_strategy_with_extensions")
+    @patch("pytest_impacted.cli.get_impacted_tests")
+    @patch("pytest_impacted.cli.configure_logging")
+    def test_cli_invalidate_options_are_repeatable(
+        self, mock_configure_logging, mock_get_impacted_tests, mock_build_strategy
+    ):
+        """Each --invalidate-all / --invalidate-dir value is forwarded to the strategy builder."""
+        mock_get_impacted_tests.return_value = []
+
+        with self.runner.isolated_filesystem():
+            Path("test_ns").mkdir()
+
+            result = self.runner.invoke(
+                impacted_tests_cli,
+                [
+                    "--module",
+                    "test_ns",
+                    "--invalidate-all",
+                    "*.json",
+                    "--invalidate-all",
+                    "config/*.yaml",
+                    "--invalidate-dir",
+                    "*.sql",
+                ],
+            )
+
+            assert result.exit_code == 0, result.output
+            mock_build_strategy.assert_called_once_with(
+                watch_dep_files=True,
+                invalidate_all_patterns=("*.json", "config/*.yaml"),
+                invalidate_dir_patterns=("*.sql",),
+                disabled=(),
+                ext_config={},
+            )
+            assert "invalidate-all: *.json, config/*.yaml" in result.output
+            assert "invalidate-dir: *.sql" in result.output
+
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_with_tests_dir(self, mock_configure_logging, mock_get_impacted_tests):

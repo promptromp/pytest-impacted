@@ -26,6 +26,7 @@ pytest --impacted --impacted-module=my_package \
 | :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options |
 | :wrench: | **conftest.py aware** | Changes to `conftest.py` automatically impact all tests in scope |
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements.txt`, `pyproject.toml` etc. trigger all tests |
+| :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `fixtures/*.sql`, …) that trigger all tests, or the tests in the same directory |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
 | :rocket: | **Rust-accelerated** | Optional Rust extension for 37-65x faster import parsing on large codebases |
 | :electric_plug: | **Extensible** | Third-party strategies installable as plugins via Python entry points |
@@ -136,7 +137,7 @@ pytest $(cat impacted_tests.txt)
 ```
 
 The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--root-dir`, `--tests-dir`,
-`--verbose`, `--no-dep-files` and `--disable-ext`. If your tests live outside the package,
+`--verbose`, `--no-dep-files`, `--invalidate-all`, `--invalidate-dir` and `--disable-ext`. If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
 ### Configuration via `pyproject.toml`
@@ -151,6 +152,8 @@ impacted_git_mode = "branch"
 impacted_base_branch = "main"
 impacted_tests_dir = "tests"
 # no_impacted_dep_files = true  # uncomment to disable dep file detection
+# impacted_invalidate_all = ["*.json"]      # non-Python files that should trigger every test
+# impacted_invalidate_dir = ["fixtures/*"]  # ... or only the tests in the same directory and below
 ```
 
 CLI flags override these defaults.
@@ -165,6 +168,8 @@ CLI flags override these defaults.
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
+| `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |
+| `--impacted-invalidate-dir` | `[]` | Glob for files that, when changed, mark tests in the **same directory and below** as impacted (repeatable) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
 ---
@@ -174,6 +179,7 @@ CLI flags override these defaults.
 ```
 Git diff → Changed files → Module resolution → AST import parsing → Dependency graph → Impacted tests
                          ↘ Dependency file detection → All tests (if dep files changed)
+                         ↘ Invalidation patterns → All tests / tests in the same directory (if configured)
 ```
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
@@ -181,19 +187,21 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
 5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
-6. **Test filtering** skips tests whose modules are not in the impact set
+6. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all` / `--impacted-invalidate-dir`
+7. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
 
 ### Strategy-Based Architecture
 
-Impact analysis is pluggable via a strategy pattern. The default pipeline combines three strategies:
+Impact analysis is pluggable via a strategy pattern. The default pipeline combines these built-in strategies:
 
 | Strategy | What it does |
 |----------|-------------|
 | **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
 | **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, **all tests in its directory and subdirectories** are marked as impacted |
 | **DependencyFileImpactStrategy** | When dependency files change (`uv.lock`, `requirements.txt`, `pyproject.toml`, etc.), **all tests** are marked as impacted |
+| **InvalidationFileImpactStrategy** | Only active when configured. Files matching `--impacted-invalidate-all` mark **all tests** as impacted; files matching `--impacted-invalidate-dir` mark the tests in the **same directory and below** as impacted |
 
 All strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. Dependency file detection is enabled by default and can be disabled with `--no-impacted-dep-files`.
 

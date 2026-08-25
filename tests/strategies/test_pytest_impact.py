@@ -4,8 +4,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import networkx as nx
+
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
+    find_test_modules_under,
 )
 
 
@@ -74,27 +77,20 @@ class TestPytestImpactStrategy:
         assert "tests.subdir.test_example" in result
         assert "tests.test_other" not in result  # This one is not in a subdirectory
 
-    def test_is_test_affected_by_conftest(self):
-        """Test the conftest impact detection logic."""
+    def test_find_test_modules_under_conftest_dir(self):
+        """The conftest rule uses the shared "same directory and below" helper."""
         # Create test directory structure
         test_dir = self.root_dir / "tests"
         test_dir.mkdir()
         subdir = test_dir / "subdir"
         subdir.mkdir()
-        test_file = subdir / "test_example.py"
-        test_file.touch()
-
-        strategy = PytestImpactStrategy()
-
-        # Test module in subdirectory should be affected
-        result = strategy._is_test_affected_by_conftest("tests.subdir.test_example", test_dir, self.root_dir)
-        assert result is True
-
-        # Test module in sibling directory should not be affected
+        (subdir / "test_example.py").touch()
         other_dir = self.root_dir / "other_tests"
         other_dir.mkdir()
-        other_test_file = other_dir / "test_other.py"
-        other_test_file.touch()
+        (other_dir / "test_other.py").touch()
 
-        result = strategy._is_test_affected_by_conftest("other_tests.test_other", test_dir, self.root_dir)
-        assert result is False
+        dep_tree = nx.DiGraph()
+        dep_tree.add_nodes_from(["tests.subdir.test_example", "other_tests.test_other", "mypackage.core"])
+
+        # Only the module in a subdirectory of the conftest dir is affected
+        assert find_test_modules_under(test_dir, dep_tree, root_dir=self.root_dir) == ["tests.subdir.test_example"]

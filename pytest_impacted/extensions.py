@@ -306,6 +306,8 @@ def load_extensions(
 def build_strategy_with_extensions(
     *,
     watch_dep_files: bool = True,
+    invalidate_all_patterns: Sequence[str] = (),
+    invalidate_dir_patterns: Sequence[str] = (),
     disabled: Sequence[str] = (),
     ext_config: dict[str, Any] | None = None,
 ) -> ImpactStrategy:
@@ -316,6 +318,10 @@ def build_strategy_with_extensions(
 
     Args:
         watch_dep_files: Whether to include DependencyFileImpactStrategy.
+        invalidate_all_patterns: User globs whose matches impact every test
+            (see :class:`~pytest_impacted.strategies.InvalidationFileImpactStrategy`).
+        invalidate_dir_patterns: User globs whose matches impact tests in the
+            changed file's directory and below.
         disabled: Extension names to exclude.
         ext_config: Configuration values for extensions.
 
@@ -324,7 +330,11 @@ def build_strategy_with_extensions(
     """
     from pytest_impacted.strategies import CompositeImpactStrategy, get_default_strategies  # noqa: PLC0415
 
-    builtin_strategies = get_default_strategies(watch_dep_files=watch_dep_files)
+    builtin_strategies = get_default_strategies(
+        watch_dep_files=watch_dep_files,
+        invalidate_all_patterns=invalidate_all_patterns,
+        invalidate_dir_patterns=invalidate_dir_patterns,
+    )
     ext_strategies = load_extensions(disabled=disabled, ext_config=ext_config)
 
     # Sort extensions by priority (built-ins keep their fixed order)

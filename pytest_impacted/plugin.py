@@ -105,6 +105,42 @@ def pytest_addoption(parser: Parser):
         default=False,
     )
 
+    group.addoption(
+        "--impacted-invalidate-all",
+        action="append",
+        default=[],
+        dest="impacted_invalidate_all",
+        metavar="PATTERN",
+        help=(
+            "Glob pattern for files that, when changed, mark ALL tests as impacted "
+            "(e.g. '*.json', 'config/*.yaml'). Repeatable."
+        ),
+    )
+    parser.addini(
+        "impacted_invalidate_all",
+        help="default value for --impacted-invalidate-all (list of glob patterns)",
+        type="args",
+        default=[],
+    )
+
+    group.addoption(
+        "--impacted-invalidate-dir",
+        action="append",
+        default=[],
+        dest="impacted_invalidate_dir",
+        metavar="PATTERN",
+        help=(
+            "Glob pattern for files that, when changed, mark tests in the same directory "
+            "and below as impacted (like conftest.py). Repeatable."
+        ),
+    )
+    parser.addini(
+        "impacted_invalidate_dir",
+        help="default value for --impacted-invalidate-dir (list of glob patterns)",
+        type="args",
+        default=[],
+    )
+
     # Extension management
     group.addoption(
         "--impacted-disable-ext",
@@ -165,6 +201,8 @@ def pytest_report_header(config: Config) -> list[str]:
         f"impacted_base_branch={get_option('impacted_base_branch')}",
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
+        f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
+        f"impacted_invalidate_dir={get_option('impacted_invalidate_dir')}",
         f"backend={backend}",
     ]
     if ext_names:
@@ -191,12 +229,16 @@ def pytest_collection_modifyitems(session, config, items):
     impacted_base_branch = get_option("impacted_base_branch")
     impacted_tests_dir = get_option("impacted_tests_dir")
     no_dep_files = get_option("no_impacted_dep_files")
+    invalidate_all = get_option("impacted_invalidate_all") or []
+    invalidate_dir = get_option("impacted_invalidate_dir") or []
     root_dir = config.rootdir
 
     disabled_ext = get_option("impacted_disable_ext") or []
     ext_config = _collect_ext_config(config)
     strategy = build_strategy_with_extensions(
         watch_dep_files=not no_dep_files,
+        invalidate_all_patterns=invalidate_all,
+        invalidate_dir_patterns=invalidate_dir,
         disabled=disabled_ext,
         ext_config=ext_config,
     )

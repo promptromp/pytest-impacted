@@ -86,8 +86,15 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 `PytestImpactStrategy` (a changed `conftest.py` impacts every test in its directory
 and below — invisible to static import analysis), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`; disable with
-`--no-impacted-dep-files`), and `CompositeImpactStrategy`, which unions results.
-`get_default_strategies()` builds the default composition.
+`--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
+`--impacted-invalidate-all` / `--impacted-invalidate-dir`; only added to the pipeline when
+configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
+which unions results. `get_default_strategies()` builds the default composition.
+
+**All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
+`*` never spans `/`), and the "tests in this directory and below" rule shared by the
+conftest logic and `--impacted-invalidate-dir` lives in `find_test_modules_under`. Do not
+add a second matcher or a second directory walk.
 
 Third-party strategies are discovered via the `pytest_impacted.strategies` entry
 point group and composed in by `extensions.build_strategy_with_extensions()`.

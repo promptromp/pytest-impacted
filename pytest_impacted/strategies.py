@@ -3,6 +3,7 @@
 from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 
 import networkx as nx
 
+from pytest_impacted.display import notify
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
 from pytest_impacted.traversal import discover_submodules
@@ -40,6 +42,19 @@ DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
 )
 
 
+def matches_any_glob(file_path: str, glob_patterns: Iterable[str]) -> bool:
+    """Check if a repo-relative file path matches any glob pattern.
+
+    Matching is right-anchored (:meth:`PurePosixPath.match`): ``*.json``
+    matches a JSON file at any depth, ``config/*.json`` matches JSON files
+    directly under any ``config`` directory, and a bare filename matches
+    that basename anywhere. This is the single matching convention for both
+    built-in and user-supplied file patterns.
+    """
+    path = PurePosixPath(file_path)
+    return any(path.match(glob_pat) for glob_pat in glob_patterns)
+
+
 def matches_dependency_file(
     file_path: str,
     patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
@@ -49,7 +64,7 @@ def matches_dependency_file(
     basename = PurePosixPath(file_path).name
     if basename in patterns:
         return True
-    return any(PurePosixPath(file_path).match(glob_pat) for glob_pat in glob_patterns)
+    return matches_any_glob(file_path, glob_patterns)
 
 
 def has_dependency_file_changes(
@@ -90,6 +105,52 @@ def clear_dep_tree_cache() -> None:
     """
     cached_build_dep_tree.cache_clear()
     discover_submodules.cache_clear()
+
+
+def _resolve_changed_file_dir(changed_file: str, root_dir: Path) -> Path | None:
+    """Return the absolute directory containing *changed_file*, or None if unresolvable."""
+    try:
+        path = normalize_path(changed_file)
+    except ValueError:
+        return None
+    if not path.is_absolute():
+        path = normalize_path(root_dir) / path
+    return path.parent
+
+
+def _test_module_path(test_module: str, root_dir: Path) -> Path | None:
+    """Locate the source file for a dotted test module name under *root_dir*."""
+    module_path = "/".join(test_module.split("."))
+    root_path = normalize_path(root_dir)
+    for candidate in (root_path / (module_path + ".py"), root_path / module_path / "__init__.py"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _is_under(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: Path) -> list[str]:
+    """Return the sorted test modules whose files live in *directory* or any subdirectory.
+
+    This is the "same directory and below" impact rule shared by
+    :class:`PytestImpactStrategy` (for ``conftest.py``) and
+    :class:`InvalidationFileImpactStrategy` (for user-supplied patterns).
+    """
+    matches = []
+    for test_module in dep_tree.nodes:
+        if not is_test_module(test_module):
+            continue
+        path = _test_module_path(test_module, root_dir)
+        if path is not None and _is_under(path, directory):
+            matches.append(test_module)
+    return sorted(matches)
 
 
 class ImpactStrategy(ABC):
@@ -284,60 +345,15 @@ class PytestImpactStrategy(ImpactStrategy):
         if not root_dir:
             return []
 
-        conftest_files = [f for f in changed_files if f.endswith("conftest.py")]
-        if not conftest_files:
-            return []
-
         impacted_tests: list[str] = []
-
-        for conftest_file in conftest_files:
-            try:
-                conftest_path = normalize_path(conftest_file)
-
-                if not conftest_path.is_absolute():
-                    conftest_path = normalize_path(root_dir) / conftest_path
-
-                conftest_dir = conftest_path.parent
-            except ValueError:
+        for conftest_file in (f for f in changed_files if f.endswith("conftest.py")):
+            conftest_dir = _resolve_changed_file_dir(conftest_file, root_dir)
+            if conftest_dir is None:
                 # Skip files that can't be normalized to valid paths
                 continue
-
-            # Find all test modules in subdirectories that could be affected
-            impacted_tests.extend(
-                test_module
-                for test_module in dep_tree.nodes
-                if is_test_module(test_module)
-                and self._is_test_affected_by_conftest(test_module, conftest_dir, root_dir)
-            )
+            impacted_tests.extend(find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir))
 
         return impacted_tests
-
-    def _is_test_affected_by_conftest(self, test_module: str, conftest_dir: Path, root_dir: Path) -> bool:
-        """Check if a test module is affected by a conftest.py change."""
-        # Convert module name to file path
-        module_parts = test_module.split(".")
-
-        # Try to find the actual file path for this test module
-        module_path = "/".join(module_parts)
-        root_path = normalize_path(root_dir)
-        possible_paths = [
-            root_path / (module_path + ".py"),
-            root_path / module_path / "__init__.py",
-        ]
-
-        # Check if any of the possible paths exist and are affected by conftest
-        for path in possible_paths:
-            if path.exists():
-                try:
-                    # Check if the test file is in the same directory or a subdirectory
-                    # of where the conftest.py was changed
-                    path.resolve().relative_to(conftest_dir.resolve())
-                    return True
-                except ValueError:
-                    # path is not relative to conftest_dir
-                    continue
-
-        return False
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):
@@ -373,8 +389,6 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
 
         dep_files = [f for f in changed_files if matches_dependency_file(f, self.patterns, self.glob_patterns)]
-        from pytest_impacted.display import notify  # noqa: PLC0415
-
         notify(
             f"Dependency file changes detected: {dep_files}. "
             f"Marking all {len(all_test_modules)} test modules as impacted.",
@@ -384,12 +398,108 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         return all_test_modules
 
 
-def get_default_strategies(*, watch_dep_files: bool = True) -> list[ImpactStrategy]:
+class InvalidationFileImpactStrategy(ImpactStrategy):
+    """Strategy driven by user-supplied glob patterns for non-Python files.
+
+    Static import analysis cannot see that a test depends on a JSON fixture,
+    a SQL schema, or a YAML config. This strategy lets users declare those
+    relationships with two kinds of pattern (see :func:`matches_any_glob`
+    for the matching rules):
+
+    * ``all_patterns`` — a matching change marks **every** test module as
+      impacted, like a change to ``pyproject.toml`` does.
+    * ``dir_patterns`` — a matching change marks the test modules in the
+      changed file's directory **and below** as impacted, like a change to
+      ``conftest.py`` does.
+
+    Configured via ``--impacted-invalidate-all`` / ``--impacted-invalidate-dir``
+    (or the ``impacted_invalidate_all`` / ``impacted_invalidate_dir`` ini
+    settings) in the pytest plugin, and ``--invalidate-all`` /
+    ``--invalidate-dir`` in the ``impacted-tests`` CLI.
+    """
+
+    def __init__(
+        self,
+        *,
+        all_patterns: Sequence[str] = (),
+        dir_patterns: Sequence[str] = (),
+    ):
+        self.all_patterns = tuple(all_patterns)
+        self.dir_patterns = tuple(dir_patterns)
+
+    def find_impacted_tests(
+        self,
+        changed_files: list[str],
+        impacted_modules: list[str],
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session: Any = None,
+        *,
+        dep_tree: nx.DiGraph,
+    ) -> list[str]:
+        """Return the union of the "all" and "directory" invalidation results."""
+        impacted: set[str] = set()
+        impacted.update(self._find_all_invalidated(changed_files, dep_tree, session))
+        impacted.update(self._find_dir_invalidated(changed_files, dep_tree, root_dir, session))
+        return sorted(impacted)
+
+    def _find_all_invalidated(self, changed_files: list[str], dep_tree: nx.DiGraph, session: Any) -> list[str]:
+        hits = [f for f in changed_files if matches_any_glob(f, self.all_patterns)]
+        if not hits:
+            return []
+        all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
+        notify(
+            f"Invalidation file changes detected: {hits} (matched --impacted-invalidate-all). "
+            f"Marking all {len(all_test_modules)} test modules as impacted.",
+            session,
+        )
+        return all_test_modules
+
+    def _find_dir_invalidated(
+        self, changed_files: list[str], dep_tree: nx.DiGraph, root_dir: Path | None, session: Any
+    ) -> list[str]:
+        hits = [f for f in changed_files if matches_any_glob(f, self.dir_patterns)]
+        if not hits:
+            return []
+        if root_dir is None:
+            logger.warning("Cannot apply --impacted-invalidate-dir patterns without a root_dir; ignoring %s.", hits)
+            return []
+
+        impacted: list[str] = []
+        for changed_file in hits:
+            changed_dir = _resolve_changed_file_dir(changed_file, root_dir)
+            if changed_dir is None:
+                continue
+            impacted.extend(find_test_modules_under(changed_dir, dep_tree, root_dir=root_dir))
+        notify(
+            f"Invalidation file changes detected: {hits} (matched --impacted-invalidate-dir). "
+            f"Marking {len(set(impacted))} test modules in the same directories as impacted.",
+            session,
+        )
+        return impacted
+
+
+def get_default_strategies(
+    *,
+    watch_dep_files: bool = True,
+    invalidate_all_patterns: Sequence[str] = (),
+    invalidate_dir_patterns: Sequence[str] = (),
+) -> list[ImpactStrategy]:
     """Return the default (built-in) strategy list for impact analysis.
 
     This centralizes the knowledge of which built-in strategies form the
     default pipeline. Third-party extensions are added separately via
     :func:`~pytest_impacted.extensions.build_strategy_with_extensions`.
+
+    Args:
+        watch_dep_files: Include :class:`DependencyFileImpactStrategy`.
+        invalidate_all_patterns: Globs for :class:`InvalidationFileImpactStrategy`
+            whose matches impact every test.
+        invalidate_dir_patterns: Globs for :class:`InvalidationFileImpactStrategy`
+            whose matches impact tests in the same directory and below. The
+            strategy is only added when at least one pattern of either kind
+            is given.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),
@@ -397,6 +507,13 @@ def get_default_strategies(*, watch_dep_files: bool = True) -> list[ImpactStrate
     ]
     if watch_dep_files:
         strategies.append(DependencyFileImpactStrategy())
+    if invalidate_all_patterns or invalidate_dir_patterns:
+        strategies.append(
+            InvalidationFileImpactStrategy(
+                all_patterns=invalidate_all_patterns,
+                dir_patterns=invalidate_dir_patterns,
+            )
+        )
     return strategies
 
 
