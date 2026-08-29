@@ -26,7 +26,7 @@ pytest --impacted --impacted-module=my_package \
 | :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options |
 | :wrench: | **conftest.py aware** | Changes to `conftest.py` automatically impact all tests in scope |
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements.txt`, `pyproject.toml` etc. trigger all tests |
-| :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `fixtures/*.sql`, …) that trigger all tests, or the tests in the same directory |
+| :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `config/*.yaml`, …) that trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
 | :rocket: | **Rust-accelerated** | Optional Rust extension for 37-65x faster import parsing on large codebases |
 | :electric_plug: | **Extensible** | Third-party strategies installable as plugins via Python entry points |
@@ -177,7 +177,7 @@ CLI flags override these defaults.
 ```
 Git diff → Changed files → Module resolution → AST import parsing → Dependency graph → Impacted tests
                          ↘ Dependency file detection → All tests (if dep files changed)
-                         ↘ Invalidation patterns → All tests / tests in the same directory (if configured)
+                         ↘ Invalidation patterns → All tests (if your globs match)
 ```
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
