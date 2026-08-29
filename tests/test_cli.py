@@ -95,10 +95,10 @@ class TestImpactedTestsCLI:
     @patch("pytest_impacted.cli.build_strategy_with_extensions")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
-    def test_cli_invalidate_options_are_repeatable(
+    def test_cli_invalidate_all_is_repeatable(
         self, mock_configure_logging, mock_get_impacted_tests, mock_build_strategy
     ):
-        """Each --invalidate-all / --invalidate-dir value is forwarded to the strategy builder."""
+        """Each --invalidate-all value is forwarded to the strategy builder."""
         mock_get_impacted_tests.return_value = []
 
         with self.runner.isolated_filesystem():
@@ -113,8 +113,6 @@ class TestImpactedTestsCLI:
                     "*.json",
                     "--invalidate-all",
                     "config/*.yaml",
-                    "--invalidate-dir",
-                    "*.sql",
                 ],
             )
 
@@ -122,12 +120,10 @@ class TestImpactedTestsCLI:
             mock_build_strategy.assert_called_once_with(
                 watch_dep_files=True,
                 invalidate_all_patterns=("*.json", "config/*.yaml"),
-                invalidate_dir_patterns=("*.sql",),
                 disabled=(),
                 ext_config={},
             )
             assert "invalidate-all: *.json, config/*.yaml" in result.output
-            assert "invalidate-dir: *.sql" in result.output
 
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")

@@ -1,7 +1,6 @@
 """Unit-tests for the user-configurable file invalidation strategy."""
 
 import logging
-from pathlib import Path
 
 import networkx as nx
 import pytest
@@ -9,7 +8,6 @@ import pytest
 from pytest_impacted.strategies import (
     DependencyFileImpactStrategy,
     InvalidationFileImpactStrategy,
-    find_test_modules_under,
     get_default_strategies,
     matches_any_glob,
 )
@@ -30,6 +28,10 @@ class TestMatchesAnyGlob:
             pytest.param("schema.graphql", "schema.graphql", True, id="bare_filename"),
             pytest.param("src/schema.graphql", "schema.graphql", True, id="bare_filename_matches_basename"),
             pytest.param("settings.json5", "*.json", False, id="no_partial_match"),
+            # PurePath.match treats "**" as a plain "*" — it is NOT recursive. Documented
+            # in docs/usage.md; pinned here so a matcher change cannot silently break it.
+            pytest.param("config/a/x.yaml", "config/**/*.yaml", True, id="double_star_is_one_segment"),
+            pytest.param("config/a/b/x.yaml", "config/**/*.yaml", False, id="double_star_does_not_recurse"),
         ],
     )
     def test_patterns(self, file_path, glob_pattern, expected):
@@ -40,44 +42,20 @@ class TestMatchesAnyGlob:
 
 
 @pytest.fixture
-def project(tmp_path: Path) -> Path:
-    """A tiny on-disk layout so directory-scoped matching can resolve test module paths."""
-    for rel in ("tests/unit/test_a.py", "tests/unit/deep/test_b.py", "tests/integration/test_c.py"):
-        path = tmp_path / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("")
-    (tmp_path / "tests" / "unit" / "fixtures").mkdir()
-    return tmp_path
-
-
-@pytest.fixture
 def dep_tree() -> nx.DiGraph:
     graph = nx.DiGraph()
     graph.add_nodes_from(["pkg.core", "tests.unit.test_a", "tests.unit.deep.test_b", "tests.integration.test_c"])
     return graph
 
 
-class TestFindTestModulesUnder:
-    def test_returns_tests_in_dir_and_below(self, project, dep_tree):
-        result = find_test_modules_under(project / "tests" / "unit", dep_tree, root_dir=project)
-        assert result == ["tests.unit.deep.test_b", "tests.unit.test_a"]
-
-    def test_root_returns_everything(self, project, dep_tree):
-        result = find_test_modules_under(project, dep_tree, root_dir=project)
-        assert result == ["tests.integration.test_c", "tests.unit.deep.test_b", "tests.unit.test_a"]
-
-    def test_unrelated_dir_returns_nothing(self, project, dep_tree):
-        assert find_test_modules_under(project / "docs", dep_tree, root_dir=project) == []
-
-
 class TestInvalidationFileImpactStrategy:
-    def _run(self, strategy, changed_files, dep_tree, root_dir=None):
+    def _run(self, strategy, changed_files, dep_tree):
         return strategy.find_impacted_tests(
             changed_files=changed_files,
             impacted_modules=[],
             ns_module="pkg",
             tests_package="tests",
-            root_dir=root_dir,
+            root_dir=None,
             dep_tree=dep_tree,
         )
 
@@ -85,46 +63,28 @@ class TestInvalidationFileImpactStrategy:
         strategy = InvalidationFileImpactStrategy()
         assert self._run(strategy, ["config/settings.json", "uv.lock"], dep_tree) == []
 
-    def test_all_pattern_returns_every_test_module(self, dep_tree):
-        strategy = InvalidationFileImpactStrategy(all_patterns=("*.json",))
+    def test_match_returns_every_test_module(self, dep_tree):
+        strategy = InvalidationFileImpactStrategy(("*.json",))
         result = self._run(strategy, ["config/settings.json"], dep_tree)
         assert result == ["tests.integration.test_c", "tests.unit.deep.test_b", "tests.unit.test_a"]
 
-    def test_all_pattern_no_match_returns_nothing(self, dep_tree):
-        strategy = InvalidationFileImpactStrategy(all_patterns=("*.json",))
+    def test_no_match_returns_nothing(self, dep_tree):
+        strategy = InvalidationFileImpactStrategy(("*.json",))
         assert self._run(strategy, ["config/settings.yaml", "pkg/core.py"], dep_tree) == []
 
-    def test_dir_pattern_returns_tests_under_changed_file_directory(self, project, dep_tree):
-        strategy = InvalidationFileImpactStrategy(dir_patterns=("*.json",))
-        result = self._run(strategy, ["tests/unit/fixtures/data.json"], dep_tree, root_dir=project)
-        # fixtures/ itself has no tests; nothing above it is included.
-        assert result == []
+    def test_any_of_several_patterns_may_match(self, dep_tree):
+        strategy = InvalidationFileImpactStrategy(("*.lock", "config/*.yaml"))
+        every_test = ["tests.integration.test_c", "tests.unit.deep.test_b", "tests.unit.test_a"]
+        assert self._run(strategy, ["config/settings.yaml"], dep_tree) == every_test
+        assert self._run(strategy, ["custom.lock"], dep_tree) == every_test
 
-        result = self._run(strategy, ["tests/unit/data.json"], dep_tree, root_dir=project)
-        assert result == ["tests.unit.deep.test_b", "tests.unit.test_a"]
-
-    def test_dir_pattern_accepts_absolute_changed_paths(self, project, dep_tree):
-        strategy = InvalidationFileImpactStrategy(dir_patterns=("*.json",))
-        result = self._run(strategy, [str(project / "tests" / "integration" / "x.json")], dep_tree, root_dir=project)
-        assert result == ["tests.integration.test_c"]
-
-    def test_dir_pattern_without_root_dir_returns_nothing(self, dep_tree):
-        strategy = InvalidationFileImpactStrategy(dir_patterns=("*.json",))
-        assert self._run(strategy, ["tests/unit/data.json"], dep_tree, root_dir=None) == []
-
-    def test_all_and_dir_results_are_unioned_and_sorted(self, project, dep_tree):
-        strategy = InvalidationFileImpactStrategy(all_patterns=("*.lock",), dir_patterns=("*.json",))
-        result = self._run(strategy, ["tests/unit/data.json", "custom.lock"], dep_tree, root_dir=project)
-        assert result == ["tests.integration.test_c", "tests.unit.deep.test_b", "tests.unit.test_a"]
-
-    def test_notifies_which_files_triggered(self, project, dep_tree, caplog):
-        strategy = InvalidationFileImpactStrategy(all_patterns=("*.lock",), dir_patterns=("*.json",))
+    def test_notifies_which_files_triggered(self, dep_tree, caplog):
+        strategy = InvalidationFileImpactStrategy(("*.lock",))
         with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
-            self._run(strategy, ["custom.lock", "tests/unit/data.json"], dep_tree, root_dir=project)
+            self._run(strategy, ["custom.lock", "pkg/core.py"], dep_tree)
         assert "custom.lock" in caplog.text
+        assert "pkg/core.py" not in caplog.text
         assert "--impacted-invalidate-all" in caplog.text
-        assert "tests/unit/data.json" in caplog.text
-        assert "--impacted-invalidate-dir" in caplog.text
 
 
 class TestGetDefaultStrategies:
@@ -137,13 +97,7 @@ class TestGetDefaultStrategies:
         assert isinstance(strategies[-2], DependencyFileImpactStrategy)
         strategy = strategies[-1]
         assert isinstance(strategy, InvalidationFileImpactStrategy)
-        assert strategy.all_patterns == ("*.json",)
-        assert strategy.dir_patterns == ()
-
-    def test_dir_patterns_alone_are_enough(self):
-        strategy = get_default_strategies(invalidate_dir_patterns=("*.yaml",))[-1]
-        assert isinstance(strategy, InvalidationFileImpactStrategy)
-        assert strategy.dir_patterns == ("*.yaml",)
+        assert strategy.patterns == ("*.json",)
 
     def test_independent_of_dep_file_switch(self):
         strategies = get_default_strategies(watch_dep_files=False, invalidate_all_patterns=["*.json"])

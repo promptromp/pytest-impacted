@@ -478,13 +478,10 @@ class TestBuildStrategyWithExtensions:
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_invalidation_patterns_reach_builtin_strategy(self, mock_entry_points):
         mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
-        strategy = build_strategy_with_extensions(
-            invalidate_all_patterns=("*.json",), invalidate_dir_patterns=("*.yaml",)
-        )
+        strategy = build_strategy_with_extensions(invalidate_all_patterns=("*.json",))
         # Built-ins (now 4) still precede extensions.
         assert isinstance(strategy.strategies[3], InvalidationFileImpactStrategy)
-        assert strategy.strategies[3].all_patterns == ("*.json",)
-        assert strategy.strategies[3].dir_patterns == ("*.yaml",)
+        assert strategy.strategies[3].patterns == ("*.json",)
         assert isinstance(strategy.strategies[4], SimpleStrategy)
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")

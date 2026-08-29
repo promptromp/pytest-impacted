@@ -31,8 +31,7 @@ def git_project(pytester):
     pytester.mkdir("config")
     data_files = {
         "config/settings.json": "{}",
-        "tests/unit/fixture.json": "{}",
-        "tests/integration/schema.sql": "select 1;",
+        "config/app.yaml": "key: value\n",
     }
     for rel, content in data_files.items():
         (pytester.path / rel).write_text(content)
@@ -88,26 +87,11 @@ def test_invalidate_all_dir_scoped_glob_does_not_match_elsewhere(git_project):
     run(git_project, "--impacted-invalidate-all=other/*.json").assert_outcomes(skipped=2)
 
 
-def test_invalidate_dir_runs_only_tests_under_changed_file(git_project):
-    git_project.touch("tests/unit/fixture.json")
-    result = run(git_project, "--impacted-invalidate-dir=*.json", "-v")
-    result.assert_outcomes(passed=1, skipped=1)
-    result.stdout.fnmatch_lines(["*tests/unit/test_core.py::test_add PASSED*"])
-
-
-def test_invalidate_dir_outside_test_tree_runs_nothing(git_project):
-    git_project.touch("config/settings.json")
-    run(git_project, "--impacted-invalidate-dir=*.json").assert_outcomes(skipped=2)
-
-
 def test_patterns_from_ini(git_project):
-    git_project.makeini(INI + "impacted_invalidate_all = *.json config/*.yaml\nimpacted_invalidate_dir = *.sql\n")
-    git_project.touch("tests/integration/schema.sql")
-    result = run(git_project, "-v")
-    result.assert_outcomes(passed=1, skipped=1)
-    result.stdout.fnmatch_lines(["*tests/integration/test_api.py::test_api PASSED*"])
-
-    git_project.touch("config/settings.json")
+    """Patterns configured in the ini file are applied, and every one of them counts."""
+    git_project.makeini(INI + "impacted_invalidate_all = *.json config/*.yaml\n")
+    # Matched by the second pattern only — the first (*.json) does not match a .yaml file.
+    git_project.touch("config/app.yaml")
     run(git_project).assert_outcomes(passed=2)
 
 
@@ -119,4 +103,4 @@ def test_no_dep_files_flag_does_not_disable_invalidation(git_project):
 
 def test_help_lists_options(pytester):
     result = pytester.runpytest("--help")
-    result.stdout.fnmatch_lines(["*--impacted-invalidate-all=PATTERN*", "*--impacted-invalidate-dir=PATTERN*"])
+    result.stdout.fnmatch_lines(["*--impacted-invalidate-all=PATTERN*"])

@@ -34,13 +34,11 @@ def get_impacted_tests(
     strategy: ImpactStrategy | None = None,
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
-    invalidate_dir_patterns: Sequence[str] = (),
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
-    ``watch_dep_files``, ``invalidate_all_patterns`` and ``invalidate_dir_patterns``
-    configure the default pipeline and are ignored when an explicit ``strategy``
-    is supplied.
+    ``watch_dep_files`` and ``invalidate_all_patterns`` configure the default
+    pipeline and are ignored when an explicit ``strategy`` is supplied.
     """
     git_mode = impacted_git_mode
     base_branch = impacted_base_branch
@@ -51,7 +49,6 @@ def get_impacted_tests(
             get_default_strategies(
                 watch_dep_files=watch_dep_files,
                 invalidate_all_patterns=invalidate_all_patterns,
-                invalidate_dir_patterns=invalidate_dir_patterns,
             )
         )
 

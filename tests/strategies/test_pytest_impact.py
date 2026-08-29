@@ -94,3 +94,11 @@ class TestPytestImpactStrategy:
 
         # Only the module in a subdirectory of the conftest dir is affected
         assert find_test_modules_under(test_dir, dep_tree, root_dir=self.root_dir) == ["tests.subdir.test_example"]
+
+        # A conftest at the repo root reaches every test module...
+        assert find_test_modules_under(self.root_dir, dep_tree, root_dir=self.root_dir) == [
+            "other_tests.test_other",
+            "tests.subdir.test_example",
+        ]
+        # ...and a directory holding no tests reaches none.
+        assert find_test_modules_under(self.root_dir / "docs", dep_tree, root_dir=self.root_dir) == []

@@ -139,9 +139,8 @@ def _is_under(path: Path, directory: Path) -> bool:
 def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: Path) -> list[str]:
     """Return the sorted test modules whose files live in *directory* or any subdirectory.
 
-    This is the "same directory and below" impact rule shared by
-    :class:`PytestImpactStrategy` (for ``conftest.py``) and
-    :class:`InvalidationFileImpactStrategy` (for user-supplied patterns).
+    This is the "same directory and below" impact rule used by
+    :class:`PytestImpactStrategy` for ``conftest.py`` changes.
     """
     matches = []
     for test_module in dep_tree.nodes:
@@ -403,29 +402,20 @@ class InvalidationFileImpactStrategy(ImpactStrategy):
 
     Static import analysis cannot see that a test depends on a JSON fixture,
     a SQL schema, or a YAML config. This strategy lets users declare those
-    relationships with two kinds of pattern (see :func:`matches_any_glob`
-    for the matching rules):
+    relationships themselves: a change to any file matching one of
+    *patterns* marks **every** test module as impacted, exactly as a change
+    to ``pyproject.toml`` does. See :func:`matches_any_glob` for the
+    matching rules.
 
-    * ``all_patterns`` — a matching change marks **every** test module as
-      impacted, like a change to ``pyproject.toml`` does.
-    * ``dir_patterns`` — a matching change marks the test modules in the
-      changed file's directory **and below** as impacted, like a change to
-      ``conftest.py`` does.
-
-    Configured via ``--impacted-invalidate-all`` / ``--impacted-invalidate-dir``
-    (or the ``impacted_invalidate_all`` / ``impacted_invalidate_dir`` ini
-    settings) in the pytest plugin, and ``--invalidate-all`` /
-    ``--invalidate-dir`` in the ``impacted-tests`` CLI.
+    It is the user-extensible counterpart to
+    :class:`DependencyFileImpactStrategy`, configured via
+    ``--impacted-invalidate-all`` (or the ``impacted_invalidate_all`` ini
+    setting) in the pytest plugin, and ``--invalidate-all`` in the
+    ``impacted-tests`` CLI.
     """
 
-    def __init__(
-        self,
-        *,
-        all_patterns: Sequence[str] = (),
-        dir_patterns: Sequence[str] = (),
-    ):
-        self.all_patterns = tuple(all_patterns)
-        self.dir_patterns = tuple(dir_patterns)
+    def __init__(self, patterns: Sequence[str] = ()):
+        self.patterns = tuple(patterns)
 
     def find_impacted_tests(
         self,
@@ -438,16 +428,11 @@ class InvalidationFileImpactStrategy(ImpactStrategy):
         *,
         dep_tree: nx.DiGraph,
     ) -> list[str]:
-        """Return the union of the "all" and "directory" invalidation results."""
-        impacted: set[str] = set()
-        impacted.update(self._find_all_invalidated(changed_files, dep_tree, session))
-        impacted.update(self._find_dir_invalidated(changed_files, dep_tree, root_dir, session))
-        return sorted(impacted)
-
-    def _find_all_invalidated(self, changed_files: list[str], dep_tree: nx.DiGraph, session: Any) -> list[str]:
-        hits = [f for f in changed_files if matches_any_glob(f, self.all_patterns)]
+        """Return all test modules if any changed file matches a configured pattern."""
+        hits = [f for f in changed_files if matches_any_glob(f, self.patterns)]
         if not hits:
             return []
+
         all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
         notify(
             f"Invalidation file changes detected: {hits} (matched --impacted-invalidate-all). "
@@ -456,35 +441,11 @@ class InvalidationFileImpactStrategy(ImpactStrategy):
         )
         return all_test_modules
 
-    def _find_dir_invalidated(
-        self, changed_files: list[str], dep_tree: nx.DiGraph, root_dir: Path | None, session: Any
-    ) -> list[str]:
-        hits = [f for f in changed_files if matches_any_glob(f, self.dir_patterns)]
-        if not hits:
-            return []
-        if root_dir is None:
-            logger.warning("Cannot apply --impacted-invalidate-dir patterns without a root_dir; ignoring %s.", hits)
-            return []
-
-        impacted: list[str] = []
-        for changed_file in hits:
-            changed_dir = _resolve_changed_file_dir(changed_file, root_dir)
-            if changed_dir is None:
-                continue
-            impacted.extend(find_test_modules_under(changed_dir, dep_tree, root_dir=root_dir))
-        notify(
-            f"Invalidation file changes detected: {hits} (matched --impacted-invalidate-dir). "
-            f"Marking {len(set(impacted))} test modules in the same directories as impacted.",
-            session,
-        )
-        return impacted
-
 
 def get_default_strategies(
     *,
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
-    invalidate_dir_patterns: Sequence[str] = (),
 ) -> list[ImpactStrategy]:
     """Return the default (built-in) strategy list for impact analysis.
 
@@ -494,12 +455,9 @@ def get_default_strategies(
 
     Args:
         watch_dep_files: Include :class:`DependencyFileImpactStrategy`.
-        invalidate_all_patterns: Globs for :class:`InvalidationFileImpactStrategy`
-            whose matches impact every test.
-        invalidate_dir_patterns: Globs for :class:`InvalidationFileImpactStrategy`
-            whose matches impact tests in the same directory and below. The
-            strategy is only added when at least one pattern of either kind
-            is given.
+        invalidate_all_patterns: Globs for :class:`InvalidationFileImpactStrategy`,
+            whose matches impact every test. The strategy is only added to the
+            pipeline when at least one pattern is given.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),
@@ -507,13 +465,8 @@ def get_default_strategies(
     ]
     if watch_dep_files:
         strategies.append(DependencyFileImpactStrategy())
-    if invalidate_all_patterns or invalidate_dir_patterns:
-        strategies.append(
-            InvalidationFileImpactStrategy(
-                all_patterns=invalidate_all_patterns,
-                dir_patterns=invalidate_dir_patterns,
-            )
-        )
+    if invalidate_all_patterns:
+        strategies.append(InvalidationFileImpactStrategy(invalidate_all_patterns))
     return strategies
 
 

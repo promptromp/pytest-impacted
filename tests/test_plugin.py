@@ -24,7 +24,6 @@ def cli_options():
         "impacted_tests_dir",
         "no_impacted_dep_files",
         "impacted_invalidate_all",
-        "impacted_invalidate_dir",
     ]
 
 
@@ -75,7 +74,6 @@ def test_pytest_report_header(pytestconfig):
     pytestconfig.option.impacted_base_branch = "main"
     pytestconfig.option.impacted_tests_dir = "tests"
     pytestconfig.option.impacted_invalidate_all = ["*.json"]
-    pytestconfig.option.impacted_invalidate_dir = ["*.yaml"]
 
     header = pytest_report_header(pytestconfig)
     assert len(header) == 1
@@ -85,7 +83,6 @@ def test_pytest_report_header(pytestconfig):
     assert "impacted_base_branch=main" in header[0]
     assert "impacted_tests_dir=tests" in header[0]
     assert "impacted_invalidate_all=['*.json']" in header[0]
-    assert "impacted_invalidate_dir=['*.yaml']" in header[0]
     assert "backend=" in header[0]
 
 

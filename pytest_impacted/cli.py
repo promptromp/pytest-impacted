@@ -68,13 +68,6 @@ def configure_logging(verbose: bool) -> None:
     metavar="PATTERN",
     help="Glob for files that, when changed, mark ALL tests as impacted (repeatable).",
 )
-@click.option(
-    "--invalidate-dir",
-    multiple=True,
-    default=(),
-    metavar="PATTERN",
-    help="Glob for files that, when changed, mark tests in the same directory and below as impacted (repeatable).",
-)
 @click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
 @click.pass_context
 def impacted_tests_cli(
@@ -87,7 +80,6 @@ def impacted_tests_cli(
     verbose,
     no_dep_files,
     invalidate_all,
-    invalidate_dir,
     disable_ext,
     **ext_kwargs,
 ):
@@ -101,8 +93,6 @@ def impacted_tests_cli(
     click.secho(f"  no-dep-files: {no_dep_files}", fg="blue", bold=True, err=True)
     if invalidate_all:
         click.secho("  invalidate-all: {}".format(", ".join(invalidate_all)), fg="blue", bold=True, err=True)
-    if invalidate_dir:
-        click.secho("  invalidate-dir: {}".format(", ".join(invalidate_dir)), fg="blue", bold=True, err=True)
     if disable_ext:
         click.secho("  disable-ext: {}".format(", ".join(disable_ext)), fg="blue", bold=True, err=True)
 
@@ -111,7 +101,6 @@ def impacted_tests_cli(
     strategy = build_strategy_with_extensions(
         watch_dep_files=not no_dep_files,
         invalidate_all_patterns=invalidate_all,
-        invalidate_dir_patterns=invalidate_dir,
         disabled=disable_ext,
         ext_config=ext_kwargs,
     )
