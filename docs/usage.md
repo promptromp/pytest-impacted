@@ -97,7 +97,7 @@ Run pytest from the `backend/` directory as usual. The plugin will:
 
 ## Impact Analysis Strategies
 
-The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines three built-in strategies.
+The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines the built-in strategies below (the last one only when configured).
 
 ### ASTImpactStrategy
 
@@ -135,6 +135,36 @@ pytest --impacted --impacted-module=my_package --no-impacted-dep-files
 !!! tip
     This is especially useful in CI where dependency version bumps (e.g. updating `uv.lock`) don't change any `.py` files but could still break tests due to changed third-party behavior.
 
+### InvalidationFileImpactStrategy
+
+Static import analysis cannot see that a test depends on a JSON fixture, a SQL schema, or a YAML config. This strategy is the user-extensible counterpart to the built-in dependency-file list: any changed file matching one of your `--impacted-invalidate-all` globs marks **all** tests as impacted, exactly as a `pyproject.toml` change does. It is only added to the pipeline when at least one pattern is configured.
+
+The option is repeatable:
+
+```bash
+pytest --impacted --impacted-module=my_package --impacted-tests-dir=tests \
+    --impacted-invalidate-all='*.json' \
+    --impacted-invalidate-all='my_package/config/*.yaml'
+```
+
+Or in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+impacted_invalidate_all = ["*.json", "my_package/config/*.yaml"]
+```
+
+Patterns are matched against the repository-relative path of each changed file, anchored at the end of the path (Python's `PurePath.match` semantics):
+
+- `*.json` matches a JSON file at any depth
+- `config/*.json` matches JSON files directly inside any directory named `config`
+- `schema.graphql` matches that filename anywhere
+- `*` never spans a `/`, so `fixtures/*.sql` does not match `fixtures/sub/x.sql`
+- `**` is **not** recursive here — it behaves like a single `*`. To watch a directory tree, list a pattern per depth: `config/*`, `config/*/*`, …
+
+!!! note
+    This is independent of `--no-impacted-dep-files`, which only switches off the built-in dependency-file list. Custom invalidation patterns stay active either way.
+
 ### CompositeImpactStrategy
 
 Combines multiple strategies, deduplicating and sorting results. The default composition is:
@@ -145,6 +175,8 @@ CompositeImpactStrategy(
         ASTImpactStrategy(),
         PytestImpactStrategy(),
         DependencyFileImpactStrategy(),
+        # Only present when --impacted-invalidate-all is set
+        InvalidationFileImpactStrategy([...]),
     ]
 )
 ```
@@ -186,6 +218,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--tests-dir` | `None` | Directory containing test files outside the namespace module |
 | `--verbose` | `false` | Verbose output (written to stderr, so it will not pollute the piped test list) |
 | `--no-dep-files` | `false` | Disable dependency file change detection |
+| `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
 ## Configuration via `pyproject.toml`
@@ -200,6 +233,7 @@ impacted_git_mode = "branch"
 impacted_base_branch = "main"
 impacted_tests_dir = "tests"
 no_impacted_dep_files = false  # set to true to disable dep file detection
+impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 ```
 
 CLI flags override these defaults.
@@ -228,6 +262,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
+| `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension. Installed extensions register their own flags — run `pytest --help` to list them, or see the [Extensions guide](extensions.md#extension-with-configuration) |
 
@@ -242,6 +277,8 @@ graph LR
     E --> G[Impacted tests]
     B --> F[Dep file detection]
     F -->|uv.lock, requirements.txt, etc.| G
+    B --> H[Invalidation patterns]
+    H -->|--impacted-invalidate-all| G
 ```
 
 1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
@@ -249,7 +286,8 @@ graph LR
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
 5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
-6. **Test filtering** skips tests whose modules are not in the impact set
+6. **Invalidation patterns** — user-declared globs for non-Python files that static analysis cannot see (see [InvalidationFileImpactStrategy](#invalidationfileimpactstrategy))
+7. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run).
 

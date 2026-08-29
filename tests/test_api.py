@@ -288,6 +288,36 @@ def test_get_impacted_tests_dep_file_with_watch_disabled(
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_modules")
 @patch("pytest_impacted.api.resolve_modules_to_files")
+@patch("pytest_impacted.api.cached_build_dep_tree")
+def test_get_impacted_tests_invalidate_all_patterns(
+    mock_cached_build_dep_tree,
+    mock_resolve_modules_to_files,
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+):
+    """A changed file matching a user-supplied invalidation pattern marks every test module as impacted."""
+    dep_tree = nx.DiGraph()
+    dep_tree.add_nodes_from(["project_ns.core", "tests.test_core", "tests.test_other"])
+    mock_cached_build_dep_tree.return_value = dep_tree
+    mock_find_impacted_files.return_value = ["config/settings.json"]
+    mock_resolve_files_to_modules.return_value = []
+    mock_resolve_modules_to_files.side_effect = lambda modules, **_: [m.replace(".", "/") + ".py" for m in modules]
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=Path("."),
+        ns_module="project_ns",
+        tests_dir="tests",
+        invalidate_all_patterns=["*.json"],
+    )
+
+    assert result == ["tests/test_core.py", "tests/test_other.py"]
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+@patch("pytest_impacted.api.resolve_modules_to_files")
 def test_get_impacted_tests_mixed_dep_and_py_changes(
     mock_resolve_modules_to_files,
     mock_resolve_files_to_modules,
