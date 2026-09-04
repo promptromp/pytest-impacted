@@ -200,6 +200,8 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package
         abs_path = os.path.abspath(file)
         if abs_path in path_to_module:
             resolved_modules.append(path_to_module[abs_path])
+        elif not os.path.exists(abs_path):
+            logger.debug("File %s no longer exists; nothing to resolve", file)
         else:
             logger.warning(
                 "File %s could not be resolved to a known module",

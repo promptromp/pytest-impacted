@@ -38,6 +38,8 @@ impacted = get_impacted_tests(
 
 This is the right entry point for one-off integrations or for driving impact analysis from your own test runner. For reusable, auto-discovered strategies that ship as their own package, see the packaged extension system below.
 
+`changed_files` lists every path git reports as changed, relative to the project root, **including deleted files**: a removed `conftest.py` or lockfile still matters. Do not assume an entry exists on disk — check before reading it.
+
 ## Packaged extensions
 
 Third-party packages can register custom strategies as installable plugins. Once installed, they are automatically discovered and composed into the analysis pipeline alongside the built-in strategies.
