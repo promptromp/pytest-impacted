@@ -6,9 +6,8 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 
-from pytest_impacted.api import get_impacted_tests
+from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests
 from pytest_impacted.extensions import (
-    build_strategy_with_extensions,
     discover_extension_metadata,
     get_ext_cli_flag,
     get_ext_ini_name,

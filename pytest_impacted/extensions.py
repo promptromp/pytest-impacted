@@ -19,11 +19,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-
-if TYPE_CHECKING:
-    from pytest_impacted.strategies import ImpactStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -301,40 +298,3 @@ def load_extensions(
         logger.debug("Loaded extension '%s' with config: %s", ext.name, ext_cfg)
 
     return instances
-
-
-def build_strategy_with_extensions(
-    *,
-    watch_dep_files: bool = True,
-    invalidate_all_patterns: Sequence[str] = (),
-    disabled: Sequence[str] = (),
-    ext_config: dict[str, Any] | None = None,
-) -> ImpactStrategy:
-    """Build a composite strategy combining built-in and extension strategies.
-
-    This is the main entry point for constructing the full strategy pipeline.
-    Built-in strategies come first, followed by extensions sorted by priority.
-
-    Args:
-        watch_dep_files: Whether to include DependencyFileImpactStrategy.
-        invalidate_all_patterns: User globs whose matches impact every test
-            (see :class:`~pytest_impacted.strategies.InvalidationFileImpactStrategy`).
-        disabled: Extension names to exclude.
-        ext_config: Configuration values for extensions.
-
-    Returns:
-        A CompositeImpactStrategy wrapping all strategies.
-    """
-    from pytest_impacted.strategies import CompositeImpactStrategy, get_default_strategies  # noqa: PLC0415
-
-    builtin_strategies = get_default_strategies(
-        watch_dep_files=watch_dep_files,
-        invalidate_all_patterns=invalidate_all_patterns,
-    )
-    ext_strategies = load_extensions(disabled=disabled, ext_config=ext_config)
-
-    # Sort extensions by priority (built-ins keep their fixed order)
-    ext_strategies.sort(key=lambda s: getattr(s, "priority", 100))
-
-    all_strategies = builtin_strategies + ext_strategies
-    return CompositeImpactStrategy(all_strategies)

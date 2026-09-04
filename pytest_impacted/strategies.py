@@ -6,15 +6,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, ClassVar
-
-
-if TYPE_CHECKING:
-    from pytest_impacted.extensions import ConfigOption
+from typing import Any, ClassVar
 
 import networkx as nx
 
 from pytest_impacted.display import notify
+from pytest_impacted.extensions import ConfigOption
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
 from pytest_impacted.traversal import discover_submodules
@@ -451,7 +448,7 @@ def get_default_strategies(
 
     This centralizes the knowledge of which built-in strategies form the
     default pipeline. Third-party extensions are added separately via
-    :func:`~pytest_impacted.extensions.build_strategy_with_extensions`.
+    :func:`~pytest_impacted.api.build_strategy_with_extensions`.
 
     Args:
         watch_dep_files: Include :class:`DependencyFileImpactStrategy`.
