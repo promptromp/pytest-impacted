@@ -33,6 +33,7 @@ def pytest_addoption(parser: Parser):
     parser.addini(
         "impacted",
         help="default value for --impacted",
+        type="bool",
         default=False,
     )
 
@@ -103,6 +104,7 @@ def pytest_addoption(parser: Parser):
     parser.addini(
         "no_impacted_dep_files",
         help="default value for --no-impacted-dep-files",
+        type="bool",
         default=False,
     )
 

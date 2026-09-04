@@ -18,48 +18,31 @@ from pytest_impacted.plugin import (
 )
 
 
-@pytest.fixture
-def cli_options():
-    return [
-        "impacted",
-        "impacted_module",
-        "impacted_git_mode",
-        "impacted_base_branch",
-        "impacted_tests_dir",
-        "no_impacted_dep_files",
-        "impacted_invalidate_all",
-    ]
+CLI_OPTION_DESTS = {
+    "impacted",
+    "impacted_module",
+    "impacted_git_mode",
+    "impacted_base_branch",
+    "impacted_tests_dir",
+    "no_impacted_dep_files",
+    "impacted_invalidate_all",
+    "impacted_disable_ext",
+}
 
 
-def test_pytest_addoption(cli_options):
-    """Test that the plugin adds the correct command line options."""
-    # Create mock options with the necessary attributes
-    mock_options = []
-    for option_name in cli_options:
-        mock_option = MagicMock()
-        mock_option.dest = option_name
-        mock_options.append(mock_option)
-
-    # Create a mock group that will return our mock options
+def test_pytest_addoption():
+    """Every option lands in the ``impacted`` group, and every ini key is registered."""
     mock_group = MagicMock()
-    mock_group.options = mock_options
-    mock_group.addoption = MagicMock()
-
-    # Create a mock parser that will return our mock group
     mock_parser = MagicMock()
     mock_parser.getgroup.return_value = mock_group
-    mock_parser.addini = MagicMock()
 
-    # Call the function with our mock parser
     pytest_addoption(mock_parser)
 
-    # Verify the impacted group was requested
     mock_parser.getgroup.assert_called_once_with("impacted")
-    assert mock_group is not None
-
-    # Check that all options were added
-    options = {opt.dest for opt in mock_group.options}
-    assert options == set(cli_options)
+    registered = {call.kwargs["dest"] for call in mock_group.addoption.call_args_list}
+    assert registered == CLI_OPTION_DESTS
+    ini_names = {call.args[0] for call in mock_parser.addini.call_args_list}
+    assert CLI_OPTION_DESTS - {"impacted_disable_ext"} <= ini_names
 
 
 def test_pytest_configure(pytestconfig):
@@ -71,13 +54,16 @@ def test_pytest_configure(pytestconfig):
     assert "impacted(state): mark test as impacted by the state of the git repository" in markers
 
 
-def test_pytest_report_header(pytestconfig):
+def test_pytest_report_header(pytestconfig, monkeypatch):
     """Test that the plugin adds the correct header information."""
-    pytestconfig.option.impacted_module = "test_module"
-    pytestconfig.option.impacted_git_mode = GitMode.UNSTAGED
-    pytestconfig.option.impacted_base_branch = "main"
-    pytestconfig.option.impacted_tests_dir = "tests"
-    pytestconfig.option.impacted_invalidate_all = ["*.json"]
+    for name, value in (
+        ("impacted_module", "test_module"),
+        ("impacted_git_mode", GitMode.UNSTAGED),
+        ("impacted_base_branch", "main"),
+        ("impacted_tests_dir", "tests"),
+        ("impacted_invalidate_all", ["*.json"]),
+    ):
+        monkeypatch.setattr(pytestconfig.option, name, value)
 
     header = pytest_report_header(pytestconfig)
     assert len(header) == 1
@@ -90,41 +76,41 @@ def test_pytest_report_header(pytestconfig):
     assert "backend=" in header[0]
 
 
-def test_validate_config_valid(pytestconfig):
+def test_validate_config_valid(pytestconfig, monkeypatch):
     """Test that valid configuration passes validation."""
-    pytestconfig.option.impacted = True
-    pytestconfig.option.impacted_module = "pytest_impacted"
-    pytestconfig.option.impacted_git_mode = GitMode.UNSTAGED
+    monkeypatch.setattr(pytestconfig.option, "impacted", True)
+    monkeypatch.setattr(pytestconfig.option, "impacted_module", "pytest_impacted")
+    monkeypatch.setattr(pytestconfig.option, "impacted_git_mode", GitMode.UNSTAGED)
     validate_config(pytestconfig)  # Should not raise
 
 
-def test_validate_config_missing_module(pytestconfig):
+def test_validate_config_missing_module(pytestconfig, monkeypatch):
     """Test that validation fails when module is missing."""
-    pytestconfig.option.impacted = True
-    pytestconfig.option.impacted_module = None
-    pytestconfig._inicache["impacted_module"] = None
-    pytestconfig.option.impacted_git_mode = GitMode.UNSTAGED
+    monkeypatch.setattr(pytestconfig.option, "impacted", True)
+    monkeypatch.setattr(pytestconfig.option, "impacted_module", None)
+    monkeypatch.setitem(pytestconfig._inicache, "impacted_module", None)
+    monkeypatch.setattr(pytestconfig.option, "impacted_git_mode", GitMode.UNSTAGED)
     with pytest.raises(pytest.UsageError, match="No module specified"):
         validate_config(pytestconfig)
 
 
-def test_validate_config_missing_git_mode(pytestconfig):
+def test_validate_config_missing_git_mode(pytestconfig, monkeypatch):
     """Test that validation fails when git mode is missing."""
-    pytestconfig.option.impacted = True
-    pytestconfig.option.impacted_module = "test_module"
-    pytestconfig.option.impacted_git_mode = None
-    pytestconfig._inicache["impacted_git_mode"] = None
+    monkeypatch.setattr(pytestconfig.option, "impacted", True)
+    monkeypatch.setattr(pytestconfig.option, "impacted_module", "test_module")
+    monkeypatch.setattr(pytestconfig.option, "impacted_git_mode", None)
+    monkeypatch.setitem(pytestconfig._inicache, "impacted_git_mode", None)
     with pytest.raises(pytest.UsageError, match="No git mode specified"):
         validate_config(pytestconfig)
 
 
-def test_validate_config_branch_mode_missing_base(pytestconfig):
+def test_validate_config_branch_mode_missing_base(pytestconfig, monkeypatch):
     """Test that validation fails when branch mode is used without base branch."""
-    pytestconfig.option.impacted = True
-    pytestconfig.option.impacted_module = "pytest_impacted"
-    pytestconfig.option.impacted_git_mode = GitMode.BRANCH
-    pytestconfig.option.impacted_base_branch = None
-    pytestconfig._inicache["impacted_base_branch"] = None
+    monkeypatch.setattr(pytestconfig.option, "impacted", True)
+    monkeypatch.setattr(pytestconfig.option, "impacted_module", "pytest_impacted")
+    monkeypatch.setattr(pytestconfig.option, "impacted_git_mode", GitMode.BRANCH)
+    monkeypatch.setattr(pytestconfig.option, "impacted_base_branch", None)
+    monkeypatch.setitem(pytestconfig._inicache, "impacted_base_branch", None)
     with pytest.raises(pytest.UsageError, match="No base branch specified"):
         validate_config(pytestconfig)
 
@@ -157,7 +143,7 @@ def testvalidate_tests_dir_valid():
     validate_tests_dir("tests", Path.cwd())  # Should not raise
 
 
-def testvalidate_tests_dir_without_init(tmp_path, monkeypatch):
+def testvalidate_tests_dir_without_init(tmp_path):
     """Test that a tests directory without __init__.py passes validation."""
     test_dir = tmp_path / "my_tests"
     test_dir.mkdir()
@@ -194,12 +180,11 @@ def testvalidate_base_branch_no_git_repo(tmp_path):
         validate_base_branch("main", str(tmp_path))
 
 
-def testvalidate_module_src_layout_suggestion(tmp_path, monkeypatch):
+def testvalidate_module_src_layout_suggestion(tmp_path):
     """When a module exists under src/, suggest the src-layout path."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "mypackage").mkdir()
     (tmp_path / "src" / "mypackage" / "__init__.py").touch()
-    monkeypatch.chdir(tmp_path)
 
     with pytest.raises(pytest.UsageError, match="--impacted-module=src/mypackage"):
         validate_module("mypackage", tmp_path)
@@ -223,3 +208,13 @@ def test_plugin_imports_without_git_executable(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "False"
+
+
+@pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files"])
+def test_boolean_ini_values_are_typed(pytester, ini_name):
+    """Untyped ini values arrive as strings, and ``"false"`` is truthy — so ``= false`` did the opposite."""
+    pytester.makeini(f"[pytest]\n{ini_name} = false\n")
+
+    config = pytester.parseconfig()
+
+    assert config.getini(ini_name) is False

@@ -13,6 +13,8 @@ from git import GitCommandError, Repo
 from pytest_impacted import git
 from pytest_impacted.git import find_repo, normalize_git_paths
 
+from .conftest import isolated_git_env
+
 
 def name_status_z(*records: tuple[str, ...]) -> str:
     """Render ``(status, path[, path])`` records as ``git diff --name-status -z`` output."""
@@ -212,24 +214,21 @@ def test_changeset_from_git_diff_name_status_output_keeps_special_characters():
     assert [c.path for c in change_set.changes] == ["pkg/café.py", 'weird\t"name"\\.py', "sp ace/naïve.py"]
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_unstaged_mode_clean_repo(mock_repo):
+def test_impacted_files_for_unstaged_mode_clean_repo():
     """Test impacted_files_for_unstaged_mode with clean repo."""
     repo = DummyRepo()
     result = git.impacted_files_for_unstaged_mode(repo)
     assert result == []
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_unstaged_mode_only_untracked_files(mock_repo):
+def test_impacted_files_for_unstaged_mode_only_untracked_files():
     """Untracked files should be detected even when no tracked files are modified."""
     repo = DummyRepo(untracked_files=["tests/test_new.py"])
     result = git.impacted_files_for_unstaged_mode(repo)
     assert result == ["tests/test_new.py"]
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_unstaged_mode_with_deleted_files(mock_repo):
+def test_impacted_files_for_unstaged_mode_with_deleted_files():
     """Test impacted_files_for_unstaged_mode with deleted files."""
     repo = DummyRepo(unstaged=name_status_z(("M", "file1.py"), ("D", "deleted.py")))
     result = git.impacted_files_for_unstaged_mode(repo)
@@ -238,8 +237,7 @@ def test_impacted_files_for_unstaged_mode_with_deleted_files(mock_repo):
     assert result == ["file1.py", "deleted.py"]
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_branch_mode_with_deleted_files(mock_repo):
+def test_impacted_files_for_branch_mode_with_deleted_files():
     """Test impacted_files_for_branch_mode with deleted files."""
     diff_output = name_status_z(("M", "modified.py"), ("D", "deleted.py"), ("A", "added.py"))
 
@@ -295,11 +293,6 @@ def test_find_impacted_files_in_repo_with_path_object(mock_repo):
     mock_repo.assert_called_once_with(path=Path("."), search_parent_directories=True)
 
 
-def test_git_module_docstring():
-    """Test that the git module has the expected docstring."""
-    assert git.__doc__ == "Git related functions."
-
-
 def test_change_str_with_none_status():
     """Test Change.__str__ method with None status."""
     change = git.Change("file.py", status=None)
@@ -343,16 +336,15 @@ def test_impactful_statuses(status, impactful):
     assert (git._impactful_paths(change_set) == ["a.py"]) is impactful
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_branch_mode_with_none_names(mock_repo):
-    """Test impacted_files_for_branch_mode with files that have None names."""
+def test_impacted_files_for_branch_mode_with_empty_path_token():
+    """A record whose path token is empty is dropped rather than yielding an empty path."""
     # Create diff output that results in None names
     diff_output = name_status_z(("M", "file1.py"), ("D", ""))  # Second record has an empty path
 
     repo = DummyRepo(diff_branch_result=diff_output)
     result = git.impacted_files_for_branch_mode(repo, "main")
 
-    # Should filter out None/empty names
+    # Should drop the empty path token
     assert result == ["file1.py"]
 
 
@@ -367,8 +359,7 @@ def test_git_status_from_git_diff_name_status_copy_and_rename():
     assert git.GitStatus.from_git_diff_name_status("R75") == git.GitStatus.RENAMED
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_unstaged_mode_with_renamed_files(mock_repo):
+def test_impacted_files_for_unstaged_mode_with_renamed_files():
     """Under ``--no-renames`` a staged rename is a deletion plus an addition; both paths count."""
     repo = DummyRepo(
         staged=name_status_z(("D", "old_name.py"), ("A", "new_name.py")), unstaged=name_status_z(("M", "file1.py"))
@@ -378,8 +369,7 @@ def test_impacted_files_for_unstaged_mode_with_renamed_files(mock_repo):
     assert set(result) == {"old_name.py", "new_name.py", "file1.py"}
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_branch_mode_with_renamed_files(mock_repo):
+def test_impacted_files_for_branch_mode_with_renamed_files():
     """Under ``--no-renames`` a rename is a deletion plus an addition; both paths count."""
     diff_output = name_status_z(("D", "old_name.py"), ("A", "new_name.py"), ("M", "modified.py"))
     repo = DummyRepo(diff_branch_result=diff_output)
@@ -388,8 +378,7 @@ def test_impacted_files_for_branch_mode_with_renamed_files(mock_repo):
     assert set(result) == {"old_name.py", "new_name.py", "modified.py"}
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_branch_mode_detached_head(mock_repo):
+def test_impacted_files_for_branch_mode_detached_head():
     """Test impacted_files_for_branch_mode handles detached HEAD (common in CI)."""
     diff_output = name_status_z(("M", "file1.py"))
     repo = DummyRepo(diff_branch_result=diff_output)
@@ -424,8 +413,7 @@ def test_validate_rev_rejects_option_like_refs(rev):
         git.validate_rev(rev)
 
 
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_branch_mode_rejects_option_like_base_branch(mock_repo):
+def test_impacted_files_for_branch_mode_rejects_option_like_base_branch():
     """An option-like base branch never reaches the git CLI."""
     repo = DummyRepo(diff_branch_result=name_status_z(("M", "file1.py")))
 
@@ -565,32 +553,6 @@ def test_find_impacted_files_monorepo_files_outside_cwd(mock_repo):
 # cannot hide behind a mock.
 
 
-def _isolated_git_env(home: Path) -> dict[str, str]:
-    """Environment that shields git from the developer's global/system config.
-
-    Hooks from ``init.templateDir``, ``core.excludesFile`` patterns or a
-    ``diff.renames`` override would otherwise change the outcome. Identity is
-    supplied the same way so no ``git config`` calls are needed.
-    """
-    return {
-        "GIT_CONFIG_GLOBAL": os.devnull,  # git >= 2.32
-        "GIT_CONFIG_NOSYSTEM": "1",
-        # Older git only knows $HOME/.gitconfig and $XDG_CONFIG_HOME/git/config.
-        "HOME": str(home),
-        "XDG_CONFIG_HOME": str(home / "xdg"),
-        "GIT_AUTHOR_NAME": "Test",
-        "GIT_AUTHOR_EMAIL": "test@example.com",
-        "GIT_COMMITTER_NAME": "Test",
-        "GIT_COMMITTER_EMAIL": "test@example.com",
-    }
-
-
-@pytest.fixture
-def isolated_git_config(monkeypatch, tmp_path):
-    for key, value in _isolated_git_env(tmp_path).items():
-        monkeypatch.setenv(key, value)
-
-
 @pytest.fixture(scope="session")
 def committed_repo_template(tmp_path_factory):
     """A committed repository with a two-module package, built once and copied per test."""
@@ -601,7 +563,7 @@ def committed_repo_template(tmp_path_factory):
     (pkg / "__init__.py").write_text("")
     (pkg / "a.py").write_text("x = 1\n")
     (pkg / "b.py").write_text("y = 1\n")
-    env = {**os.environ, **_isolated_git_env(home)}
+    env = {**os.environ, **isolated_git_env(home)}
     for args in (["init", "-q"], ["add", "--all"], ["commit", "-q", "-m", "init"]):
         subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True)
     return root
@@ -617,6 +579,15 @@ def real_repo(tmp_path, isolated_git_config, committed_repo_template):
 
 def unstaged(root) -> list[str] | None:
     return git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None)
+
+
+def branch(root, base="main") -> list[str] | None:
+    return git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base)
+
+
+def commit_all(repo, message="change"):
+    repo.git.add("--all")
+    repo.git.commit("-m", message)
 
 
 def test_unstaged_mode_sees_staged_only_modification(real_repo):
@@ -762,3 +733,79 @@ def test_bare_repo_is_a_clear_error(tmp_path, isolated_git_config, mode):
     Repo.init(tmp_path, bare=True)
     with pytest.raises(ValueError, match="bare repository"):
         git.find_impacted_files_in_repo(tmp_path, mode, "main")
+
+
+def test_find_impacted_files_warns_and_returns_none_without_git(monkeypatch):
+    """The runtime guard, distinct from the import-time one pinned in tests/test_plugin.py."""
+    monkeypatch.setattr(git, "GIT_AVAILABLE", False)
+
+    with pytest.warns(UserWarning, match="git executable is not available"):
+        assert git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None) is None
+
+
+# --- BRANCH mode against a real repository ---------------------------------------
+#
+# The mocked branch-mode tests pin the parsing; these prove real git accepts the
+# flag ordering (options, then --end-of-options, then the revisions).
+
+
+def test_branch_mode_sees_committed_modification(real_repo):
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+
+    assert branch(root, base) == ["pkg/a.py"]
+
+
+def test_branch_mode_sees_committed_deletion(real_repo):
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").unlink()
+    commit_all(repo)
+
+    assert branch(root, base) == ["pkg/a.py"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges and core.symlinks on Windows")
+def test_branch_mode_sees_committed_type_change(real_repo):
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").unlink()
+    (root / "pkg" / "a.py").symlink_to("b.py")
+    commit_all(repo)
+
+    assert branch(root, base) == ["pkg/a.py"]
+
+
+def test_branch_mode_reports_rename_as_both_paths(real_repo):
+    """``--no-renames`` makes a rename a deletion plus an addition, so both paths count."""
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    repo.git.mv("pkg/a.py", "pkg/renamed.py")
+    commit_all(repo)
+
+    assert branch(root, base) == ["pkg/a.py", "pkg/renamed.py"]
+
+
+def test_branch_mode_works_on_detached_head(real_repo):
+    """Detached HEAD is the normal state in CI checkouts."""
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+    repo.git.checkout("--detach")
+
+    assert branch(root, base) == ["pkg/a.py"]
+
+
+def test_branch_mode_rejects_option_like_base_ref(real_repo):
+    _repo, root = real_repo
+
+    with pytest.raises(git.InvalidGitRefError):
+        branch(root, "--output=/tmp/pwned")

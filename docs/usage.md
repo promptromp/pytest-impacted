@@ -14,7 +14,7 @@ Activate the plugin by passing the `--impacted` flag along with `--impacted-modu
 pytest --impacted --impacted-module=my_package
 ```
 
-This runs only the tests impacted by files with uncommitted modifications (staged or unstaged) in your current git repository.
+This runs only the tests impacted by files with uncommitted changes (staged or unstaged, including deletions) and untracked files in your current git repository.
 
 !!! note
     The `--impacted-module` value must be a valid Python package name (underscores, not hyphens).
@@ -24,7 +24,7 @@ This runs only the tests impacted by files with uncommitted modifications (stage
 
 ### Unstaged Mode (default)
 
-Counts every uncommitted change — whether or not it has been staged with `git add` — plus untracked files:
+Counts every uncommitted change — whether or not it has been staged with `git add` — plus untracked files. Deletions and renames count too: a removed `conftest.py` or lockfile still reaches the pattern-based strategies, and a rename is reported as a deletion plus an addition:
 
 ```bash
 pytest --impacted --impacted-module=my_package --impacted-git-mode=unstaged
@@ -32,7 +32,7 @@ pytest --impacted --impacted-module=my_package --impacted-git-mode=unstaged
 
 ### Branch Mode
 
-Compares all commits on your current branch against a base branch:
+Compares your current `HEAD` against a base ref (a two-dot `git diff <base> HEAD`). Note this also picks up files changed on the base branch since you branched — conservative by design, so extra tests may run when the base has moved ahead:
 
 ```bash
 pytest --impacted \
@@ -58,7 +58,7 @@ The tests directory does **not** need to contain `__init__.py` — the plugin us
 ## Monorepo / src-Layout Support
 
 The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the project directory. Parent directories are searched automatically to find the git repository.
-**Note:** Impact analysis only considers changed files within the project subtree; changes in sibling directories are ignored.
+**Note:** Changed files outside the rootdir subtree cannot be resolved to Python modules, so they never impact tests through import analysis. They *are* still seen by the file-pattern strategies: a sibling `frontend/requirements.txt`, or a file matching an `--impacted-invalidate-all` glob, still marks every test as impacted.
 
 Paths are resolved against pytest's `rootdir` (or the CLI's `--root-dir`), not the directory you happen to run from, so `--impacted-module` and `--impacted-tests-dir` are relative to that root and running from a subdirectory works.
 
@@ -94,8 +94,8 @@ monorepo/              ← git root
 Run pytest from the `backend/` directory as usual. The plugin will:
 
 1. Find the git repository by searching parent directories
-2. Convert git-relative file paths (e.g. `backend/src/my_package/module.py`) to working-directory-relative paths (e.g. `src/my_package/module.py`)
-3. Only consider changes within the rootdir subtree — changes in sibling directories (e.g. `frontend/`) are ignored
+2. Convert git-root-relative file paths (e.g. `backend/src/my_package/module.py`) to rootdir-relative paths (e.g. `src/my_package/module.py`)
+3. Resolve only changes inside the rootdir subtree to modules — sibling changes (e.g. `frontend/`) contribute nothing to import analysis, though the dependency-file and invalidation-pattern strategies still see them (as absolute paths)
 
 ## Impact Analysis Strategies
 
@@ -156,7 +156,7 @@ Or in `pyproject.toml`:
 impacted_invalidate_all = ["*.json", "my_package/config/*.yaml"]
 ```
 
-Patterns are matched against the repository-relative path of each changed file, anchored at the end of the path (Python's `PurePath.match` semantics):
+Patterns are matched against each changed file's path as reported to the strategies — rootdir-relative for files inside the pytest rootdir, absolute for files elsewhere in the repository — anchored at the end of the path (Python's `PurePath.match` semantics):
 
 - `*.json` matches a JSON file at any depth
 - `config/*.json` matches JSON files directly inside any directory named `config`
@@ -197,8 +197,13 @@ For CI pipelines where git analysis and test execution happen in separate stages
 # Stage 1: identify impacted tests
 impacted-tests --module=my_package --git-mode=branch --base-branch=main > impacted_tests.txt
 
-# Stage 2: run only those tests
-pytest $(cat impacted_tests.txt)
+# Stage 2: run only those tests. An empty list means nothing was impacted —
+# guard it, or a bare `pytest` would run the whole suite.
+if [ -s impacted_tests.txt ]; then
+  pytest $(cat impacted_tests.txt)
+else
+  echo "No impacted tests."
+fi
 ```
 
 If your tests live outside the package, pass `--tests-dir` here too — the CLI needs it
@@ -252,7 +257,8 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-tests-dir=bad_path` | Error indicating the directory doesn't exist |
 | `--impacted-base-branch=no_such_branch` | Error listing available git refs |
 | `--impacted-base-branch=--some-option` | Rejected before reaching git — refs may not begin with `-`, since git would parse them as options rather than revisions |
-| No git repository found | Clear error indicating no `.git` found at or above the working directory |
+| No git repository found (branch mode) | Clear error naming the rootdir searched: no `.git` found at or above it |
+| No git repository found (unstaged mode) | Not validated up front — the failure surfaces from GitPython during collection |
 
 ## All Options
 
@@ -283,7 +289,7 @@ graph LR
     H -->|--impacted-invalidate-all| G
 ```
 
-1. **Git introspection** identifies which files changed (uncommitted edits, staged or not, or a branch diff)
+1. **Git introspection** identifies which files changed (uncommitted edits staged or not, untracked files and deletions, or a branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
@@ -328,8 +334,8 @@ The Rust extension:
 
 1. Reads all source files in parallel via rayon
 2. Parses Python ASTs using ruff's hand-written recursive descent parser (the same parser used by the ruff linter)
-3. Extracts import statements by recursively walking all statement bodies (including `if`, `try`, `with`, function, and class blocks)
-4. Returns results as Python `list[str]` — only the final data crosses the Rust/Python boundary
+3. Extracts import statements by recursively walking all statement bodies (`if`, `try`/`except`/`else`/`finally`, `with`, `for`, `while`, `match`/`case`, function and class blocks)
+4. Returns one `dict[str, list[str]]` mapping module name to its imports — only the final data crosses the Rust/Python boundary
 
 ### Benchmarks
 

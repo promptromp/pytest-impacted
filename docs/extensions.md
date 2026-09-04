@@ -38,7 +38,7 @@ impacted = get_impacted_tests(
 
 This is the right entry point for one-off integrations or for driving impact analysis from your own test runner. For reusable, auto-discovered strategies that ship as their own package, see the packaged extension system below.
 
-`changed_files` lists every path git reports as changed, relative to the project root, **including deleted files**: a removed `conftest.py` or lockfile still matters. Do not assume an entry exists on disk — check before reading it.
+`changed_files` lists every path git reports as changed, relative to the project root — except files living outside it (a monorepo whose git root sits above the pytest rootdir), which arrive as absolute paths. It **includes deleted files**: a removed `conftest.py` or lockfile still matters. So resolve an entry against `root_dir` only when it is relative, and check that it exists before reading it.
 
 ## Packaged extensions
 
@@ -63,7 +63,7 @@ class MyStrategy(ImpactStrategy):
 # pyproject.toml for the extension package
 [project]
 name = "pytest-impacted-my-extension"
-dependencies = ["pytest-impacted>=0.19"]
+dependencies = ["pytest-impacted>=0.30"]
 
 [project.entry-points."pytest_impacted.strategies"]
 my_extension = "my_extension.strategy:MyStrategy"
@@ -200,7 +200,7 @@ Beyond `resolve_impacted_tests`, two additional helpers are exported from the pa
 
 - **`discover_submodules(package, require_init=True, root_dir=None)`** — walks a Python package and returns a `{module_name: file_path}` dict of absolute paths. Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout, namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files, and pass the `root_dir` your hook received so the scan does not depend on the working directory. This is the right primitive for any extension that needs to scan the full source tree.
 
-- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so filter the list against `discover_submodules()` the way `build_dep_tree()` does before treating an entry as a module. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`.
+- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so filter the list against `discover_submodules()` the way `build_dep_tree()` does before treating an entry as a module. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`. Pass `is_package=True` for an `__init__.py` — relative imports in a package resolve against the package itself, not its parent, and `discover_submodules` hands you `__init__.py` paths for every package.
 
 Example: a strategy that enumerates all source files and scans them for a custom pattern:
 
@@ -209,17 +209,17 @@ from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_impo
 
 
 class MyScanningStrategy(ImpactStrategy):
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
-        # Walk every source file in the package
-        modules = discover_submodules(ns_module)
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, root_dir=None, **kwargs):
+        # Walk every source file in the package, rooted where the core rooted it
+        modules = discover_submodules(ns_module, root_dir=root_dir)
         for module_name, file_path in modules.items():
-            imports = parse_file_imports(file_path, module_name)
+            imports = parse_file_imports(file_path, module_name, is_package=file_path.endswith("__init__.py"))
             # ... do something with imports ...
         return []
 ```
 
 !!! tip
-    `discover_submodules` is LRU-cached by `(package, require_init, root_dir)` so calling it multiple times within a single pytest run is cheap, and two projects analyzed in one process cannot collide. The cache is cleared by `clear_dep_tree_cache()` alongside the dependency graph cache.
+    `discover_submodules` is LRU-cached by `(package, require_init, canonical_root(root_dir))` — the root is resolved to an absolute, symlink-free path *before* the lookup, so `None`, `"."` and an absolute path to the same project share one entry while two different projects can never collide. The cache is cleared by `pytest_impacted.strategies.clear_dep_tree_cache()` (or `pytest_impacted.traversal.clear_discovery_cache()` for the discovery cache alone).
 
 ## Lifecycle hooks
 
@@ -235,8 +235,10 @@ class IndexingStrategy(ImpactStrategy):
     def setup(self, *, ns_module, tests_package=None, root_dir=None, session=None, dep_tree):
         # One-time O(source-tree) work happens here, not in find_impacted_tests
         self._index = {}
-        for module_name, file_path in discover_submodules(ns_module).items():
-            self._index[module_name] = parse_file_imports(file_path, module_name)
+        for module_name, file_path in discover_submodules(ns_module, root_dir=root_dir).items():
+            self._index[module_name] = parse_file_imports(
+                file_path, module_name, is_package=file_path.endswith("__init__.py")
+            )
 
     def teardown(self):
         # Release per-run state. Fires even if find_impacted_tests raises.
@@ -293,9 +295,9 @@ class DIBindingStrategy(ImpactStrategy):
         session=None,
     ) -> None:
         # 1. Enumerate every source file the core knows about.
-        modules = dict(discover_submodules(ns_module))
+        modules = dict(discover_submodules(ns_module, root_dir=root_dir))
         if tests_package:
-            modules.update(discover_submodules(tests_package, require_init=False))
+            modules.update(discover_submodules(tests_package, require_init=False, root_dir=root_dir))
 
         # 2. Scan each file for producers and consumers.
         producers: dict[str, str] = {}  # binding_key -> producer module
@@ -311,7 +313,7 @@ class DIBindingStrategy(ImpactStrategy):
                 consumers.setdefault(match.group(1), set()).add(module_name)
 
             # Reuse the core import parser to stay consistent with AST strategy.
-            parse_file_imports(file_path, module_name)
+            parse_file_imports(file_path, module_name, is_package=file_path.endswith("__init__.py"))
 
         # 3. Add producer → consumer edges. The graph uses inverted
         #    direction, so "producer points at impacted consumer"
@@ -329,7 +331,7 @@ class DIBindingStrategy(ImpactStrategy):
 
 **When it fires.** `enrich_dep_tree` runs once per pytest invocation, on a **per-run copy** of the LRU-cached base graph, **before** any strategy's `setup` is called. The ordering is: build cached graph → copy → `enrich_dep_tree(all strategies)` → `setup(all strategies)` → `find_impacted_tests(all strategies)` → `teardown(all strategies)`.
 
-**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached by `(ns_module, tests_package, root_dir)`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
+**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached (maxsize=8) by `(ns_module, tests_package, canonical_root(root_dir))`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
 
 **Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order, forwarding all context kwargs unchanged. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
 

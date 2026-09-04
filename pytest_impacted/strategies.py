@@ -175,6 +175,10 @@ class ImpactStrategy(ABC):
         priority: Ordering weight (lower = runs earlier, default = 100).
 
     Lifecycle:
+        :meth:`enrich_dep_tree` runs first, once per pytest run, on a per-run
+        copy of the dependency graph. It is the only hook permitted to mutate
+        the graph.
+
         :meth:`setup` runs once per pytest run, before any
         :meth:`find_impacted_tests` call. Strategies can use it to build
         expensive indices, read config files, or warm caches — work that
@@ -186,8 +190,8 @@ class ImpactStrategy(ABC):
         :meth:`find_impacted_tests` raises. Strategies can use it to release
         resources or reset per-run state.
 
-        Both hooks have no-op default implementations, so existing strategies
-        need no changes to adopt the new lifecycle.
+        All three hooks have no-op default implementations, so existing
+        strategies need no changes to adopt the lifecycle.
     """
 
     config_options: ClassVar[list[ConfigOption]] = []
@@ -263,8 +267,8 @@ class ImpactStrategy(ABC):
             root_dir: Root directory of the repository.
             session: Optional pytest session object.
             dep_tree: The pre-built dependency graph for this run. Safe to
-                inspect; do not mutate (see :meth:`enrich_dep_tree` in a
-                future release for the sanctioned mutation hook).
+                inspect; do not mutate here — :meth:`enrich_dep_tree`, which
+                runs before :meth:`setup`, is the sanctioned mutation hook.
         """
 
     def teardown(self) -> None:  # noqa: B027  — intentional no-op default
@@ -296,8 +300,9 @@ class ImpactStrategy(ABC):
             tests_package: Optional tests package name
             root_dir: Root directory of the repository
             session: Optional pytest session object
-            dep_tree: Pre-built dependency graph (NetworkX DiGraph). Built once by
-                :class:`CompositeImpactStrategy` and shared across all strategies
+            dep_tree: Pre-built dependency graph (NetworkX DiGraph). Built once
+                per run by :func:`~pytest_impacted.api.get_impacted_tests` (via
+                :func:`cached_build_dep_tree`) and shared across all strategies
                 in the pipeline. Use :func:`~pytest_impacted.graph.resolve_impacted_tests`
                 for standard graph traversal.
 

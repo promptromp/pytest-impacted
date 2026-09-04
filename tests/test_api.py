@@ -210,26 +210,6 @@ def test_get_impacted_tests_success_without_tests_dir(
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
-def test_get_impacted_tests_with_nested_tests_dir(mock_find_impacted_files):
-    """Test get_impacted_tests correctly converts nested tests_dir to package name."""
-    mock_find_impacted_files.return_value = []
-
-    with patch("pytest_impacted.api.resolve_files_to_modules") as mock_resolve:
-        mock_resolve.return_value = []
-
-        get_impacted_tests(
-            impacted_git_mode=GitMode.UNSTAGED,
-            impacted_base_branch="main",
-            root_dir=Path("."),
-            ns_module="project_ns",
-            tests_dir="tests/unit",
-        )
-
-        # path_to_package_name should not be called since no impacted files
-        # but verify the function doesn't crash with nested paths
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_modules")
 @patch("pytest_impacted.api.resolve_modules_to_files")
 def test_get_impacted_tests_dep_file_only_change(
