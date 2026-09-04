@@ -223,3 +223,13 @@ def test_plugin_imports_without_git_executable(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "False"
+
+
+@pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files"])
+def test_boolean_ini_values_are_typed(pytester, ini_name):
+    """Untyped ini values arrive as strings, and ``"false"`` is truthy — so ``= false`` did the opposite."""
+    pytester.makeini(f"[pytest]\n{ini_name} = false\n")
+
+    config = pytester.parseconfig()
+
+    assert config.getini(ini_name) is False

@@ -155,8 +155,9 @@ def normalize_git_paths(file_paths: list[str], git_root: Path, working_dir: Path
     """Convert git-root-relative file paths to working-dir-relative paths.
 
     Git returns paths relative to the repository root.  When *working_dir* differs
-    from *git_root* (monorepo layout), the paths must be rebased so that downstream
-    code calling ``os.path.abspath()`` resolves them correctly.
+    from *git_root* (monorepo layout), the paths must be rebased so that
+    :func:`~pytest_impacted.traversal.resolve_files_to_modules`, which joins them
+    onto the canonical *root_dir*, resolves them to the discovered module paths.
 
     Files that fall outside *working_dir* are returned as absolute paths so they
     can still be matched (though they typically won't belong to any discovered module).

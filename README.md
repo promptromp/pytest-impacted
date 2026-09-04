@@ -94,8 +94,8 @@ That's it. Unaffected tests are automatically skipped.
 
 | Mode | Flag | What it compares |
 |------|------|-----------------|
-| **unstaged** (default) | `--impacted-git-mode=unstaged` | All uncommitted changes (staged and unstaged) + untracked files |
-| **branch** | `--impacted-git-mode=branch` | All commits on current branch vs base branch |
+| **unstaged** (default) | `--impacted-git-mode=unstaged` | All uncommitted changes (staged and unstaged, including deletions) + untracked files |
+| **branch** | `--impacted-git-mode=branch` | Everything differing between the base ref and `HEAD` (`git diff <base> HEAD`), including changes made on the base since you branched |
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
 
@@ -111,7 +111,7 @@ pytest --impacted \
 
 ### Monorepo / src-Layout Support
 
-The plugin works in monorepos where the Python project is nested in a subdirectory (the `.git` directory doesn't need to be in the working directory — parent directories are searched automatically).
+The plugin works in monorepos where the Python project is nested in a subdirectory (the `.git` directory doesn't need to be in the project directory — parent directories are searched automatically). All paths are resolved against pytest's `rootdir` (or the CLI's `--root-dir`), not the directory you run from, so `--impacted-module` and `--impacted-tests-dir` are relative to that root.
 
 For **src-layout** projects (e.g. `src/my_package/`), point `--impacted-module` at the full path including the `src/` prefix:
 
@@ -132,8 +132,13 @@ For CI pipelines where git access and test execution happen in separate stages, 
 # Stage 1: identify impacted tests
 impacted-tests --module=my_package --git-mode=branch --base-branch=main > impacted_tests.txt
 
-# Stage 2: run only those tests
-pytest $(cat impacted_tests.txt)
+# Stage 2: run only those tests. An empty list means nothing was impacted —
+# guard it, or a bare `pytest` would run the whole suite.
+if [ -s impacted_tests.txt ]; then
+  pytest $(cat impacted_tests.txt)
+else
+  echo "No impacted tests."
+fi
 ```
 
 The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--root-dir`, `--tests-dir`,
@@ -180,7 +185,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
                          ↘ Invalidation patterns → All tests (if your globs match)
 ```
 
-1. **Git introspection** identifies which files changed (uncommitted edits, staged or not, or a branch diff)
+1. **Git introspection** identifies which files changed (uncommitted edits staged or not, untracked files and deletions, or a branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules

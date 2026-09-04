@@ -19,7 +19,8 @@ that did not need to run) are always preferred over false negatives.
 **Modules are never imported at analysis time.** All discovery is filesystem scanning
 and AST parsing. Importing a module to inspect it would execute module-level code —
 monkey patching, DB connections, app factories. If you find yourself reaching for
-`importlib`, you are solving the problem the wrong way.
+`importlib`, you are solving the problem the wrong way — `importlib.util.find_spec`
+in particular, which imports every parent package to answer.
 
 **`parsing.py` imports node classes from `astroid.nodes`**, not `astroid` — required
 since astroid v4.
@@ -40,20 +41,60 @@ teardown`). The copy is load-bearing: without it, extension enrichment pollutes 
 LRU-cached base graph and the next run in the same process starts dirty. `teardown`
 runs in a `finally`.
 
-**`api.py` contains no strategy-specific logic.** It always passes `changed_files`
-and `impacted_modules` (possibly empty) to the composite and lets each strategy
-decide. This is why `DependencyFileImpactStrategy`, which operates on non-Python
-files, needs no special-casing. Keep it that way.
+**`get_impacted_tests` contains no strategy-specific dispatch.** `api.py` assembles
+the pipeline (it is the composition root), but the run itself always passes
+`changed_files` and `impacted_modules` (possibly empty) to the composite and lets each
+strategy decide. This is why `DependencyFileImpactStrategy`, which operates on
+non-Python files, needs no special-casing. Keep it that way.
 
 **The dependency graph is built once** and passed to every strategy as a required
-keyword-only `dep_tree`. Caches: `cached_build_dep_tree` (maxsize=8) and
-`discover_submodules`; `clear_dep_tree_cache()` clears both.
+keyword-only `dep_tree`. Both caches live on *private* inner functions —
+`_cached_build_dep_tree` (maxsize=8) and `_discover_submodules` — because the public
+wrappers must canonicalize `root_dir` before the lookup. `clear_dep_tree_cache()`
+clears both (via `traversal.clear_discovery_cache()`); `discover_submodules.cache_clear`
+is a back-compat alias onto the inner cache.
 
 **Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref
 straight to `repo.git.<cmd>(...)`. It validates each ref with `validate_rev` (rejecting
 option-like values with a clear error) *and* prefixes `--end-of-options` so git cannot parse
 an operand as an option even if the string check is ever bypassed. This is why the project
 requires git >= 2.24, and why tests assert on the `--end-of-options` token in the argv.
+
+**`GIT_AVAILABLE` is not defensive clutter.** `from git import Repo` raises
+`ImportError` when the *git executable* is missing, not just when GitPython is absent —
+and `plugin.py` is a `pytest11` entry point imported on every pytest run, so an
+unguarded import breaks pytest itself in containers without git. `from __future__ import
+annotations` at the top of `git.py` is what lets the module import with `Repo` unbound.
+A subprocess test pins it.
+
+**Every diff goes through `_name_status_diff` with fixed `--name-status -z --no-renames`.**
+`-z` stops git C-quoting non-ASCII paths (`core.quotePath`), which would never match a
+file on disk; `--no-renames` turns a rename into a delete plus an add, so no record
+carries two paths and results do not depend on the developer's `diff.renames`. Unstaged
+mode is the union of three views — `git diff --cached`, `git diff`, and
+`git ls-files --others` — because a staged edit reverted on disk appears in only one of
+them. Deletions count (`_NON_IMPACTFUL_STATUSES` drops only `X`/`B`), so `changed_files`
+routinely names paths that no longer exist, and files outside the project root arrive as
+absolute paths.
+
+**`canonical_root()` is the single origin for every path.** Discovery, graph building and
+the conftest walk all resolve against `root_dir` (the plugin passes `config.rootpath`),
+never the process CWD — running pytest from a subdirectory used to resolve nothing. It
+absolutizes *and* resolves symlinks, and both caches canonicalize before their lookup so a
+`None` default cannot collapse two projects onto one entry. Never reach for `Path.cwd()`
+in traversal, graph or strategy code.
+
+**`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`
+emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg`, so
+`build_dep_tree` filters candidates against `discover_submodules` instead. The apparent
+over-emission is the design, not a bug.
+
+**The Python and Rust backends must agree exactly.** `parsing.py` (astroid) and
+`rust/src/lib.rs` (ruff parser) both feed `build_dep_tree`, so any divergence silently
+changes which tests run under the `fast` extra. Known parity points: read with `utf-8-sig`
+so a BOM is not a syntax error, and scan `match`/`case` bodies.
+`test_parse_file_imports_matches_rust_backend` pins it and CI runs both backends across
+3.11–3.14 — change one backend, change the other.
 
 **Logging: every module that logs declares `logger = logging.getLogger(__name__)`.**
 Never call `logging.info(...)` and friends — those hit the root logger and are
@@ -109,8 +150,10 @@ that rather than re-deriving it, and put new extension-author content there.
 
 ## Testing
 
-`pytester` is enabled in `conftest.py` for plugin-level tests. Some tests are marked
-`@pytest.mark.slow` and are excluded by the pre-commit run but not by plain `pytest`.
+`pytester` is enabled in `tests/conftest.py` (`pytest_plugins = "pytester"`) for
+plugin-level tests. The pre-commit pytest hook filters with `-m 'not slow'`, but no test
+currently carries that marker and `slow` is registered nowhere (there is no
+`[tool.pytest.ini_options]`) — register it before using it, or the mark warns.
 
 ## Documentation
 
