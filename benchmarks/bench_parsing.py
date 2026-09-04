@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import os
+import sys
 import time
 
 from pytest_impacted.traversal import discover_submodules
@@ -107,20 +108,22 @@ def main():
         print(f"Speedup (Rust seq vs Python):      {python_time / rust_seq_time:.1f}x")
         print(f"Speedup (Rust parallel vs Python):  {python_time / rust_par_time:.1f}x")
 
-        # Correctness check: Rust results should be a superset of Python results
-        # (Rust returns more because it doesn't use is_module_path() filtering)
+        # Correctness check: both backends emit the same candidates for
+        # ``from pkg import name`` (the package and the qualified name), so the
+        # results must match exactly. (A module using syntax newer than the
+        # running interpreter parses only under ruff — see docs/usage.md.)
         print()
-        print("Correctness check (Rust results should be superset of Python):")
-        all_match = True
-        for name in python_results:
-            python_set = set(python_results.get(name, []))
-            rust_set = set(rust_par_results.get(name, []))
-            missing = python_set - rust_set
-            if missing:
-                print(f"  MISMATCH in {name}: Python found {missing} not in Rust results")
-                all_match = False
-        if all_match:
-            print("  All Python imports are present in Rust results.")
+        print("Correctness check (Rust results must equal Python):")
+        if python_results == rust_par_results:
+            print("  Both backends agree on every module.")
+        else:
+            for name in sorted(set(python_results) | set(rust_par_results)):
+                python_set = set(python_results.get(name, []))
+                rust_set = set(rust_par_results.get(name, []))
+                if python_set != rust_set:
+                    only_python, only_rust = sorted(python_set - rust_set), sorted(rust_set - python_set)
+                    print(f"  MISMATCH in {name}: only Python {only_python}, only Rust {only_rust}")
+            sys.exit(1)
     else:
         print()
         print("Skipping Rust benchmarks (extension not available)")

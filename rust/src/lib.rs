@@ -7,7 +7,7 @@ use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 
 /// Resolve a relative import to its absolute module path.
 ///
-/// Mirrors the Python `_resolve_relative_import()` logic:
+/// Mirrors the Python `_package_of()` + `_resolve_relative_import()` logic:
 /// - level=1: same package (single dot)
 /// - level>1: go up (level-1) packages
 fn resolve_relative_import(
@@ -16,7 +16,7 @@ fn resolve_relative_import(
     level: u32,
     modname: Option<&str>,
 ) -> String {
-    // Determine the package context (mirrors _ModuleProxy logic)
+    // Determine the package context (mirrors _package_of)
     let package = if is_package {
         module_name.to_string()
     } else if let Some(pos) = module_name.rfind('.') {
@@ -64,6 +64,7 @@ fn extract_from_import(node: &StmtImport) -> Vec<String> {
 /// For `from pkg.mod import name`, we return both `pkg.mod.name` and `pkg.mod`
 /// since we cannot determine at parse time whether `name` is a submodule or a
 /// symbol. The caller (graph builder) filters to known submodules anyway.
+/// `from pkg import *` contributes only `pkg`: `pkg.*` is not a module name.
 fn extract_from_import_from(
     node: &StmtImportFrom,
     module_name: &str,
@@ -88,6 +89,12 @@ fn extract_from_import_from(
 
     for alias in &node.names {
         let name = alias.name.as_str();
+        if name == "*" {
+            if !resolved_modname.is_empty() && !imports.contains(&resolved_modname) {
+                imports.push(resolved_modname.clone());
+            }
+            continue;
+        }
         // Return both the full path and the base module
         // The graph builder filters to known submodules
         if !resolved_modname.is_empty() {
@@ -159,6 +166,11 @@ fn collect_imports_from_stmts(
             }
             Stmt::ClassDef(node) => {
                 collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+            }
+            Stmt::Match(node) => {
+                for case in &node.cases {
+                    collect_imports_from_stmts(&case.body, module_name, is_package, imports);
+                }
             }
             _ => {}
         }
