@@ -87,16 +87,8 @@ class GitStatus(StrEnum):
 
     @classmethod
     def from_git_diff_name_status(cls, status: str) -> GitStatus:
-        """Create a GitStatus from a git diff name status."""
-        match status:
-            case _ as status if status.startswith("R") and status[1:].isdigit():
-                # git diff --name-status output may report <X><score> for renamed files
-                return cls.RENAMED
-            case _ as status if status.startswith("C") and status[1:].isdigit():
-                # git diff --name-status output may report <X><score> for copied files
-                return cls.COPIED
-            case _:
-                return cls(status)
+        """Create a GitStatus from a ``--name-status`` token; ``R100``/``C85`` carry a similarity score."""
+        return cls(status[:1])
 
 
 # Every reported change counts, deletions included (a removed conftest.py or

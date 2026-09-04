@@ -296,13 +296,11 @@ def test_git_unavailable_warning():
 
 def test_git_status_from_git_diff_name_status_edge_cases():
     """Test GitStatus.from_git_diff_name_status with edge cases."""
-    # Test copy with non-digit after C - this should raise ValueError as "CX" is not a valid status
+    # An unknown letter is an error; an empty token too.
     with pytest.raises(ValueError):
-        git.GitStatus.from_git_diff_name_status("CX")
-
-    # Test rename with non-digit after R - this should raise ValueError as "RX" is not a valid status
+        git.GitStatus.from_git_diff_name_status("Z")
     with pytest.raises(ValueError):
-        git.GitStatus.from_git_diff_name_status("RX")
+        git.GitStatus.from_git_diff_name_status("")
 
     # Test other valid status codes
     assert git.GitStatus.from_git_diff_name_status("T") == git.GitStatus.TYPE_CHANGE
