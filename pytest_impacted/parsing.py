@@ -1,6 +1,5 @@
 """Python code parsing (AST) utilities."""
 
-import importlib.util
 import logging
 import os
 from pathlib import Path
@@ -10,26 +9,6 @@ from astroid.nodes import Import, ImportFrom
 
 
 logger = logging.getLogger(__name__)
-
-
-class _ModuleProxy:
-    """Lightweight stand-in for a real module object.
-
-    Provides just the ``__name__`` and ``__package__`` attributes needed by
-    :func:`_resolve_relative_import` and :func:`_extract_imports_from_node`,
-    without actually importing the module (avoiding side-effects).
-    """
-
-    __slots__ = ("__name__", "__package__")
-
-    def __init__(self, name: str, *, is_package: bool = False) -> None:
-        self.__name__ = name
-        if is_package:
-            self.__package__ = name
-        elif "." in name:
-            self.__package__ = name.rsplit(".", 1)[0]
-        else:
-            self.__package__ = ""
 
 
 def normalize_path(path_like: str | os.PathLike[str]) -> Path:
@@ -46,54 +25,46 @@ def normalize_path(path_like: str | os.PathLike[str]) -> Path:
         raise ValueError(f"Cannot normalize path-like object {path_like!r} of type {type(path_like)}") from e
 
 
-def _resolve_relative_import(module: _ModuleProxy, node: ImportFrom) -> str:
-    """Resolve a relative import to its absolute module path.
+def _package_of(module_name: str, is_package: bool) -> str:
+    """The package that *module_name*'s relative imports resolve against.
 
-    Args:
-        module: A module proxy providing __name__ and __package__ context
-        node: The ImportFrom AST node with relative import
-
-    Returns:
-        The resolved absolute module name
+    A package's own ``__init__.py`` resolves against itself; any other module
+    resolves against its parent. Mirrors ``resolve_relative_import`` in the
+    Rust backend.
     """
-    # Get the package context from the module
-    package = getattr(module, "__package__", None)
-    if not package:
-        # Fall back to getting package from module name
-        package = module.__name__.rsplit(".", 1)[0] if "." in module.__name__ else ""
+    return module_name if is_package else module_name.rpartition(".")[0]
 
-    # Calculate the base package for the relative import
-    # Each level represents going up one package level
-    if node.level == 1:
-        # Single dot: same package
+
+def _resolve_relative_import(package: str, level: int, modname: str | None) -> str:
+    """Resolve ``from <level dots><modname> import …`` to an absolute module name."""
+    if level == 1:
         base_package = package
     else:
-        # Multiple dots: go up (level - 1) packages
+        # Each extra dot climbs one package.
         package_parts = package.split(".")
-        levels_to_go_up = node.level - 1
-
+        levels_to_go_up = level - 1
         base_package_parts = package_parts[:-levels_to_go_up] if len(package_parts) >= levels_to_go_up else []
+        base_package = ".".join(base_package_parts)
 
-        base_package = ".".join(base_package_parts) if base_package_parts else ""
-
-    # Resolve the module name
-    if node.modname:
-        # from .module import something
-        return f"{base_package}.{node.modname}" if base_package else node.modname
-    else:
-        # from . import something
-        return base_package
+    if modname:
+        return f"{base_package}.{modname}" if base_package else modname
+    return base_package
 
 
-def _extract_imports_from_node(node: Import | ImportFrom, module: _ModuleProxy) -> set[str]:
-    """Extract import module names from an AST node.
+def _extract_imports_from_node(node: Import | ImportFrom, package: str) -> set[str]:
+    """Extract candidate module names from an import node.
 
     Args:
         node: The import AST node
-        module: A module proxy providing name/package context
+        package: The package relative imports resolve against (see :func:`_package_of`)
 
     Returns:
-        Set of imported module names
+        Candidate module names. For ``from pkg import name`` both ``pkg`` and
+        ``pkg.name`` are returned: ``pkg`` is always a real dependency (its
+        ``__init__`` runs on import), while ``pkg.name`` is a submodule only if
+        the graph builder finds a module of that name — deciding here would
+        mean importing ``pkg``, which must never happen at analysis time.
+        Mirrors the Rust backend.
     """
     imports = set()
 
@@ -102,15 +73,15 @@ def _extract_imports_from_node(node: Import | ImportFrom, module: _ModuleProxy) 
             imports.add(name[0])
 
     elif isinstance(node, ImportFrom):
-        resolved_modname = _resolve_relative_import(module, node) if node.level and node.level > 0 else node.modname
-
-        # Check if imported names are modules or just symbols
+        resolved_modname = (
+            _resolve_relative_import(package, node.level, node.modname) if node.level else (node.modname or "")
+        )
+        if resolved_modname:
+            imports.add(resolved_modname)
         for name, *_ in node.names:
-            full_name = f"{resolved_modname}.{name}" if resolved_modname else name
-            if is_module_path(full_name, package=module.__name__):
-                imports.add(full_name)
-            else:
-                imports.add(resolved_modname)
+            if name == "*":
+                continue  # ``pkg.*`` is not a module name
+            imports.add(f"{resolved_modname}.{name}" if resolved_modname else name)
 
     return imports
 
@@ -118,9 +89,8 @@ def _extract_imports_from_node(node: Import | ImportFrom, module: _ModuleProxy) 
 def parse_file_imports(file_path: str, module_name: str, is_package: bool = False) -> list[str]:
     """Parse imports from a source file without importing the module.
 
-    Reads the file directly and uses a :class:`_ModuleProxy` to supply the
-    module metadata required for relative-import resolution.  This avoids
-    executing any module-level code.
+    Reads the file directly and resolves relative imports from *module_name*
+    and *is_package* alone, so no module-level code ever executes.
 
     Args:
         file_path: Absolute path to the ``.py`` file.
@@ -128,10 +98,14 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         is_package: ``True`` when the file is an ``__init__.py``.
 
     Returns:
-        Sorted list of imported module names (absolute paths).
+        Sorted list of *candidate* absolute module names. ``from pkg import
+        name`` contributes both ``pkg`` and ``pkg.name`` because the parser
+        cannot tell a submodule from a symbol without importing ``pkg``;
+        callers filter against :func:`~pytest_impacted.traversal.discover_submodules`
+        as :func:`~pytest_impacted.graph.build_dep_tree` does.
     """
     try:
-        source = Path(file_path).read_text(encoding="utf-8")
+        source = Path(file_path).read_text(encoding="utf-8-sig")  # -sig: drop a BOM, as ruff does
     except (OSError, UnicodeDecodeError):
         logger.error("Error reading file %s", file_path)
         return []
@@ -139,7 +113,7 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
     if not source.strip():
         return []
 
-    module_proxy = _ModuleProxy(module_name, is_package=is_package)
+    package = _package_of(module_name, is_package)
 
     try:
         tree = astroid.parse(source)
@@ -149,42 +123,9 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
 
     imports: set[str] = set()
     for node in tree.nodes_of_class((Import, ImportFrom)):
-        imports.update(_extract_imports_from_node(node, module_proxy))
+        imports.update(_extract_imports_from_node(node, package))
 
     return sorted(imports)
-
-
-def is_module_path(module_path: str, package: str | None = None) -> bool:
-    """
-    Checks if a given string represents a valid module path.
-
-    Args:
-        module_path: The string representing the module path (e.g., "pkg.foo.bar").
-        package: The package to search for the module in. used for relative imports.
-
-    Returns:
-        True if the path points to a module, False otherwise.
-    """
-    try:
-        spec = importlib.util.find_spec(module_path, package=package)
-        return spec is not None
-    except ModuleNotFoundError:
-        return False
-    except ValueError:
-        # find_spec raises ValueError for invalid module names (empty strings, leading dots, etc.)
-        logger.debug(
-            "ValueError while trying to find spec for module %s in package %s",
-            module_path,
-            package,
-        )
-        return False
-    except ImportError:
-        logger.exception(
-            "ImportError while trying to find spec for module %s in package %s",
-            module_path,
-            package,
-        )
-        return False
 
 
 def is_test_module(module_name: str) -> bool:

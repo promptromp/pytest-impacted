@@ -200,7 +200,7 @@ Beyond `resolve_impacted_tests`, two additional helpers are exported from the pa
 
 - **`discover_submodules(package, require_init=True)`** — walks a Python package and returns a `{module_name: file_path}` dict. Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout, namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files. This is the right primitive for any extension that needs to scan the full source tree.
 
-- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a `list[str]` of the modules it imports. Uses pytest-impacted's own astroid-based parser, so extensions that call it will interpret imports the same way the core does (including relative imports, star imports, and conditional imports inside `if TYPE_CHECKING` blocks). No module execution — imports are extracted from the AST without running code.
+- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so filter the list against `discover_submodules()` the way `build_dep_tree()` does before treating an entry as a module. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`.
 
 Example: a strategy that enumerates all source files and scans them for a custom pattern:
 
