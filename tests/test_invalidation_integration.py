@@ -135,7 +135,7 @@ def test_runs_from_a_subdirectory_of_the_rootdir(git_project):
             str(root / "tests"),
         ],
         cwd=root / "tests" / "unit",
-        env={**os.environ, "PYTHONPATH": str(root)},
+        env={**os.environ, **isolated_git_env(root / "git-home"), "PYTHONPATH": str(root)},
         capture_output=True,
         text=True,
         check=False,
@@ -154,12 +154,18 @@ def test_deleted_data_file_still_invalidates_every_test(git_project):
 
 
 def test_deleted_conftest_impacts_the_tests_below_it(git_project):
-    """Removing a conftest.py removes its fixtures; those tests must run (and fail) rather than be skipped."""
-    (git_project.path / "tests" / "unit" / "conftest.py").write_text("")
-    git_project.git("add", "tests/unit/conftest.py")
+    """Removing a conftest.py removes its fixtures, so those tests must run and fail, not be skipped."""
+    (git_project.path / "tests" / "unit" / "conftest.py").write_text(
+        "import pytest\n\n@pytest.fixture\ndef answer():\n    return 3\n"
+    )
+    (git_project.path / "tests" / "unit" / "test_core.py").write_text(
+        "from pkg.core import add\n\ndef test_add(answer):\n    assert add(1, 2) == answer\n"
+    )
+    git_project.git("add", "tests/unit")
     git_project.git("commit", "-q", "-m", "add conftest")
     git_project.git("rm", "-q", "tests/unit/conftest.py")
 
     result = run(git_project)
 
-    result.assert_outcomes(passed=1, skipped=1)
+    # The unit test is selected and errors on the missing fixture; the integration test is skipped.
+    result.assert_outcomes(errors=1, skipped=1)
