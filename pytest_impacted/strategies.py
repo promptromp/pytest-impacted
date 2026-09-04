@@ -14,7 +14,7 @@ from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
-from pytest_impacted.traversal import clear_discovery_cache
+from pytest_impacted.traversal import canonical_root, clear_discovery_cache
 
 
 logger = logging.getLogger(__name__)
@@ -74,25 +74,38 @@ def has_dependency_file_changes(
 
 
 @lru_cache(maxsize=8)
-def cached_build_dep_tree(ns_module: str, tests_package: str | None = None, root_dir: Path | None = None) -> nx.DiGraph:
+def _cached_build_dep_tree(ns_module: str, tests_package: str | None, root: Path) -> nx.DiGraph:
+    """Cached graph construction, keyed on the canonical *root*.
+
+    Note:
+        maxsize=8 keeps recent dependency trees without unbounded growth. The
+        common case is the same ns_module/tests_package/root used repeatedly
+        within one pytest run.
+    """
+    return build_dep_tree(ns_module, tests_package=tests_package, root_dir=root)
+
+
+def cached_build_dep_tree(
+    ns_module: str, tests_package: str | None = None, root_dir: str | Path | None = None
+) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
     Args:
         ns_module: The namespace module being analyzed
         tests_package: Optional tests package name
-        root_dir: Project root the package paths are relative to. Part of the
-            cache key, so two projects analyzed in one process cannot collide.
+        root_dir: Project root the package paths are relative to; defaults to
+            the current directory.
 
     Returns:
-        NetworkX dependency graph
+        NetworkX dependency graph. Do not mutate it — it is shared between
+        runs; callers take a copy (see :func:`~pytest_impacted.api.get_impacted_tests`).
 
     Note:
-        Using LRU cache with maxsize=8 to cache recent dependency trees while
-        preventing unbounded memory growth. This optimizes the common case where
-        the same ns_module/tests_package combination is used repeatedly within
-        a single pytest run.
+        The root is canonicalized *before* the cache lookup, so the default
+        never collapses two projects onto one entry the way a bare ``None``
+        key would.
     """
-    return build_dep_tree(ns_module, tests_package=tests_package, root_dir=root_dir)
+    return _cached_build_dep_tree(ns_module, tests_package, canonical_root(root_dir))
 
 
 def clear_dep_tree_cache() -> None:
@@ -102,7 +115,7 @@ def clear_dep_tree_cache() -> None:
     after code changes during development. Also clears discovery caches
     since stale submodule data would produce stale dependency trees.
     """
-    cached_build_dep_tree.cache_clear()
+    _cached_build_dep_tree.cache_clear()
     clear_discovery_cache()
 
 

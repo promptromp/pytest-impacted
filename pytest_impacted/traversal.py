@@ -185,6 +185,11 @@ def clear_discovery_cache() -> None:
     _discover_submodules.cache_clear()
 
 
+# The cache moved to the private inner function when ``root_dir`` was added, but
+# ``discover_submodules`` is part of the public surface — keep the old call working.
+discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: ignore[attr-defined]
+
+
 def resolve_files_to_modules(
     filenames: list[str],
     ns_module: str,

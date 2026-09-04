@@ -329,7 +329,7 @@ class DIBindingStrategy(ImpactStrategy):
 
 **When it fires.** `enrich_dep_tree` runs once per pytest invocation, on a **per-run copy** of the LRU-cached base graph, **before** any strategy's `setup` is called. The ordering is: build cached graph → copy → `enrich_dep_tree(all strategies)` → `setup(all strategies)` → `find_impacted_tests(all strategies)` → `teardown(all strategies)`.
 
-**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached by `(ns_module, tests_package)`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
+**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached by `(ns_module, tests_package, root_dir)`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
 
 **Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order, forwarding all context kwargs unchanged. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
 

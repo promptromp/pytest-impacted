@@ -1,6 +1,7 @@
 """CLI entrypoints for pytest-impacted."""
 
 import logging
+import os
 from pathlib import Path
 
 import click
@@ -97,8 +98,9 @@ def impacted_tests_cli(
     configure_logging(verbose=verbose)
 
     # Paths are relative to --root-dir, which need not be the working directory.
+    # Dotted names are accepted here as they are by discover_submodules.
     for option, value in (("--module", module), ("--tests-dir", tests_dir)):
-        if value and not (Path(root_dir) / value).is_dir():
+        if value and not (Path(root_dir) / value.replace(".", os.sep)).is_dir():
             raise click.BadParameter(
                 f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=option
             )

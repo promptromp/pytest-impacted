@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache
-from pytest_impacted.traversal import _discover_submodules, discover_submodules
+from pytest_impacted.traversal import _discover_submodules, canonical_root, discover_submodules
 
 
 class TestCaching:
@@ -28,7 +28,7 @@ class TestCaching:
         result2 = cached_build_dep_tree("mypackage", "tests")
 
         # build_dep_tree should only be called once due to caching
-        mock_build_tree.assert_called_once_with("mypackage", tests_package="tests", root_dir=None)
+        mock_build_tree.assert_called_once_with("mypackage", tests_package="tests", root_dir=canonical_root(None))
 
         # Both results should be the same
         assert result1 is result2
@@ -47,8 +47,8 @@ class TestCaching:
 
         # build_dep_tree should be called twice with different parameters
         assert mock_build_tree.call_count == 2
-        mock_build_tree.assert_any_call("mypackage", tests_package="tests", root_dir=None)
-        mock_build_tree.assert_any_call("mypackage", tests_package="other_tests", root_dir=None)
+        mock_build_tree.assert_any_call("mypackage", tests_package="tests", root_dir=canonical_root(None))
+        mock_build_tree.assert_any_call("mypackage", tests_package="other_tests", root_dir=canonical_root(None))
 
         # Results should be different
         assert result1 is mock_dep_tree1
@@ -85,7 +85,7 @@ class TestCaching:
         result2 = cached_build_dep_tree("mypackage", None)
 
         # Should only call build_dep_tree once
-        mock_build_tree.assert_called_once_with("mypackage", tests_package=None, root_dir=None)
+        mock_build_tree.assert_called_once_with("mypackage", tests_package=None, root_dir=canonical_root(None))
         assert result1 is result2
 
     def test_clear_dep_tree_cache_also_clears_discover_submodules(self):
@@ -108,6 +108,22 @@ class TestCaching:
 
         result1 = cached_build_dep_tree("mypackage", None, first)
         result2 = cached_build_dep_tree("mypackage", None, second)
+
+        assert mock_build_tree.call_count == 2
+        assert result1 is not result2
+
+    @patch("pytest_impacted.strategies.build_dep_tree")
+    def test_default_root_does_not_collide_across_projects(self, mock_build_tree, tmp_path, monkeypatch):
+        """The default root is canonicalized before the lookup, so it is never a bare ``None`` key."""
+        mock_build_tree.side_effect = [MagicMock(), MagicMock()]
+        first, second = tmp_path / "a", tmp_path / "b"
+        first.mkdir()
+        second.mkdir()
+
+        monkeypatch.chdir(first)
+        result1 = cached_build_dep_tree("mypackage")
+        monkeypatch.chdir(second)
+        result2 = cached_build_dep_tree("mypackage")
 
         assert mock_build_tree.call_count == 2
         assert result1 is not result2

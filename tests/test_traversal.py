@@ -434,12 +434,17 @@ def test_discover_submodules_cache_is_keyed_by_root_dir(two_projects):
 
 
 def test_discover_submodules_resolves_symlinked_root(two_projects, tmp_path):
-    """A project reached through a symlink yields the same paths as the real one."""
+    """A project reached through a symlink yields real paths, not paths through the link."""
     first, _second = two_projects
     link = tmp_path / "link-to-first"
     link.symlink_to(first)
 
-    assert discover_submodules("mypkg", root_dir=link) == discover_submodules("mypkg", root_dir=first)
+    via_link = discover_submodules("mypkg", root_dir=link)
+    clear_discovery_cache()  # or the second call would just reuse the first entry
+    direct = discover_submodules("mypkg", root_dir=first)
+
+    assert via_link == direct
+    assert not any("link-to-first" in path for path in via_link.values())
 
 
 def test_resolve_files_to_modules_uses_root_dir_not_cwd(two_projects, monkeypatch):

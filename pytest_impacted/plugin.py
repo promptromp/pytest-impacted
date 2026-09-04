@@ -41,7 +41,7 @@ def pytest_addoption(parser: Parser):
         default=None,
         dest="impacted_module",
         metavar="MODULE",
-        help="Module name to check for impacted tests.",
+        help="Module name to check for impacted tests, relative to the pytest rootdir.",
     )
     parser.addini(
         "impacted_module",
@@ -83,8 +83,8 @@ def pytest_addoption(parser: Parser):
         default=None,
         dest="impacted_tests_dir",
         help=(
-            "Directory containing the unit-test files. If not specified, "
-            + "tests will only be found under namespace module directory."
+            "Directory containing the unit-test files, relative to the pytest rootdir. If not "
+            + "specified, tests will only be found under namespace module directory."
         ),
     )
     parser.addini(
@@ -302,7 +302,7 @@ def validate_module(module_name: str, root_dir: Path) -> None:
     src_dir = os.path.join("src", module_dir)
     if (root_dir / src_dir).is_dir():
         raise UsageError(
-            f"Module '{module_name}' not found in the current directory, but found at '{src_dir}'. "
+            f"Module '{module_name}' not found under '{root_dir}', but found at '{src_dir}'. "
             f"For src-layout projects, use: --impacted-module=src/{module_dir}"
         )
 
