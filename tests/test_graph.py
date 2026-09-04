@@ -153,21 +153,3 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
 
         # Only test_core should run (depends on pkg.core), not test_utils
         assert set(impacted) == {"tests.test_core"}
-
-
-def test_inverted():
-    """Test graph inversion."""
-    digraph = nx.DiGraph()
-    digraph.add_edges_from(
-        [
-            ("module_a", "module_b"),
-            ("module_b", "module_c"),
-        ]
-    )
-
-    inverted_graph = graph.inverted(digraph)
-
-    assert inverted_graph.has_edge("module_b", "module_a")
-    assert inverted_graph.has_edge("module_c", "module_b")
-    assert not inverted_graph.has_edge("module_a", "module_b")
-    assert not inverted_graph.has_edge("module_b", "module_c")

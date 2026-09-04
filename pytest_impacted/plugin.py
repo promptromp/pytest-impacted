@@ -337,6 +337,7 @@ def validate_base_branch(base_branch: str, root_dir: str) -> None:
     if not GIT_AVAILABLE:
         return
 
+    # Importable only when GIT_AVAILABLE; see the guarded import in git.py.
     from git import GitCommandError, InvalidGitRepositoryError  # noqa: PLC0415
 
     try:

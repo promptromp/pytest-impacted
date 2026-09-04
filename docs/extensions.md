@@ -127,7 +127,7 @@ class MyLightweightStrategy:
         return [...]
 ```
 
-This is validated at runtime using the `StrategyProtocol` (a `typing.Protocol`).
+When the entry point is loaded, `validate_strategy_class` checks that it resolves to a class whose `find_impacted_tests` accepts `changed_files`, `impacted_modules` and `ns_module` (or `**kwargs`). `StrategyProtocol` is a runtime-checkable `typing.Protocol` describing the same shape, handy for `isinstance` assertions in your own tests.
 
 ## Using extensions
 

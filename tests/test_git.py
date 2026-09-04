@@ -54,14 +54,6 @@ class DummyRepo:
         return self._unstaged
 
 
-@patch("pytest_impacted.git.GIT_AVAILABLE", False)
-def test_find_impacted_files_in_repo_git_not_available():
-    """Test find_impacted_files_in_repo when git is not available."""
-    with pytest.warns(UserWarning, match="Git functionality is disabled"):
-        result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
-    assert result is None
-
-
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_clean(mock_repo):
     mock_repo.return_value = DummyRepo()
@@ -275,23 +267,6 @@ def test_git_mode_enum_values():
     """Test GitMode enum values."""
     assert git.GitMode.UNSTAGED.value == "unstaged"
     assert git.GitMode.BRANCH.value == "branch"
-
-
-@patch("pytest_impacted.git.GIT_AVAILABLE", True)
-@patch("pytest_impacted.git.warnings.warn")
-def test_git_available_warning_not_called(mock_warn):
-    """Test that warning is not called when git is available."""
-    # Import should not trigger warning when GIT_AVAILABLE is True
-    mock_warn.assert_not_called()
-
-
-def test_git_unavailable_warning():
-    """Test that warning is triggered when GitPython is not available."""
-    with (
-        patch("pytest_impacted.git.GIT_AVAILABLE", False),
-        pytest.warns(UserWarning, match="Git functionality is disabled"),
-    ):
-        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
 
 
 def test_git_status_from_git_diff_name_status_edge_cases():

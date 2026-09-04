@@ -1,13 +1,16 @@
 """Git related functions."""
 
-# Load-bearing, not cosmetic: ``Repo`` is only bound when GitPython imports, so
-# postponed annotations are what keep this module importable without it.
 from __future__ import annotations
 import warnings
 from enum import StrEnum
 from pathlib import Path
 
 
+# GitPython raises ImportError when the **git executable** is missing, not just
+# when the package is absent — a real situation in slim containers. This module
+# is reached from the pytest11 entry point on every pytest run, so an unguarded
+# import would break pytest itself for those users. Postponed annotations above
+# are what let the module finish importing with ``Repo`` unbound.
 try:
     from git import Repo
 
@@ -15,7 +18,7 @@ try:
 except ImportError:
     GIT_AVAILABLE = False
     warnings.warn(
-        "GitPython package is not available. Git-related functionality will be disabled. "
+        "GitPython or the git executable is not available. Git-related functionality will be disabled. "
         "To enable git functionality, install GitPython and ensure git CLI is available.",
         stacklevel=2,
     )
@@ -190,7 +193,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     """
     if not GIT_AVAILABLE:
         warnings.warn(
-            "Git functionality is disabled because GitPython is not available. "
+            "Git functionality is disabled because GitPython or the git executable is not available. "
             "To enable git functionality, install GitPython and ensure git CLI is available.",
             stacklevel=2,
         )

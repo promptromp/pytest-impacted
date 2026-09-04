@@ -1,7 +1,6 @@
 """Graph analysis functionality."""
 
 import logging
-import types
 
 import networkx as nx
 
@@ -80,19 +79,17 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
-def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.ModuleType | None = None) -> nx.DiGraph:
+def build_dep_tree(package: str, tests_package: str | None = None) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
     Scans the package directory to find modules, reads their source files,
     and parses imports via AST — without executing any module-level code.
     """
-    pkg_name = package if isinstance(package, str) else package.__name__
-    submodules = discover_submodules(pkg_name, require_init=True)
+    submodules = discover_submodules(package, require_init=True)
 
     if tests_package:
-        tests_name = tests_package if isinstance(tests_package, str) else tests_package.__name__
-        logger.debug("Adding modules from tests_package: %s", tests_name)
-        test_submodules = discover_submodules(tests_name, require_init=False)
+        logger.debug("Adding modules from tests_package: %s", tests_package)
+        test_submodules = discover_submodules(tests_package, require_init=False)
         submodules = {**submodules, **test_submodules}
 
     logger.debug("Building dependency tree for %d submodules", len(submodules))
@@ -109,22 +106,4 @@ def build_dep_tree(package: str | types.ModuleType, tests_package: str | types.M
                 digraph.add_edge(name, imp)
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.
-    inverted_digraph = inverted(digraph)
-
-    return inverted_digraph
-
-
-def display_digraph(digraph: nx.DiGraph) -> None:
-    """Display the dependency graph.
-
-    Useful for debugging and verbose output to verify the graph is built correctly.
-
-    """
-    for node in digraph.nodes:
-        edges = list(digraph.successors(node))
-        print(f"{node} -> {edges}")
-
-
-def inverted(digraph: nx.DiGraph) -> nx.DiGraph:
-    """Invert the graph."""
     return digraph.reverse()
