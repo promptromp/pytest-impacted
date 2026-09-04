@@ -4,7 +4,7 @@ import logging
 
 import networkx as nx
 
-from pytest_impacted._rust import RUST_AVAILABLE
+from pytest_impacted._rust import RUST_AVAILABLE, rust_parse_all_imports
 from pytest_impacted.parsing import is_test_module, parse_file_imports
 from pytest_impacted.traversal import discover_submodules
 
@@ -19,8 +19,6 @@ def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]
     falling back to sequential astroid parsing.
     """
     if RUST_AVAILABLE:
-        from pytest_impacted._rust import rust_parse_all_imports  # noqa: PLC0415
-
         modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
         return rust_parse_all_imports(modules_info)
 

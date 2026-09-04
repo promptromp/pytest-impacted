@@ -97,7 +97,9 @@ which unions results. `get_default_strategies()` builds the default composition.
 not add a second matcher or a second directory walk.
 
 Third-party strategies are discovered via the `pytest_impacted.strategies` entry
-point group and composed in by `extensions.build_strategy_with_extensions()`.
+point group and composed in by `api.build_strategy_with_extensions()` — the
+composition root, and the only module that knows about both built-ins and
+extensions. `extensions.py` therefore imports nothing from `strategies.py`.
 Built-ins run first, then extensions by `priority` — ordering rarely matters since
 results are unioned.
 

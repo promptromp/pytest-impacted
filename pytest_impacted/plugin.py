@@ -5,9 +5,9 @@ from typing import Any
 import pytest
 from pytest import Config, Parser, UsageError
 
-from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
+from pytest_impacted._rust import RUST_AVAILABLE
+from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.extensions import (
-    build_strategy_with_extensions,
     discover_extension_metadata,
     get_ext_cli_flag,
     get_ext_ini_name,
@@ -172,8 +172,6 @@ def pytest_configure(config: Config):
 @pytest.hookimpl(tryfirst=True)
 def pytest_report_header(config: Config) -> list[str]:
     """Add pytest-impacted config to pytest header."""
-    from pytest_impacted._rust import RUST_AVAILABLE  # noqa: PLC0415
-
     get_option = partial(get_option_from_config, config)
     backend = "rust (ruff parser + rayon)" if RUST_AVAILABLE else "python (astroid)"
     ext_names = [e.name for e in discover_extension_metadata()]

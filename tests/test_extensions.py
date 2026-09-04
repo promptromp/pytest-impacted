@@ -5,11 +5,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pytest_impacted.api import build_strategy_with_extensions
 from pytest_impacted.extensions import (
     ConfigOption,
     ExtensionMetadata,
     StrategyProtocol,
-    build_strategy_with_extensions,
     clear_extension_cache,
     coerce_value,
     discover_extension_metadata,

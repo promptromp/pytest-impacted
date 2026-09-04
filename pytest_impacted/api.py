@@ -1,10 +1,17 @@
-"""Matchers used for pattern matching and unit-tests."""
+"""Public entry point and composition root for impact analysis.
+
+Assembles the strategy pipeline from the built-ins and any registered
+extensions, then drives it: git state -> changed files -> impacted modules ->
+impacted test files.
+"""
 
 import os
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from pytest_impacted.display import notify, warn
+from pytest_impacted.extensions import load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
@@ -22,6 +29,42 @@ from pytest_impacted.traversal import (
 def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
     """Check if the item path matches any of the impacted tests."""
     return any(test == item_path or test.endswith(os.sep + item_path) for test in impacted_tests)
+
+
+def build_strategy_with_extensions(
+    *,
+    watch_dep_files: bool = True,
+    invalidate_all_patterns: Sequence[str] = (),
+    disabled: Sequence[str] = (),
+    ext_config: dict[str, Any] | None = None,
+) -> ImpactStrategy:
+    """Build a composite strategy combining built-in and extension strategies.
+
+    This is the composition root for the analysis pipeline: it is the one place
+    that knows about both the built-in strategies and the entry-point
+    extensions, which is why it lives here rather than in either of those
+    modules. Built-in strategies come first, then extensions by priority.
+
+    Args:
+        watch_dep_files: Whether to include DependencyFileImpactStrategy.
+        invalidate_all_patterns: User globs whose matches impact every test
+            (see :class:`~pytest_impacted.strategies.InvalidationFileImpactStrategy`).
+        disabled: Extension names to exclude.
+        ext_config: Configuration values for extensions.
+
+    Returns:
+        A CompositeImpactStrategy wrapping all strategies.
+    """
+    builtin_strategies = get_default_strategies(
+        watch_dep_files=watch_dep_files,
+        invalidate_all_patterns=invalidate_all_patterns,
+    )
+    ext_strategies = load_extensions(disabled=disabled, ext_config=ext_config)
+
+    # Sort extensions by priority (built-ins keep their fixed order)
+    ext_strategies.sort(key=lambda s: getattr(s, "priority", 100))
+
+    return CompositeImpactStrategy(builtin_strategies + ext_strategies)
 
 
 def get_impacted_tests(
