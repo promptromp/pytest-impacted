@@ -8,7 +8,7 @@
 **Run only the tests that matter.** A pytest plugin that uses git diff, AST parsing, and dependency graph analysis to selectively run tests impacted by your code changes.
 
 ```bash
-pytest --impacted --impacted-module=my_package     # unstaged changes
+pytest --impacted --impacted-module=my_package     # uncommitted changes
 pytest --impacted --impacted-module=my_package \
        --impacted-git-mode=branch \
        --impacted-base-branch=main                 # branch changes vs main
@@ -94,7 +94,7 @@ That's it. Unaffected tests are automatically skipped.
 
 | Mode | Flag | What it compares |
 |------|------|-----------------|
-| **unstaged** (default) | `--impacted-git-mode=unstaged` | Working directory changes + untracked files |
+| **unstaged** (default) | `--impacted-git-mode=unstaged` | All uncommitted changes (staged and unstaged) + untracked files |
 | **branch** | `--impacted-git-mode=branch` | All commits on current branch vs base branch |
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
@@ -180,7 +180,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
                          ↘ Invalidation patterns → All tests (if your globs match)
 ```
 
-1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
+1. **Git introspection** identifies which files changed (uncommitted edits, staged or not, or a branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
