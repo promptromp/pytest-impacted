@@ -1,4 +1,9 @@
-"""Matchers used for pattern matching and unit-tests."""
+"""Public entry point and composition root for impact analysis.
+
+Assembles the strategy pipeline from the built-ins and any registered
+extensions, then drives it: git state -> changed files -> impacted modules ->
+impacted test files.
+"""
 
 import os
 from collections.abc import Sequence
