@@ -109,7 +109,8 @@ def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str
             file_parts = list(Path(non_pkg_prefix).parts) + module_parts if non_pkg_prefix else module_parts
 
             base = root.joinpath(*file_parts)
-            file_path = base / "__init__.py" if module_info.ispkg else base.with_suffix(".py")
+            # Not with_suffix(): it would truncate at a dot in the final component.
+            file_path = base / "__init__.py" if module_info.ispkg else base.parent / f"{base.name}.py"
 
             if file_path.exists():
                 results[name] = str(file_path.resolve())
