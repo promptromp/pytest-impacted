@@ -1,10 +1,11 @@
 """Git related functions."""
 
+# Load-bearing, not cosmetic: ``Repo`` is only bound when GitPython imports, so
+# postponed annotations are what keep this module importable without it.
 from __future__ import annotations
 import warnings
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 
 try:
@@ -98,41 +99,21 @@ class GitStatus(StrEnum):
                 return cls(status)
 
 
-# Statuses that indicate a file is impactful for test coverage. Deletions count:
-# a removed conftest.py or lockfile still matters to the glob-based strategies,
-# and a test that imported a deleted module should run (and fail) rather than
-# be skipped. Only git's "cannot say" statuses are excluded.
-_IMPACTFUL_STATUSES = (
-    GitStatus.MODIFIED,
-    GitStatus.ADDED,
-    GitStatus.DELETED,
-    GitStatus.RENAMED,
-    GitStatus.COPIED,
-    GitStatus.TYPE_CHANGE,
-    GitStatus.UNMERGED,
-)
+# Every reported change counts, deletions included (a removed conftest.py or
+# lockfile still matters to the glob-based strategies). Only git's "cannot say"
+# statuses are excluded.
+_NON_IMPACTFUL_STATUSES = frozenset({GitStatus.UNKNOWN, GitStatus.PAIRING_BROKEN})
 
 
 class Change:
     """A change to a git repository file."""
 
-    def __init__(
-        self,
-        a_path: str | None = None,
-        b_path: str | None = None,
-        status: GitStatus | None = None,
-    ):
-        self.a_path = a_path
-        self.b_path = b_path
+    def __init__(self, path: str, status: GitStatus | None = None):
+        self.path = path
         self.status = status
 
     def __str__(self) -> str:
-        return f"{self.status}\t{self.name}"
-
-    @property
-    def name(self) -> str | None:
-        """The name of the file."""
-        return self.a_path if self.a_path is not None else self.b_path
+        return f"{self.status}\t{self.path}"
 
 
 class ChangeSet:
@@ -146,34 +127,23 @@ class ChangeSet:
 
     @classmethod
     def from_git_diff_name_status_output(cls, output: str) -> ChangeSet:
-        """Create a ChangeSet from ``git diff --name-status -z`` output.
+        """Create a ChangeSet from ``git diff --name-status -z --no-renames`` output.
 
-        Records are NUL-separated: a status token followed by one path, or by
-        the source and destination paths for a rename/copy (``R100``, ``C85``).
-        ``-z`` matters: without it git C-quotes any path containing non-ASCII,
-        tab, quote or backslash characters (``core.quotePath``), and the quoted
-        string would never match a file on disk.
+        Records are NUL-separated ``status, path`` pairs. ``-z`` matters:
+        without it git C-quotes any path containing non-ASCII, tab, quote or
+        backslash characters (``core.quotePath``), and the quoted string would
+        never match a file on disk. ``--no-renames`` matters too: a rename is
+        then a deletion plus an addition, so no record ever carries two paths.
 
         Example (NULs shown as ``|``)::
 
-            M|setup.py|D|setup.cfg|R100|old.py|new.py|
+            M|setup.py|D|setup.cfg|A|new.py|
         """
-        tokens = iter(output.split("\0"))
-        changes = []
-        for status in tokens:
-            if not status:
-                continue
-            if status.startswith(("R", "C")):
-                a_path, b_path = next(tokens, None) or None, next(tokens, None) or None
-            else:
-                a_path, b_path = next(tokens, None) or None, None
-            changes.append(Change(a_path=a_path, b_path=b_path, status=GitStatus.from_git_diff_name_status(status)))
-        return cls(changes)
-
-
-def without_nones(items: list[Any | None]) -> list[Any]:
-    """Remove all Nones from the list."""
-    return [item for item in items if item is not None]
+        tokens = output.split("\0")
+        if tokens and tokens[-1] == "":
+            tokens.pop()  # the terminator of the final record, not an empty field
+        pairs = zip(tokens[::2], tokens[1::2], strict=False)
+        return cls([Change(path, GitStatus.from_git_diff_name_status(status)) for status, path in pairs])
 
 
 def find_repo(path: str | Path) -> Repo:
@@ -235,6 +205,8 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         return None
 
     repo = find_repo(repo_dir)
+    if repo.bare:
+        raise ValueError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")
 
     match git_mode:
         case GitMode.UNSTAGED:
@@ -261,9 +233,10 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
 
 
 #: ``--name-status -z`` is what :meth:`ChangeSet.from_git_diff_name_status_output`
-#: parses (``-z`` keeps non-ASCII paths unquoted); ``--find-renames`` pins rename
-#: detection so results do not depend on each developer's ``diff.renames``.
-_DIFF_FLAGS = ("--name-status", "-z", "--find-renames")
+#: parses (``-z`` keeps non-ASCII paths unquoted). ``--no-renames`` reports a
+#: rename as a deletion plus an addition — the same paths, without git's
+#: similarity pass and independent of each developer's ``diff.renames`` setting.
+_DIFF_FLAGS = ("--name-status", "-z", "--no-renames")
 
 
 def _name_status_diff(repo: Repo, *args: str) -> ChangeSet:
@@ -276,24 +249,11 @@ def _name_status_diff(repo: Repo, *args: str) -> ChangeSet:
     return ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS, *args))
 
 
-def _collect_paths_for_change(item: Change) -> list[str | None]:
-    """Collect all relevant file paths from a change.
-
-    For renames and copies, both source and destination paths are relevant.
-    For other changes, just the primary name is returned.
-    """
-    if item.status in (GitStatus.RENAMED, GitStatus.COPIED):
-        return [item.a_path, item.b_path]
-    return [item.name]
-
-
 def _impactful_paths(change_set: ChangeSet) -> list[str]:
     """The file paths from *change_set* whose change could affect test outcomes."""
-    paths: list[str | None] = []
-    for item in change_set.changes:
-        if item.status in _IMPACTFUL_STATUSES:
-            paths.extend(_collect_paths_for_change(item))
-    return without_nones(paths)
+    return [
+        change.path for change in change_set.changes if change.path and change.status not in _NON_IMPACTFUL_STATUSES
+    ]
 
 
 def impacted_files_for_unstaged_mode(repo: Repo) -> list[str]:
@@ -305,8 +265,6 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str]:
     against the index (``git diff``), and untracked files. Diffing only one
     of them misses the others.
     """
-    if repo.bare:
-        return []
     staged = _impactful_paths(_name_status_diff(repo, "--cached"))
     unstaged = _impactful_paths(_name_status_diff(repo))
     return [*staged, *unstaged, *_untracked_files(repo)]
@@ -333,8 +291,3 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
         current_ref = repo.head.commit
 
     return _impactful_paths(_name_status_diff(repo, *rev_args(base_branch, current_ref)))
-
-
-def deleted_files_from_diff(change_set: ChangeSet) -> list[str]:
-    """Get a list of deleted files from git diffs."""
-    return without_nones([item.name for item in change_set.changes if item.status == GitStatus.DELETED])
