@@ -36,9 +36,9 @@ class DummyRepo:
         working_tree_dir=None,
     ):
         self.bare = False
-        self.untracked_files = list(untracked_files)
         self.git = MagicMock()
         self.git.diff = MagicMock(side_effect=self._diff)
+        self.git.ls_files = MagicMock(return_value="".join(f"{path}\0" for path in untracked_files))
         self.head = MagicMock()
         self.head.reference = current_branch
         self.working_tree_dir = working_tree_dir or str(Path.cwd())
@@ -93,12 +93,12 @@ def test_find_impacted_files_in_repo_unstaged_dirty_with_untracked_files(mock_re
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_only_deletions(mock_repo):
-    """Test UNSTAGED mode when the only changes are deletions."""
+    """Deletions count: a removed conftest.py or lockfile still impacts tests."""
     mock_repo.return_value = DummyRepo(
         staged=name_status_z(("D", "gone.py")), unstaged=name_status_z(("D", "also_gone.py"))
     )
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
-    assert result is None
+    assert result == ["also_gone.py", "gone.py"]
 
 
 @patch("pytest_impacted.git.Repo")
@@ -292,8 +292,8 @@ def test_impacted_files_for_unstaged_mode_with_deleted_files(mock_repo):
     repo = DummyRepo(unstaged=name_status_z(("M", "file1.py"), ("D", "deleted.py")))
     result = git.impacted_files_for_unstaged_mode(repo)
 
-    # Should only include modified and added files, not deleted
-    assert result == ["file1.py"]
+    # Deletions count too: a removed conftest.py or lockfile still impacts tests.
+    assert result == ["file1.py", "deleted.py"]
 
 
 @patch("pytest_impacted.git.Repo")
@@ -304,8 +304,8 @@ def test_impacted_files_for_branch_mode_with_deleted_files(mock_repo):
     repo = DummyRepo(diff_branch_result=diff_output)
     result = git.impacted_files_for_branch_mode(repo, "main")
 
-    # Should only include modified and added files, not deleted
-    assert set(result) == {"modified.py", "added.py"}
+    # Deletions count too: a removed conftest.py or lockfile still impacts tests.
+    assert result == ["modified.py", "deleted.py", "added.py"]
 
 
 def test_git_status_enum_values():
@@ -422,13 +422,13 @@ def test_changeset_str_multiple_changes():
         (git.GitStatus.COPIED, True),
         (git.GitStatus.TYPE_CHANGE, True),
         (git.GitStatus.UNMERGED, True),
-        (git.GitStatus.DELETED, False),
+        (git.GitStatus.DELETED, True),
         (git.GitStatus.UNKNOWN, False),
         (git.GitStatus.PAIRING_BROKEN, False),
     ],
 )
 def test_impactful_statuses(status, impactful):
-    """Anything that leaves a (possibly different) file on disk counts; a deleted file cannot be analyzed."""
+    """Every real change counts, deletions included; only git's "cannot say" statuses are excluded."""
     change_set = git.ChangeSet([git.Change(a_path="a.py", status=status)])
     assert (git._impactful_paths(change_set) == ["a.py"]) is impactful
 
@@ -462,16 +462,6 @@ def test_git_status_from_git_diff_name_status_copy_and_rename():
     # Test rename with score
     assert git.GitStatus.from_git_diff_name_status("R100") == git.GitStatus.RENAMED
     assert git.GitStatus.from_git_diff_name_status("R75") == git.GitStatus.RENAMED
-
-
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_unstaged_mode_staged_then_removed_from_disk(mock_repo):
-    """Added in the index view, deleted in the worktree view: nothing left to analyze."""
-    repo = DummyRepo(
-        staged=name_status_z(("A", "new.py"), ("M", "kept.py")),
-        unstaged=name_status_z(("D", "new.py")),
-    )
-    assert git.impacted_files_for_unstaged_mode(repo) == ["kept.py"]
 
 
 @patch("pytest_impacted.git.Repo")
@@ -785,13 +775,21 @@ def test_unstaged_mode_sees_conflicted_files(real_repo):
     assert unstaged(root) == ["pkg/a.py"]
 
 
-def test_unstaged_mode_ignores_file_staged_then_removed_from_disk(real_repo):
-    repo, root = real_repo
-    (root / "pkg" / "new.py").write_text("y = 1\n")
-    repo.git.add("pkg/new.py")
-    (root / "pkg" / "new.py").unlink()
+def test_unstaged_mode_sees_deleted_file(real_repo):
+    """A deleted conftest.py or lockfile must still reach the strategies."""
+    _repo, root = real_repo
+    (root / "pkg" / "a.py").unlink()
 
-    assert unstaged(root) is None
+    assert unstaged(root) == ["pkg/a.py"]
+
+
+def test_unstaged_mode_sees_untracked_file_with_quote_in_name(real_repo):
+    """GitPython's untracked-file parser chokes on such names when core.quotePath is off."""
+    repo, root = real_repo
+    repo.git.config("core.quotePath", "false")
+    (root / "pkg" / 'wé"ird.py').write_text("z = 1\n")
+
+    assert unstaged(root) == ['pkg/wé"ird.py']
 
 
 def test_unstaged_mode_keeps_non_ascii_paths_unquoted(real_repo):

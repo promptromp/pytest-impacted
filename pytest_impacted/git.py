@@ -1,5 +1,6 @@
 """Git related functions."""
 
+from __future__ import annotations
 import warnings
 from enum import StrEnum
 from pathlib import Path
@@ -84,7 +85,7 @@ class GitStatus(StrEnum):
     PAIRING_BROKEN = "B"
 
     @classmethod
-    def from_git_diff_name_status(cls, status: str) -> "GitStatus":
+    def from_git_diff_name_status(cls, status: str) -> GitStatus:
         """Create a GitStatus from a git diff name status."""
         match status:
             case _ as status if status.startswith("R") and status[1:].isdigit():
@@ -97,10 +98,14 @@ class GitStatus(StrEnum):
                 return cls(status)
 
 
-# Statuses that indicate a file is impactful for test coverage.
+# Statuses that indicate a file is impactful for test coverage. Deletions count:
+# a removed conftest.py or lockfile still matters to the glob-based strategies,
+# and a test that imported a deleted module should run (and fail) rather than
+# be skipped. Only git's "cannot say" statuses are excluded.
 _IMPACTFUL_STATUSES = (
     GitStatus.MODIFIED,
     GitStatus.ADDED,
+    GitStatus.DELETED,
     GitStatus.RENAMED,
     GitStatus.COPIED,
     GitStatus.TYPE_CHANGE,
@@ -140,7 +145,7 @@ class ChangeSet:
         return "\n".join(str(change) for change in self.changes)
 
     @classmethod
-    def from_git_diff_name_status_output(cls, output: str) -> "ChangeSet":
+    def from_git_diff_name_status_output(cls, output: str) -> ChangeSet:
         """Create a ChangeSet from ``git diff --name-status -z`` output.
 
         Records are NUL-separated: a status token followed by one path, or by
@@ -171,7 +176,7 @@ def without_nones(items: list[Any | None]) -> list[Any]:
     return [item for item in items if item is not None]
 
 
-def find_repo(path: str | Path) -> "Repo":
+def find_repo(path: str | Path) -> Repo:
     """Find the git repository by searching the given path and its parent directories.
 
     Uses ``search_parent_directories=True`` so the caller does not need to be
@@ -244,16 +249,15 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         case _:
             raise ValueError(f"Invalid git mode: {git_mode}")
 
-    impacted_files = sorted(set(impacted_files))
     if not impacted_files:
         return None
 
     # Normalize git-root-relative paths to working-dir-relative paths
-    if repo.working_tree_dir is None:
-        return impacted_files
-    git_root = Path(repo.working_tree_dir).resolve()
-    working_dir = Path(repo_dir).resolve()
-    return normalize_git_paths(impacted_files, git_root, working_dir)
+    if repo.working_tree_dir is not None:
+        git_root = Path(repo.working_tree_dir).resolve()
+        working_dir = Path(repo_dir).resolve()
+        impacted_files = normalize_git_paths(impacted_files, git_root, working_dir)
+    return sorted(set(impacted_files))
 
 
 #: ``--name-status -z`` is what :meth:`ChangeSet.from_git_diff_name_status_output`
@@ -303,13 +307,20 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str]:
     """
     if repo.bare:
         return []
-    staged = _name_status_diff(repo, "--cached")
-    unstaged = _name_status_diff(repo)
-    # A file staged and then removed from disk shows as added/modified in the
-    # index view but deleted in the worktree view; nothing is left to analyze.
-    gone = set(deleted_files_from_diff(unstaged))
-    staged_paths = [path for path in _impactful_paths(staged) if path not in gone]
-    return [*staged_paths, *_impactful_paths(unstaged), *repo.untracked_files]
+    staged = _impactful_paths(_name_status_diff(repo, "--cached"))
+    unstaged = _impactful_paths(_name_status_diff(repo))
+    return [*staged, *unstaged, *_untracked_files(repo)]
+
+
+def _untracked_files(repo: Repo) -> list[str]:
+    """Untracked, non-ignored files, read with ``-z`` so paths arrive verbatim.
+
+    GitPython's ``Repo.untracked_files`` parses the quoted ``git status``
+    format and can raise on some non-ASCII names; ``ls-files -z`` needs no
+    unquoting.
+    """
+    output = repo.git.ls_files("--others", "--exclude-standard", "-z")
+    return [path for path in output.split("\0") if path]
 
 
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
