@@ -25,11 +25,22 @@ def path_to_package_name(path: Path | str) -> str:
     return ".".join(Path(normalized).parts)
 
 
-def find_non_package_prefix(fs_path: str) -> tuple[str, str]:
+def canonical_root(root_dir: str | Path | None) -> Path:
+    """Resolve *root_dir* (default: the current directory) to one canonical absolute path.
+
+    Every discovered module path and every changed-file path is built from this
+    single value, so the two always compare equal — including when the project
+    is reached through a symlink.
+    """
+    return Path(root_dir if root_dir is not None else Path.cwd()).resolve()
+
+
+def find_non_package_prefix(fs_path: str, root: Path) -> tuple[str, str]:
     """Split a filesystem path into non-package prefix and importable package root.
 
     Directories that do not contain ``__init__.py`` are treated as non-package
-    path prefixes (e.g. the ``src/`` in a src-layout project).
+    path prefixes (e.g. the ``src/`` in a src-layout project). *fs_path* is
+    relative to *root*.
 
     Returns:
         A ``(prefix, importable_root)`` tuple.
@@ -41,7 +52,7 @@ def find_non_package_prefix(fs_path: str) -> tuple[str, str]:
     parts = Path(fs_path).parts
     for i in range(len(parts)):
         candidate = Path(*parts[: i + 1])
-        if (candidate / "__init__.py").exists():
+        if (root / candidate / "__init__.py").exists():
             if i == 0:
                 return "", fs_path
             prefix = str(Path(*parts[:i]))
@@ -51,25 +62,22 @@ def find_non_package_prefix(fs_path: str) -> tuple[str, str]:
     return "", fs_path
 
 
-def iter_namespace(ns_package: str, *, scan_path: str | None = None) -> list[pkgutil.ModuleInfo]:
+def iter_namespace(ns_package: str, *, scan_path: str) -> list[pkgutil.ModuleInfo]:
     """Iterate over all submodules of a namespace package.
 
-    :param ns_package: dotted package name
-    :param scan_path: optional filesystem path to scan instead of deriving from *ns_package*.
-        When provided, the filesystem search uses *scan_path* while module name
-        prefixes are still derived from *ns_package*.
+    :param ns_package: dotted package name, used only for the module-name prefix
+    :param scan_path: absolute filesystem path to scan
     """
     logger.debug("Iterating over namespace for package: %s", ns_package)
 
-    path = [scan_path or package_name_to_path(ns_package)]
-    module_infos = list(pkgutil.iter_modules(path=path, prefix=f"{ns_package}."))
+    module_infos = list(pkgutil.iter_modules(path=[scan_path], prefix=f"{ns_package}."))
 
     logger.debug("Materialized module_infos: %s", module_infos)
 
     return module_infos
 
 
-def _discover_via_pkgutil(package: str) -> dict[str, str]:
+def _discover_via_pkgutil(package: str, root: Path) -> dict[str, str]:
     """Discover submodules using pkgutil (requires __init__.py in directories).
 
     Handles src-layout projects by detecting non-package prefix directories
@@ -77,54 +85,53 @@ def _discover_via_pkgutil(package: str) -> dict[str, str]:
     in filesystem paths.
     """
     fs_path = package_name_to_path(package)
-    non_pkg_prefix, importable_path = find_non_package_prefix(fs_path)
+    non_pkg_prefix, importable_path = find_non_package_prefix(fs_path, root)
     importable_name = path_to_package_name(importable_path)
-    return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix)
+    return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix, root)
 
 
-def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str) -> dict[str, str]:
+def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str, root: Path) -> dict[str, str]:
     """Recursive implementation of pkgutil-based submodule discovery.
 
     Args:
         module_name: Dotted importable module name used as prefix (e.g. ``"predicated"``).
-        scan_path: Filesystem path to scan (e.g. ``"src/predicated"``).
+        scan_path: Path to scan, relative to *root* (e.g. ``"src/predicated"``).
         non_pkg_prefix: Non-package path prefix to prepend when constructing file paths
             (e.g. ``"src"``).  Empty string when there is no prefix.
+        root: Project root every path is resolved against.
     """
     results: dict[str, str] = {}
-    for module_info in iter_namespace(module_name, scan_path=scan_path):
+    for module_info in iter_namespace(module_name, scan_path=str(root / scan_path)):
         name = module_info.name
         if name not in results:
             # Construct file path: prepend the non-package prefix to module parts
             module_parts = name.split(".")
             file_parts = list(Path(non_pkg_prefix).parts) + module_parts if non_pkg_prefix else module_parts
 
-            if module_info.ispkg:
-                file_path = os.path.join(*file_parts, "__init__.py")
-            else:
-                file_path = os.path.join(*file_parts) + ".py"
+            base = root.joinpath(*file_parts)
+            # Not with_suffix(): it would truncate at a dot in the final component.
+            file_path = base / "__init__.py" if module_info.ispkg else base.parent / f"{base.name}.py"
 
-            abs_path = os.path.abspath(file_path)
-            if os.path.exists(abs_path):
-                results[name] = abs_path
+            if file_path.exists():
+                results[name] = str(file_path.resolve())
             else:
-                logger.warning("Module %s not found at expected path %s", name, abs_path)
+                logger.warning("Module %s not found at expected path %s", name, file_path)
 
             if module_info.ispkg:
                 sub_scan_path = os.path.join(scan_path, module_parts[-1])
-                results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix))
+                results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root))
 
     return results
 
 
-def _discover_via_filesystem(package: str) -> dict[str, str]:
+def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
     """Discover submodules by walking the filesystem (no __init__.py required).
 
     Uses Path.rglob to find all .py files regardless of whether intermediate
     directories contain __init__.py. This matches pytest's own filesystem-based
     test discovery behavior.
     """
-    base_path = Path(package_name_to_path(package))
+    base_path = root / package_name_to_path(package)
     if not base_path.is_dir():
         return {}
 
@@ -136,14 +143,20 @@ def _discover_via_filesystem(package: str) -> dict[str, str]:
         else:
             module_name = ".".join(rel.with_suffix("").parts)
 
-        abs_path = str(py_file.resolve())
-        results[module_name] = abs_path
+        results[module_name] = str(py_file.resolve())
 
     return results
 
 
 @lru_cache
-def discover_submodules(package: str, require_init: bool = True) -> dict[str, str]:
+def _discover_submodules(package: str, require_init: bool, root: Path) -> dict[str, str]:
+    """Cached discovery, keyed on the canonical *root* so two projects cannot share an entry."""
+    if require_init:
+        return _discover_via_pkgutil(package, root)
+    return _discover_via_filesystem(package, root)
+
+
+def discover_submodules(package: str, require_init: bool = True, root_dir: str | Path | None = None) -> dict[str, str]:
     """Discover all submodules by filesystem scanning, without importing them.
 
     This avoids executing module-level code (e.g. gevent monkey patching,
@@ -158,25 +171,41 @@ def discover_submodules(package: str, require_init: bool = True) -> dict[str, st
             __init__.py in directories (correct for importable Python packages).
             If False, use filesystem walking which finds all .py files
             regardless of __init__.py (matching pytest's discovery behavior).
+        root_dir: Project root *package* is relative to. Defaults to the current
+            working directory.
 
     Returns:
         Dict mapping fully-qualified module name -> absolute file path.
     """
-    if require_init:
-        return _discover_via_pkgutil(package)
-    else:
-        return _discover_via_filesystem(package)
+    return _discover_submodules(package, require_init, canonical_root(root_dir))
 
 
-def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package: str | None = None):
+def clear_discovery_cache() -> None:
+    """Drop every cached discovery result (see :func:`discover_submodules`)."""
+    _discover_submodules.cache_clear()
+
+
+# The cache moved to the private inner function when ``root_dir`` was added, but
+# ``discover_submodules`` is part of the public surface — keep the old call working.
+discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: ignore[attr-defined]
+
+
+def resolve_files_to_modules(
+    filenames: list[str],
+    ns_module: str,
+    tests_package: str | None = None,
+    root_dir: str | Path | None = None,
+):
     """Resolve file paths to their corresponding Python module names.
 
     Uses filesystem-based discovery (no imports) to build the module mapping.
+    *filenames* are interpreted relative to *root_dir*, as git reports them.
     """
-    submodules = discover_submodules(ns_module, require_init=True)
+    root = canonical_root(root_dir)
+    submodules = discover_submodules(ns_module, require_init=True, root_dir=root)
     if tests_package:
         logger.debug("Adding modules from tests_package: %s", tests_package)
-        test_submodules = discover_submodules(tests_package, require_init=False)
+        test_submodules = discover_submodules(tests_package, require_init=False, root_dir=root)
         submodules = {**submodules, **test_submodules}
 
     # Build reverse mapping: absolute file path -> module name
@@ -187,10 +216,10 @@ def resolve_files_to_modules(filenames: list[str], ns_module: str, tests_package
         if not file.endswith(".py"):
             continue
 
-        abs_path = os.path.abspath(file)
+        abs_path = str((root / file).resolve())
         if abs_path in path_to_module:
             resolved_modules.append(path_to_module[abs_path])
-        elif not os.path.exists(abs_path):
+        elif not Path(abs_path).exists():
             logger.debug("File %s no longer exists; nothing to resolve", file)
         else:
             logger.warning(
@@ -205,14 +234,16 @@ def resolve_modules_to_files(
     modules: list[str],
     ns_module: str,
     tests_package: str | None = None,
+    root_dir: str | Path | None = None,
 ) -> list[str]:
     """Resolve module names to their corresponding file paths.
 
     Uses filesystem-based discovery (no imports) to find module files.
     """
-    submodules = discover_submodules(ns_module, require_init=True)
+    root = canonical_root(root_dir)
+    submodules = discover_submodules(ns_module, require_init=True, root_dir=root)
     if tests_package:
-        submodules = {**submodules, **discover_submodules(tests_package, require_init=False)}
+        submodules = {**submodules, **discover_submodules(tests_package, require_init=False, root_dir=root)}
 
     result = []
     for module_name in modules:

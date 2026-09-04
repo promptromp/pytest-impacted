@@ -101,7 +101,7 @@ def test_get_impacted_tests_success_with_tests_dir(
     assert result == ["test_file1.py", "test_file2.py"]
     # Verify tests_package was derived from tests_dir and passed through
     mock_resolve_files_to_modules.assert_called_once_with(
-        ["file1.py", "file2.py"], ns_module="project_ns", tests_package="tests"
+        ["file1.py", "file2.py"], ns_module="project_ns", tests_package="tests", root_dir=Path(".")
     )
 
 
@@ -204,7 +204,9 @@ def test_get_impacted_tests_success_without_tests_dir(
     )
 
     assert result == ["test_file1.py"]
-    mock_resolve_files_to_modules.assert_called_once_with(["file1.py"], ns_module="project_ns", tests_package=None)
+    mock_resolve_files_to_modules.assert_called_once_with(
+        ["file1.py"], ns_module="project_ns", tests_package=None, root_dir=Path(".")
+    )
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")

@@ -1,6 +1,7 @@
 """Graph analysis functionality."""
 
 import logging
+from pathlib import Path
 
 import networkx as nx
 
@@ -77,17 +78,18 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
-def build_dep_tree(package: str, tests_package: str | None = None) -> nx.DiGraph:
+def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str | Path | None = None) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
     Scans the package directory to find modules, reads their source files,
     and parses imports via AST — without executing any module-level code.
+    Package paths are resolved against *root_dir* (default: the current directory).
     """
-    submodules = discover_submodules(package, require_init=True)
+    submodules = discover_submodules(package, require_init=True, root_dir=root_dir)
 
     if tests_package:
         logger.debug("Adding modules from tests_package: %s", tests_package)
-        test_submodules = discover_submodules(tests_package, require_init=False)
+        test_submodules = discover_submodules(tests_package, require_init=False, root_dir=root_dir)
         submodules = {**submodules, **test_submodules}
 
     logger.debug("Building dependency tree for %d submodules", len(submodules))

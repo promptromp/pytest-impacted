@@ -1,6 +1,8 @@
 """CLI entrypoints for pytest-impacted."""
 
 import logging
+import os
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -47,14 +49,12 @@ def configure_logging(verbose: bool) -> None:
 @click.option(
     "--module",
     required=True,
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    help="Namespace (top-level) module for package we are testing.",
+    help="Namespace (top-level) module for package we are testing, relative to --root-dir.",
 )
 @click.option(
     "--tests-dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help=(
-        "Directory containing the unit-test files. If not specified, "
+        "Directory containing the unit-test files, relative to --root-dir. If not specified, "
         + "tests will only be found under namespace module directory."
     ),
 )
@@ -96,6 +96,14 @@ def impacted_tests_cli(
         click.secho("  disable-ext: {}".format(", ".join(disable_ext)), fg="blue", bold=True, err=True)
 
     configure_logging(verbose=verbose)
+
+    # Paths are relative to --root-dir, which need not be the working directory.
+    # Dotted names are accepted here as they are by discover_submodules.
+    for option, value in (("--module", module), ("--tests-dir", tests_dir)):
+        if value and not (Path(root_dir) / value.replace(".", os.sep)).is_dir():
+            raise click.BadParameter(
+                f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=option
+            )
 
     strategy = build_strategy_with_extensions(
         watch_dep_files=not no_dep_files,

@@ -20,6 +20,7 @@ from pytest_impacted.strategies import (
     get_default_strategies,
 )
 from pytest_impacted.traversal import (
+    canonical_root,
     path_to_package_name,
     resolve_files_to_modules,
     resolve_modules_to_files,
@@ -117,7 +118,9 @@ def get_impacted_tests(
         session,
     )
 
-    impacted_modules = resolve_files_to_modules(impacted_files, ns_module=ns_module, tests_package=tests_package)
+    impacted_modules = resolve_files_to_modules(
+        impacted_files, ns_module=ns_module, tests_package=tests_package, root_dir=root_dir
+    )
     if not impacted_modules:
         notify(
             f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
@@ -129,7 +132,7 @@ def get_impacted_tests(
     # The result is LRU-cached and must not be mutated, so we hand each run a
     # shallow copy. Strategies that implement enrich_dep_tree() mutate the
     # copy, leaving the cached base graph pristine for subsequent runs.
-    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package).copy()
+    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir)).copy()
 
     # Enrichment phase — runs before setup so that setup and find_impacted_tests
     # both see the final graph (with any synthetic edges added by extensions).
@@ -178,6 +181,7 @@ def get_impacted_tests(
         impacted_test_modules,
         ns_module=ns_module,
         tests_package=tests_package,
+        root_dir=root_dir,
     )
     if not impacted_test_files:
         warn(
