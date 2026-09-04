@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from git import Repo
 
 from pytest_impacted import git
 from pytest_impacted.git import find_repo, normalize_git_paths
@@ -24,12 +25,12 @@ class DummyRepo:
         self._diff_branch_result = diff_branch_result or ""
         self.untracked_files = untracked_files or []
         self.index = MagicMock()
-        self.index.diff = MagicMock(return_value=self._diff_result)
         self.git = MagicMock()
         self.git.diff = MagicMock(return_value=self._diff_branch_result)
-        self.commit = MagicMock()
         self.head = MagicMock()
         self.head.reference = current_branch
+        # UNSTAGED mode diffs HEAD against the working tree so staged edits count.
+        self.head.commit.diff = MagicMock(return_value=self._diff_result)
         self.working_tree_dir = working_tree_dir or str(Path.cwd())
 
     def is_dirty(self, **kwargs):
@@ -760,3 +761,79 @@ def test_find_impacted_files_monorepo_files_outside_cwd(mock_repo):
 
     assert "src/module.py" in result
     assert "/monorepo/frontend/app.js" in result
+
+
+# --- Real-repository tests for UNSTAGED mode -------------------------------------
+#
+# The mocked tests above pin the plumbing; these exercise a real git repository so
+# that a regression in *which* git comparison is used (index vs HEAD vs worktree)
+# cannot hide behind a mock.
+
+
+@pytest.fixture
+def real_repo(tmp_path):
+    """A committed repository with one package file, returning ``(repo, root)``."""
+    repo = Repo.init(tmp_path)
+    with repo.config_writer() as cfg:
+        cfg.set_value("user", "email", "test@example.com")
+        cfg.set_value("user", "name", "Test")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "a.py").write_text("x = 1\n")
+    repo.index.add(["pkg/__init__.py", "pkg/a.py"])
+    repo.index.commit("init")
+    return repo, tmp_path
+
+
+def test_unstaged_mode_sees_staged_only_modification(real_repo):
+    """A modification that has been ``git add``-ed but not committed is still uncommitted work."""
+    repo, root = real_repo
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    repo.git.add("pkg/a.py")
+
+    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) == ["pkg/a.py"]
+
+
+def test_unstaged_mode_sees_staged_new_file(real_repo):
+    repo, root = real_repo
+    (root / "pkg" / "new.py").write_text("y = 1\n")
+    repo.git.add("pkg/new.py")
+
+    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) == ["pkg/new.py"]
+
+
+def test_unstaged_mode_reports_file_edited_after_staging_once(real_repo):
+    repo, root = real_repo
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    repo.git.add("pkg/a.py")
+    (root / "pkg" / "a.py").write_text("x = 3\n")
+
+    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) == ["pkg/a.py"]
+
+
+def test_unstaged_mode_still_sees_plain_worktree_edit_and_untracked(real_repo):
+    _repo, root = real_repo
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    (root / "pkg" / "untracked.py").write_text("z = 1\n")
+
+    result = git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None)
+
+    assert result == ["pkg/a.py", "pkg/untracked.py"]
+
+
+def test_unstaged_mode_clean_real_repo_returns_none(real_repo):
+    _repo, root = real_repo
+    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) is None
+
+
+def test_unstaged_mode_repo_without_commits_treats_staged_files_as_added(tmp_path):
+    """Before the first commit there is no HEAD to diff against; everything staged is new."""
+    repo = Repo.init(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "b.py").write_text("y = 1\n")
+    repo.git.add("a.py")
+
+    result = git.find_impacted_files_in_repo(tmp_path, git.GitMode.UNSTAGED, None)
+
+    assert result == ["a.py", "b.py"]

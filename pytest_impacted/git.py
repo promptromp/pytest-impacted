@@ -302,13 +302,30 @@ def _collect_paths_for_change(item: Change) -> list[str | None]:
     return [item.name]
 
 
+def _uncommitted_changes(repo: Repo) -> ChangeSet:
+    """Every uncommitted change — staged or not — relative to the last commit.
+
+    ``repo.index.diff(None)`` only compares the index to the working tree, so a
+    change that has been ``git add``-ed vanishes from it. Diffing HEAD against
+    the working tree (``commit.diff(None)``) reports staged and unstaged edits
+    alike, each file once, with change types oriented from HEAD to worktree.
+
+    Before the first commit there is no HEAD to diff against; everything in
+    the index is then a new file.
+    """
+    try:
+        head = repo.head.commit
+    except ValueError:
+        return ChangeSet([Change(a_path=str(path), status=GitStatus.ADDED) for path, _stage in repo.index.entries])
+    return ChangeSet.from_diff_objs(head.diff(None))
+
+
 def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     """Get the impacted files when in the UNSTAGED git mode."""
     if not repo.is_dirty(untracked_files=True):
         return None
 
-    diffs = repo.index.diff(None)
-    change_set = ChangeSet.from_diff_objs(diffs)
+    change_set = _uncommitted_changes(repo)
 
     impacted_files = []
     for item in change_set.changes:
@@ -319,7 +336,7 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
     # potentially impactful for unit-test coverage.
     impacted_files.extend(repo.untracked_files)
 
-    return without_nones(impacted_files) or None
+    return sorted(set(without_nones(impacted_files))) or None
 
 
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:

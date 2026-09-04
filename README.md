@@ -94,7 +94,7 @@ That's it. Unaffected tests are automatically skipped.
 
 | Mode | Flag | What it compares |
 |------|------|-----------------|
-| **unstaged** (default) | `--impacted-git-mode=unstaged` | Working directory changes + untracked files |
+| **unstaged** (default) | `--impacted-git-mode=unstaged` | All uncommitted changes (staged and unstaged) + untracked files |
 | **branch** | `--impacted-git-mode=branch` | All commits on current branch vs base branch |
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
