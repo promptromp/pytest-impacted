@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache
-from pytest_impacted.traversal import discover_submodules
+from pytest_impacted.traversal import _discover_submodules, discover_submodules
 
 
 class TestCaching:
@@ -28,7 +28,7 @@ class TestCaching:
         result2 = cached_build_dep_tree("mypackage", "tests")
 
         # build_dep_tree should only be called once due to caching
-        mock_build_tree.assert_called_once_with("mypackage", tests_package="tests")
+        mock_build_tree.assert_called_once_with("mypackage", tests_package="tests", root_dir=None)
 
         # Both results should be the same
         assert result1 is result2
@@ -47,8 +47,8 @@ class TestCaching:
 
         # build_dep_tree should be called twice with different parameters
         assert mock_build_tree.call_count == 2
-        mock_build_tree.assert_any_call("mypackage", tests_package="tests")
-        mock_build_tree.assert_any_call("mypackage", tests_package="other_tests")
+        mock_build_tree.assert_any_call("mypackage", tests_package="tests", root_dir=None)
+        mock_build_tree.assert_any_call("mypackage", tests_package="other_tests", root_dir=None)
 
         # Results should be different
         assert result1 is mock_dep_tree1
@@ -85,19 +85,29 @@ class TestCaching:
         result2 = cached_build_dep_tree("mypackage", None)
 
         # Should only call build_dep_tree once
-        mock_build_tree.assert_called_once_with("mypackage", tests_package=None)
+        mock_build_tree.assert_called_once_with("mypackage", tests_package=None, root_dir=None)
         assert result1 is result2
 
     def test_clear_dep_tree_cache_also_clears_discover_submodules(self):
         """Test that clear_dep_tree_cache also clears the discover_submodules cache."""
-        # Populate the discover_submodules cache
+        # Populate the discovery cache
         discover_submodules("pytest_impacted")
-        cache_info_before = discover_submodules.cache_info()
-        assert cache_info_before.currsize > 0
+        assert _discover_submodules.cache_info().currsize > 0
 
         # Clear caches
         clear_dep_tree_cache()
 
-        # discover_submodules cache should also be cleared
-        cache_info_after = discover_submodules.cache_info()
-        assert cache_info_after.currsize == 0
+        # the discovery cache should also be cleared
+        assert _discover_submodules.cache_info().currsize == 0
+
+    @patch("pytest_impacted.strategies.build_dep_tree")
+    def test_same_package_in_two_roots_is_not_shared(self, mock_build_tree, tmp_path):
+        """The root is part of the cache key, so two projects in one process cannot collide."""
+        mock_build_tree.side_effect = [MagicMock(), MagicMock()]
+        first, second = tmp_path / "a", tmp_path / "b"
+
+        result1 = cached_build_dep_tree("mypackage", None, first)
+        result2 = cached_build_dep_tree("mypackage", None, second)
+
+        assert mock_build_tree.call_count == 2
+        assert result1 is not result2

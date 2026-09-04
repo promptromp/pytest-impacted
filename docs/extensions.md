@@ -198,7 +198,7 @@ The dependency graph uses inverted edge direction: edges point from imported mod
 
 Beyond `resolve_impacted_tests`, two additional helpers are exported from the package root for extensions that need to do their own file or import analysis:
 
-- **`discover_submodules(package, require_init=True)`** — walks a Python package and returns a `{module_name: file_path}` dict. Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout, namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files. This is the right primitive for any extension that needs to scan the full source tree.
+- **`discover_submodules(package, require_init=True, root_dir=None)`** — walks a Python package and returns a `{module_name: file_path}` dict of absolute paths. Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout, namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files, and pass the `root_dir` your hook received so the scan does not depend on the working directory. This is the right primitive for any extension that needs to scan the full source tree.
 
 - **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so filter the list against `discover_submodules()` the way `build_dep_tree()` does before treating an entry as a module. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`.
 
@@ -219,7 +219,7 @@ class MyScanningStrategy(ImpactStrategy):
 ```
 
 !!! tip
-    `discover_submodules` is LRU-cached by `(package, require_init)` so calling it multiple times within a single pytest run is cheap. The cache is cleared by `clear_dep_tree_cache()` alongside the dependency graph cache.
+    `discover_submodules` is LRU-cached by `(package, require_init, root_dir)` so calling it multiple times within a single pytest run is cheap, and two projects analyzed in one process cannot collide. The cache is cleared by `clear_dep_tree_cache()` alongside the dependency graph cache.
 
 ## Lifecycle hooks
 

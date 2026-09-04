@@ -1,5 +1,6 @@
 import os
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -209,7 +210,7 @@ def pytest_collection_modifyitems(session, config, items):
     impacted_tests_dir = get_option("impacted_tests_dir")
     no_dep_files = get_option("no_impacted_dep_files")
     invalidate_all = get_option("impacted_invalidate_all") or []
-    root_dir = config.rootdir
+    root_dir = config.rootpath
 
     disabled_ext = get_option("impacted_disable_ext") or []
     ext_config = _collect_ext_config(config)
@@ -267,30 +268,31 @@ def validate_config(config: Config):
     if get_option("impacted_git_mode") == GitMode.BRANCH and not get_option("impacted_base_branch"):
         raise UsageError("No base branch specified. Please specify a base branch using --impacted-base-branch.")
 
+    root_dir = config.rootpath
     module_name = get_option("impacted_module")
     assert module_name is not None  # guarded by the check above
-    validate_module(module_name)
+    validate_module(module_name, root_dir)
 
     tests_dir = get_option("impacted_tests_dir")
     if tests_dir:
-        validate_tests_dir(tests_dir)
+        validate_tests_dir(tests_dir, root_dir)
 
     base_branch = get_option("impacted_base_branch")
     if get_option("impacted_git_mode") == GitMode.BRANCH and base_branch:
-        validate_base_branch(base_branch, str(config.rootdir))  # type: ignore[attr-defined]
+        validate_base_branch(base_branch, str(config.rootpath))
 
 
-def validate_module(module_name: str) -> None:
-    """Validate that --impacted-module refers to a discoverable Python package."""
+def validate_module(module_name: str, root_dir: Path) -> None:
+    """Validate that --impacted-module refers to a Python package under *root_dir*."""
     module_dir = module_name.replace(".", os.sep)
-    if os.path.isdir(module_dir):
+    if (root_dir / module_dir).is_dir():
         return
 
     # The directory doesn't exist — try to give a helpful suggestion
     if "-" in module_name:
         suggestion = module_name.replace("-", "_")
         suggestion_dir = suggestion.replace(".", os.sep)
-        if os.path.isdir(suggestion_dir):
+        if (root_dir / suggestion_dir).is_dir():
             raise UsageError(
                 f"Module '{module_name}' not found. Python module names use underscores, not hyphens. "
                 f"Did you mean: --impacted-module={suggestion}"
@@ -298,15 +300,15 @@ def validate_module(module_name: str) -> None:
 
     # Check for src-layout: module might be under src/
     src_dir = os.path.join("src", module_dir)
-    if os.path.isdir(src_dir):
+    if (root_dir / src_dir).is_dir():
         raise UsageError(
             f"Module '{module_name}' not found in the current directory, but found at '{src_dir}'. "
             f"For src-layout projects, use: --impacted-module=src/{module_dir}"
         )
 
     raise UsageError(
-        f"Module '{module_name}' not found (no '{module_dir}/' directory in the current working directory). "
-        f"Make sure --impacted-module is a valid Python package name and you are running from the project root."
+        f"Module '{module_name}' not found (no '{module_dir}/' directory under '{root_dir}'). "
+        f"Make sure --impacted-module is a valid Python package name relative to the pytest rootdir."
     )
 
 
@@ -322,11 +324,12 @@ def _collect_ext_config(config: Config) -> dict[str, Any]:
     return ext_config
 
 
-def validate_tests_dir(tests_dir: str) -> None:
-    """Validate that --impacted-tests-dir refers to an existing directory."""
-    if not os.path.isdir(tests_dir):
+def validate_tests_dir(tests_dir: str, root_dir: Path) -> None:
+    """Validate that --impacted-tests-dir refers to a directory under *root_dir*."""
+    if not (root_dir / tests_dir).is_dir():
         raise UsageError(
-            f"Tests directory '{tests_dir}' does not exist. Please check the path passed to --impacted-tests-dir."
+            f"Tests directory '{tests_dir}' does not exist under '{root_dir}'. "
+            f"Please check the path passed to --impacted-tests-dir."
         )
 
 

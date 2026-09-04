@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -131,29 +132,29 @@ def test_validate_config_branch_mode_missing_base(pytestconfig):
 def testvalidate_module_hyphen_suggests_underscore():
     """Test that a hyphenated module name suggests the underscore version."""
     with pytest.raises(pytest.UsageError, match="Did you mean: --impacted-module=pytest_impacted"):
-        validate_module("pytest-impacted")
+        validate_module("pytest-impacted", Path.cwd())
 
 
 def testvalidate_module_nonexistent():
     """Test that a completely unknown module gives a helpful error."""
     with pytest.raises(pytest.UsageError, match="Module 'doesnotexist' not found"):
-        validate_module("doesnotexist")
+        validate_module("doesnotexist", Path.cwd())
 
 
 def testvalidate_module_valid():
     """Test that a valid module name passes validation."""
-    validate_module("pytest_impacted")  # Should not raise
+    validate_module("pytest_impacted", Path.cwd())  # Should not raise
 
 
 def testvalidate_tests_dir_nonexistent():
     """Test that a non-existent tests directory gives a helpful error."""
     with pytest.raises(pytest.UsageError, match="Tests directory 'nonexistent_dir' does not exist"):
-        validate_tests_dir("nonexistent_dir")
+        validate_tests_dir("nonexistent_dir", Path.cwd())
 
 
 def testvalidate_tests_dir_valid():
     """Test that a valid tests directory passes validation."""
-    validate_tests_dir("tests")  # Should not raise
+    validate_tests_dir("tests", Path.cwd())  # Should not raise
 
 
 def testvalidate_tests_dir_without_init(tmp_path, monkeypatch):
@@ -161,8 +162,7 @@ def testvalidate_tests_dir_without_init(tmp_path, monkeypatch):
     test_dir = tmp_path / "my_tests"
     test_dir.mkdir()
     (test_dir / "test_example.py").write_text("def test_it(): pass\n")
-    monkeypatch.chdir(tmp_path)
-    validate_tests_dir("my_tests")  # Should not raise
+    validate_tests_dir("my_tests", tmp_path)  # Should not raise
 
 
 def testvalidate_base_branch_nonexistent():
@@ -202,7 +202,7 @@ def testvalidate_module_src_layout_suggestion(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(pytest.UsageError, match="--impacted-module=src/mypackage"):
-        validate_module("mypackage")
+        validate_module("mypackage", tmp_path)
 
 
 def test_plugin_imports_without_git_executable(tmp_path):

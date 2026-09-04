@@ -14,7 +14,7 @@ from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_test_module, normalize_path
-from pytest_impacted.traversal import discover_submodules
+from pytest_impacted.traversal import clear_discovery_cache
 
 
 logger = logging.getLogger(__name__)
@@ -74,12 +74,14 @@ def has_dependency_file_changes(
 
 
 @lru_cache(maxsize=8)
-def cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> nx.DiGraph:
+def cached_build_dep_tree(ns_module: str, tests_package: str | None = None, root_dir: Path | None = None) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
     Args:
         ns_module: The namespace module being analyzed
         tests_package: Optional tests package name
+        root_dir: Project root the package paths are relative to. Part of the
+            cache key, so two projects analyzed in one process cannot collide.
 
     Returns:
         NetworkX dependency graph
@@ -90,7 +92,7 @@ def cached_build_dep_tree(ns_module: str, tests_package: str | None = None) -> n
         the same ns_module/tests_package combination is used repeatedly within
         a single pytest run.
     """
-    return build_dep_tree(ns_module, tests_package=tests_package)
+    return build_dep_tree(ns_module, tests_package=tests_package, root_dir=root_dir)
 
 
 def clear_dep_tree_cache() -> None:
@@ -101,7 +103,7 @@ def clear_dep_tree_cache() -> None:
     since stale submodule data would produce stale dependency trees.
     """
     cached_build_dep_tree.cache_clear()
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
 
 
 def _resolve_changed_file_dir(changed_file: str, root_dir: Path) -> Path | None:

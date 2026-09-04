@@ -9,6 +9,7 @@ import pytest
 
 from pytest_impacted import traversal
 from pytest_impacted.traversal import (
+    clear_discovery_cache,
     discover_submodules,
     find_non_package_prefix,
     iter_namespace,
@@ -29,7 +30,7 @@ def test_package_name_to_path():
 def test_iter_namespace_with_string():
     """Test iter_namespace with string input."""
     # Test with a known package
-    modules = list(iter_namespace("pytest_impacted"))
+    modules = list(iter_namespace("pytest_impacted", scan_path="pytest_impacted"))
     assert len(modules) > 0
 
     # pkgutil.iter_modules returns ModuleInfo objects, not ModuleType
@@ -93,7 +94,7 @@ def test_iter_namespace_with_nested_package():
 
         m.setattr(pkgutil, "iter_modules", mock_iter_modules)
 
-        modules = list(iter_namespace("nested.package"))
+        modules = list(iter_namespace("nested.package", scan_path="nested/package"))
         assert len(modules) == 1
         assert modules[0].name == "nested.package.submodule"
 
@@ -118,10 +119,10 @@ def test_path_to_package_name():
 
 def test_discover_submodules_skips_missing_files():
     """Test discover_submodules skips modules whose files don't exist on disk."""
-    traversal.discover_submodules.cache_clear()
+    traversal.clear_discovery_cache()
     with pytest.MonkeyPatch.context() as m:
 
-        def mock_iter_namespace(package, *, scan_path=None):
+        def mock_iter_namespace(package, *, scan_path):
             return [pkgutil.ModuleInfo(None, "nonexistent.module", False)]
 
         m.setattr("pytest_impacted.traversal.iter_namespace", mock_iter_namespace)
@@ -157,7 +158,7 @@ def test_resolve_modules_to_files_edge_cases():
 
 def test_discover_submodules_empty(monkeypatch):
     """Test discover_submodules for a package with no submodules."""
-    traversal.discover_submodules.cache_clear()
+    traversal.clear_discovery_cache()
     monkeypatch.setattr("pytest_impacted.traversal.iter_namespace", lambda pkg, **kwargs: [])
     result = discover_submodules("some_package")
     assert result == {}
@@ -225,7 +226,7 @@ def test_discover_submodules_without_init_in_subdirectory(tmp_path, monkeypatch)
     (tmp_path / "pkg" / "sub" / "test_thing.py").write_text("def test_it(): pass\n")
 
     monkeypatch.chdir(tmp_path)
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
 
     modules = discover_submodules("pkg", require_init=False)
     assert "pkg.sub.test_thing" in modules
@@ -241,7 +242,7 @@ def test_discover_submodules_without_init_in_ancestor_directory(tmp_path, monkey
     (tmp_path / "tests" / "app" / "unit" / "test_core.py").write_text("def test_core(): pass\n")
 
     monkeypatch.chdir(tmp_path)
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
 
     modules = discover_submodules("tests", require_init=False)
     assert "tests.app.unit.test_core" in modules
@@ -256,7 +257,7 @@ def test_discover_submodules_require_init_skips_no_init_dirs(tmp_path, monkeypat
     (tmp_path / "pkg" / "no_init_dir" / "hidden.py").write_text("y = 2\n")
 
     monkeypatch.chdir(tmp_path)
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
 
     modules = discover_submodules("pkg", require_init=True)
     assert "pkg.visible" in modules
@@ -266,7 +267,7 @@ def test_discover_submodules_require_init_skips_no_init_dirs(tmp_path, monkeypat
 def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
     """Filesystem discovery should return empty dict for a nonexistent directory."""
     monkeypatch.chdir(tmp_path)
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
 
     modules = discover_submodules("nonexistent_pkg", require_init=False)
     assert modules == {}
@@ -281,7 +282,7 @@ def test_find_non_package_prefix_flat_layout(tmp_path, monkeypatch):
     (tmp_path / "mypackage" / "__init__.py").touch()
     monkeypatch.chdir(tmp_path)
 
-    prefix, importable = find_non_package_prefix("mypackage")
+    prefix, importable = find_non_package_prefix("mypackage", tmp_path)
     assert prefix == ""
     assert importable == "mypackage"
 
@@ -293,7 +294,7 @@ def test_find_non_package_prefix_src_layout(tmp_path, monkeypatch):
     (tmp_path / "src" / "predicated" / "__init__.py").touch()
     monkeypatch.chdir(tmp_path)
 
-    prefix, importable = find_non_package_prefix("src/predicated")
+    prefix, importable = find_non_package_prefix("src/predicated", tmp_path)
     assert prefix == "src"
     assert importable == "predicated"
 
@@ -306,7 +307,7 @@ def testfind_non_package_prefix_deeply_nested(tmp_path, monkeypatch):
     (tmp_path / "src" / "lib" / "mypackage" / "__init__.py").touch()
     monkeypatch.chdir(tmp_path)
 
-    prefix, importable = find_non_package_prefix("src/lib/mypackage")
+    prefix, importable = find_non_package_prefix("src/lib/mypackage", tmp_path)
     assert prefix == "src/lib"
     assert importable == "mypackage"
 
@@ -316,7 +317,7 @@ def test_find_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
     (tmp_path / "ns_pkg").mkdir()
     monkeypatch.chdir(tmp_path)
 
-    prefix, importable = find_non_package_prefix("ns_pkg")
+    prefix, importable = find_non_package_prefix("ns_pkg", tmp_path)
     assert prefix == ""
     assert importable == "ns_pkg"
 
@@ -331,7 +332,7 @@ def test_discover_submodules_src_layout(tmp_path, monkeypatch):
     (tmp_path / "src" / "srcpkg_a" / "utils.py").write_text("y = 2\n")
 
     monkeypatch.chdir(tmp_path)
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
     importlib.invalidate_caches()
 
     modules = discover_submodules("src.srcpkg_a", require_init=True)
@@ -354,7 +355,7 @@ def test_discover_submodules_src_layout_with_subpackage(tmp_path, monkeypatch):
     (tmp_path / "src" / "srcpkg_b" / "sub" / "module.py").write_text("z = 3\n")
 
     monkeypatch.chdir(tmp_path)
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
     importlib.invalidate_caches()
 
     modules = discover_submodules("src.srcpkg_b", require_init=True)
@@ -371,7 +372,7 @@ def test_discover_submodules_flat_layout_backward_compat(tmp_path, monkeypatch):
     (tmp_path / "flatpkg_a" / "module.py").write_text("x = 1\n")
 
     monkeypatch.chdir(tmp_path)
-    discover_submodules.cache_clear()
+    clear_discovery_cache()
     importlib.invalidate_caches()
 
     modules = discover_submodules("flatpkg_a", require_init=True)
@@ -390,8 +391,82 @@ def test_iter_namespace_with_scan_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     # scan_path points to the filesystem location, but module names use "pkg" prefix
-    modules = iter_namespace("pkg", scan_path="src/pkg")
+    modules = iter_namespace("pkg", scan_path=str(tmp_path / "src/pkg"))
     names = [m.name for m in modules]
     assert "pkg.mod" in names
     # Should NOT have "src.pkg.mod"
     assert all(not n.startswith("src.") for n in names)
+
+
+# --- root_dir: discovery must not depend on the process working directory ---------
+
+
+@pytest.fixture
+def two_projects(tmp_path):
+    """Two separate projects that both contain a package named ``mypkg``."""
+    for name, module in (("first", "alpha"), ("second", "beta")):
+        pkg = tmp_path / name / "mypkg"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").touch()
+        (pkg / f"{module}.py").write_text("x = 1\n")
+    clear_discovery_cache()
+    yield tmp_path / "first", tmp_path / "second"
+    clear_discovery_cache()
+
+
+def test_discover_submodules_uses_root_dir_not_cwd(two_projects, monkeypatch):
+    """The scan follows root_dir even when the working directory is somewhere else entirely."""
+    first, second = two_projects
+    monkeypatch.chdir(second)
+
+    modules = discover_submodules("mypkg", root_dir=first)
+
+    assert set(modules) == {"mypkg.alpha"}
+    assert modules["mypkg.alpha"] == str(first / "mypkg" / "alpha.py")
+
+
+def test_discover_submodules_cache_is_keyed_by_root_dir(two_projects):
+    """Two projects with the same package name must not share a cache entry."""
+    first, second = two_projects
+
+    assert set(discover_submodules("mypkg", root_dir=first)) == {"mypkg.alpha"}
+    assert set(discover_submodules("mypkg", root_dir=second)) == {"mypkg.beta"}
+
+
+def test_discover_submodules_resolves_symlinked_root(two_projects, tmp_path):
+    """A project reached through a symlink yields the same paths as the real one."""
+    first, _second = two_projects
+    link = tmp_path / "link-to-first"
+    link.symlink_to(first)
+
+    assert discover_submodules("mypkg", root_dir=link) == discover_submodules("mypkg", root_dir=first)
+
+
+def test_resolve_files_to_modules_uses_root_dir_not_cwd(two_projects, monkeypatch):
+    """Git reports paths relative to the repository root, not the working directory."""
+    first, second = two_projects
+    monkeypatch.chdir(second)
+
+    assert resolve_files_to_modules(["mypkg/alpha.py"], ns_module="mypkg", root_dir=first) == ["mypkg.alpha"]
+
+
+def test_resolve_modules_to_files_uses_root_dir_not_cwd(two_projects, monkeypatch):
+    first, second = two_projects
+    monkeypatch.chdir(second)
+
+    assert resolve_modules_to_files(["mypkg.alpha"], ns_module="mypkg", root_dir=first) == [
+        str(first / "mypkg" / "alpha.py")
+    ]
+
+
+def test_discover_submodules_without_init_uses_root_dir(tmp_path, monkeypatch):
+    """The filesystem-walking mode (test directories) honours root_dir too."""
+    tests_dir = tmp_path / "proj" / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_thing.py").write_text("def test_it(): pass\n")
+    clear_discovery_cache()
+    monkeypatch.chdir(tmp_path)
+
+    modules = discover_submodules("tests", require_init=False, root_dir=tmp_path / "proj")
+
+    assert set(modules) == {"tests.test_thing"}

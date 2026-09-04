@@ -57,8 +57,10 @@ The tests directory does **not** need to contain `__init__.py` — the plugin us
 
 ## Monorepo / src-Layout Support
 
-The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the current working directory. Parent directories are searched automatically to find the git repository.
-**Note:** Impact analysis only considers changed files within the current working-directory subtree; changes in sibling directories are ignored.
+The plugin works in monorepos where the Python project lives in a subdirectory — the `.git` directory does not need to be in the project directory. Parent directories are searched automatically to find the git repository.
+**Note:** Impact analysis only considers changed files within the project subtree; changes in sibling directories are ignored.
+
+Paths are resolved against pytest's `rootdir` (or the CLI's `--root-dir`), not the directory you happen to run from, so `--impacted-module` and `--impacted-tests-dir` are relative to that root and running from a subdirectory works.
 
 ### src-Layout Projects
 
@@ -82,7 +84,7 @@ In a monorepo where the Python project is nested under a subdirectory:
 
 ```
 monorepo/              ← git root
-  backend/             ← working directory (pyproject.toml here)
+  backend/             ← rootdir (pyproject.toml here)
     src/
       my_package/
     tests/
@@ -93,7 +95,7 @@ Run pytest from the `backend/` directory as usual. The plugin will:
 
 1. Find the git repository by searching parent directories
 2. Convert git-relative file paths (e.g. `backend/src/my_package/module.py`) to working-directory-relative paths (e.g. `src/my_package/module.py`)
-3. Only consider changes within the working directory — changes in sibling directories (e.g. `frontend/`) are ignored
+3. Only consider changes within the rootdir subtree — changes in sibling directories (e.g. `frontend/`) are ignored
 
 ## Impact Analysis Strategies
 
@@ -214,7 +216,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--module` | *(required)* | Namespace (top-level) module for the package under test |
 | `--git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--base-branch` | `main` | Base branch/ref for branch-mode comparison |
-| `--root-dir` | `.` | Root directory of the project repository |
+| `--root-dir` | `.` | Root directory of the project repository; `--module` and `--tests-dir` are relative to it |
 | `--tests-dir` | `None` | Directory containing test files outside the namespace module |
 | `--verbose` | `false` | Verbose output (written to stderr, so it will not pollute the piped test list) |
 | `--no-dep-files` | `false` | Disable dependency file change detection |
@@ -246,7 +248,7 @@ The plugin validates configuration early and provides helpful error messages:
 |----------|-------------|
 | `--impacted-module=my-package` (hyphens) | Suggests `my_package` if it exists |
 | `--impacted-module=my_package` (src-layout) | Suggests `src/my_package` if found under `src/` |
-| `--impacted-module=nonexistent` | Clear error with instructions to check the package name and working directory |
+| `--impacted-module=nonexistent` | Clear error naming the rootdir the package was looked for under |
 | `--impacted-tests-dir=bad_path` | Error indicating the directory doesn't exist |
 | `--impacted-base-branch=no_such_branch` | Error listing available git refs |
 | `--impacted-base-branch=--some-option` | Rejected before reaching git — refs may not begin with `-`, since git would parse them as options rather than revisions |
