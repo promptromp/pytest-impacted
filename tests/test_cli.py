@@ -341,3 +341,34 @@ class TestImpactedTestsCLI:
             assert "git-mode: branch" in result.output
             assert "base-branch: develop" in result.output
             assert "module: test_ns" in result.output
+
+    def test_cli_module_is_relative_to_root_dir(self, tmp_path, monkeypatch):
+        """--module names a package under --root-dir, not under the working directory."""
+        (tmp_path / "proj" / "pkg").mkdir(parents=True)
+        (tmp_path / "elsewhere").mkdir()
+        monkeypatch.chdir(tmp_path / "elsewhere")
+
+        with patch("pytest_impacted.cli.get_impacted_tests", return_value=[]):
+            ok = self.runner.invoke(impacted_tests_cli, ["--root-dir", str(tmp_path / "proj"), "--module", "pkg"])
+
+        assert ok.exit_code == 0, ok.output
+
+    def test_cli_module_missing_under_root_dir_is_rejected(self, tmp_path):
+        """A package that exists only in the working directory must not satisfy --module."""
+        (tmp_path / "proj").mkdir()
+
+        result = self.runner.invoke(impacted_tests_cli, ["--root-dir", str(tmp_path / "proj"), "--module", "pkg"])
+
+        assert result.exit_code != 0
+        assert "does not exist under root-dir" in result.output
+
+    def test_cli_accepts_dotted_module_names(self, tmp_path):
+        """src-layout projects are addressed as ``src.pkg``, as discover_submodules accepts."""
+        (tmp_path / "proj" / "src" / "pkg").mkdir(parents=True)
+
+        with patch("pytest_impacted.cli.get_impacted_tests", return_value=[]):
+            result = self.runner.invoke(
+                impacted_tests_cli, ["--root-dir", str(tmp_path / "proj"), "--module", "src.pkg"]
+            )
+
+        assert result.exit_code == 0, result.output

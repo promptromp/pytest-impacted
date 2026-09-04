@@ -87,7 +87,7 @@ class TestInvalidationFileImpactStrategy:
         assert "--impacted-invalidate-all" in caplog.text
 
 
-class TestGetDefaultStrategies:
+class TestGetDefaultStrategiesWithInvalidation:
     def test_not_included_without_patterns(self):
         strategies = get_default_strategies()
         assert not any(isinstance(s, InvalidationFileImpactStrategy) for s in strategies)

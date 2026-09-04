@@ -276,46 +276,42 @@ def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
 # --- Tests for find_non_package_prefix (src-layout support) ---
 
 
-def test_find_non_package_prefix_flat_layout(tmp_path, monkeypatch):
+def test_find_non_package_prefix_flat_layout(tmp_path):
     """Flat layout: mypackage/ has __init__.py → no prefix."""
     (tmp_path / "mypackage").mkdir()
     (tmp_path / "mypackage" / "__init__.py").touch()
-    monkeypatch.chdir(tmp_path)
 
     prefix, importable = find_non_package_prefix("mypackage", tmp_path)
     assert prefix == ""
     assert importable == "mypackage"
 
 
-def test_find_non_package_prefix_src_layout(tmp_path, monkeypatch):
+def test_find_non_package_prefix_src_layout(tmp_path):
     """src-layout: src/ has no __init__.py, src/predicated/ has __init__.py."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "predicated").mkdir()
     (tmp_path / "src" / "predicated" / "__init__.py").touch()
-    monkeypatch.chdir(tmp_path)
 
     prefix, importable = find_non_package_prefix("src/predicated", tmp_path)
     assert prefix == "src"
     assert importable == "predicated"
 
 
-def testfind_non_package_prefix_deeply_nested(tmp_path, monkeypatch):
+def testfind_non_package_prefix_deeply_nested(tmp_path):
     """Deeply nested non-package prefix: src/lib/mypackage."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "lib").mkdir()
     (tmp_path / "src" / "lib" / "mypackage").mkdir()
     (tmp_path / "src" / "lib" / "mypackage" / "__init__.py").touch()
-    monkeypatch.chdir(tmp_path)
 
     prefix, importable = find_non_package_prefix("src/lib/mypackage", tmp_path)
     assert prefix == "src/lib"
     assert importable == "mypackage"
 
 
-def test_find_non_package_prefix_no_init_anywhere(tmp_path, monkeypatch):
+def test_find_non_package_prefix_no_init_anywhere(tmp_path):
     """No __init__.py found anywhere → fallback: no prefix, whole path is importable."""
     (tmp_path / "ns_pkg").mkdir()
-    monkeypatch.chdir(tmp_path)
 
     prefix, importable = find_non_package_prefix("ns_pkg", tmp_path)
     assert prefix == ""

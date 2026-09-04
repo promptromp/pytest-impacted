@@ -96,7 +96,7 @@ def test_build_dep_tree():
         assert dep_tree.has_edge("module_c", "module_b")
 
 
-def test_pruned_singleton_init_triggers_run_all():
+def test_changed_init_with_no_dependents_impacts_nothing():
     """A changed __init__.py singleton should not cause all tests to run."""
     mock_submodules = {
         "pkg": "/fake/pkg/__init__.py",
