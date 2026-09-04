@@ -1,5 +1,6 @@
 """Unit tests for the git module."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,32 +12,31 @@ from pytest_impacted.git import find_repo, normalize_git_paths
 
 
 class DummyRepo:
+    """Stand-in for :class:`git.Repo` exposing only what the git module calls.
+
+    ``status_output`` is raw ``git status --porcelain=v1 -z`` output (UNSTAGED
+    mode); ``diff_branch_result`` is ``git diff --name-status`` output (BRANCH mode).
+    """
+
     def __init__(
         self,
-        dirty=False,
-        diff_result=None,
+        status_output="",
         diff_branch_result=None,
-        untracked_files=None,
         current_branch="feature/some-feature-branch",
         working_tree_dir=None,
     ):
-        self._dirty = dirty
-        self._diff_result = diff_result or []
-        self._diff_branch_result = diff_branch_result or ""
-        self.untracked_files = untracked_files or []
-        self.index = MagicMock()
+        self.bare = False
         self.git = MagicMock()
-        self.git.diff = MagicMock(return_value=self._diff_branch_result)
+        self.git.status = MagicMock(return_value=status_output)
+        self.git.diff = MagicMock(return_value=diff_branch_result or "")
         self.head = MagicMock()
         self.head.reference = current_branch
-        # UNSTAGED mode diffs HEAD against the working tree so staged edits count.
-        self.head.commit.diff = MagicMock(return_value=self._diff_result)
         self.working_tree_dir = working_tree_dir or str(Path.cwd())
 
-    def is_dirty(self, **kwargs):
-        if kwargs.get("untracked_files"):
-            return self._dirty or bool(self.untracked_files)
-        return self._dirty
+
+def porcelain(*entries: str) -> str:
+    """Join ``XY path`` entries (and rename originals) into ``-z`` output."""
+    return "".join(f"{entry}\0" for entry in entries)
 
 
 @patch("pytest_impacted.git.GIT_AVAILABLE", False)
@@ -49,37 +49,32 @@ def test_find_impacted_files_in_repo_git_not_available():
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_clean(mock_repo):
-    mock_repo.return_value = DummyRepo(dirty=False)
+    mock_repo.return_value = DummyRepo(status_output="")
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result is None
 
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_dirty(mock_repo):
-    # Create mock diff objects with change_type attribute
-    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
-    diff2 = MagicMock(a_path=None, b_path="file2.py", change_type="A")
-    diff_result = [diff1, diff2]
-    mock_repo.return_value = DummyRepo(dirty=True, diff_result=diff_result)
+    mock_repo.return_value = DummyRepo(status_output=porcelain(" M file1.py", "A  file2.py"))
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
-    assert set(result) == {"file1.py", "file2.py"}
+    assert result == ["file1.py", "file2.py"]
+    mock_repo.return_value.git.status.assert_called_once_with("--porcelain=v1", "-z", "--untracked-files=all")
 
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_dirty_with_untracked_files(mock_repo):
-    # Create mock diff objects with change_type attribute
-    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
-    diff2 = MagicMock(a_path=None, b_path="file2.py", change_type="A")
-    diff_result = [diff1, diff2]
-    mock_repo.return_value = DummyRepo(dirty=True, diff_result=diff_result, untracked_files=["file3.py", "file4.py"])
+    mock_repo.return_value = DummyRepo(
+        status_output=porcelain(" M file1.py", "A  file2.py", "?? file3.py", "?? file4.py"),
+    )
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
-    assert set(result) == {"file1.py", "file2.py", "file3.py", "file4.py"}
+    assert result == ["file1.py", "file2.py", "file3.py", "file4.py"]
 
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_dirty_no_changes(mock_repo):
-    """Test UNSTAGED mode when repo is dirty but no actual file changes or untracked files."""
-    mock_repo.return_value = DummyRepo(dirty=True, diff_result=[], untracked_files=[])
+    """Test UNSTAGED mode when the only changes are deletions."""
+    mock_repo.return_value = DummyRepo(status_output=porcelain("D  gone.py", " D also_gone.py"))
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result is None
 
@@ -275,22 +270,6 @@ def test_changeset_class():
     assert "A\tfile2.py" in str(change_set)
 
 
-def test_changeset_from_diff_objs():
-    """Test ChangeSet.from_diff_objs method."""
-    # Create mock diff objects
-    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
-    diff2 = MagicMock(a_path=None, b_path="file2.py", change_type="A")
-    diff3 = MagicMock(a_path="old.py", b_path="new.py", change_type="R")
-
-    diffs = [diff1, diff2, diff3]
-    change_set = git.ChangeSet.from_diff_objs(diffs)
-
-    assert len(change_set.changes) == 3
-    assert change_set.changes[0].name == "file1.py"
-    assert change_set.changes[1].name == "file2.py"
-    assert change_set.changes[2].name == "old.py"
-
-
 def test_changeset_from_git_diff_name_status_output():
     """Test ChangeSet.from_git_diff_name_status_output method."""
     diff_output = """M\tmodified.py
@@ -314,7 +293,7 @@ def test_changeset_from_git_diff_name_status_output_empty():
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_unstaged_mode_clean_repo(mock_repo):
     """Test impacted_files_for_unstaged_mode with clean repo."""
-    repo = DummyRepo(dirty=False)
+    repo = DummyRepo(status_output="")
     result = git.impacted_files_for_unstaged_mode(repo)
     assert result is None
 
@@ -322,7 +301,7 @@ def test_impacted_files_for_unstaged_mode_clean_repo(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_unstaged_mode_only_untracked_files(mock_repo):
     """Untracked files should be detected even when no tracked files are modified."""
-    repo = DummyRepo(dirty=False, untracked_files=["tests/test_new.py"])
+    repo = DummyRepo(status_output=porcelain("?? tests/test_new.py"))
     result = git.impacted_files_for_unstaged_mode(repo)
     assert result == ["tests/test_new.py"]
 
@@ -330,11 +309,7 @@ def test_impacted_files_for_unstaged_mode_only_untracked_files(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_unstaged_mode_with_deleted_files(mock_repo):
     """Test impacted_files_for_unstaged_mode with deleted files."""
-    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
-    diff2 = MagicMock(a_path="deleted.py", b_path=None, change_type="D")
-    diff_result = [diff1, diff2]
-
-    repo = DummyRepo(dirty=True, diff_result=diff_result)
+    repo = DummyRepo(status_output=porcelain(" M file1.py", " D deleted.py", "AD staged_then_deleted.py"))
     result = git.impacted_files_for_unstaged_mode(repo)
 
     # Should only include modified and added files, not deleted
@@ -431,9 +406,7 @@ def test_changeset_from_git_diff_name_status_output_malformed():
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_with_path_object(mock_repo):
     """Test find_impacted_files_in_repo with Path object instead of string."""
-    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
-    diff_result = [diff1]
-    mock_repo.return_value = DummyRepo(dirty=True, diff_result=diff_result)
+    mock_repo.return_value = DummyRepo(status_output=porcelain(" M file1.py"))
 
     result = git.find_impacted_files_in_repo(Path("."), git.GitMode.UNSTAGED, None)
     assert result == ["file1.py"]
@@ -498,33 +471,33 @@ def test_change_from_git_diff_name_status_rename_without_tab():
     assert change.status == git.GitStatus.RENAMED
 
 
-def test_changeset_from_diff_objs_with_none_a_path():
-    """Test ChangeSet.from_diff_objs with diff objects that have None a_path."""
-    # Create mock diff objects where a_path is None (new files)
-    diff1 = MagicMock(a_path=None, b_path="new_file.py", change_type="A")
-    diff2 = MagicMock(a_path="existing_file.py", b_path=None, change_type="M")
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        pytest.param((" M a.py",), [("a.py", None, "M")], id="worktree-modified"),
+        pytest.param(("M  a.py",), [("a.py", None, "M")], id="staged-modified"),
+        pytest.param(("MM a.py",), [("a.py", None, "M")], id="staged-then-edited"),
+        pytest.param(("A  a.py",), [("a.py", None, "A")], id="staged-added"),
+        pytest.param(("AM a.py",), [("a.py", None, "A")], id="added-then-edited"),
+        pytest.param((" T a.py",), [("a.py", None, "T")], id="type-change"),
+        pytest.param(("?? a.py",), [("a.py", None, "A")], id="untracked-is-added"),
+        pytest.param(("D  a.py",), [("a.py", None, "D")], id="staged-delete"),
+        pytest.param(("AD a.py",), [("a.py", None, "D")], id="added-then-removed-from-disk"),
+        pytest.param(("R  new.py", "old.py"), [("old.py", "new.py", "R")], id="rename-carries-original"),
+        pytest.param(("C  copy.py", "orig.py"), [("orig.py", "copy.py", "C")], id="copy-carries-original"),
+        pytest.param(("UU a.py",), [("a.py", None, "U")], id="unmerged"),
+        pytest.param(("", " M a.py", ""), [("a.py", None, "M")], id="blank-entries-ignored"),
+    ],
+)
+def test_changeset_from_git_status_porcelain_z(entries, expected):
+    """Each ``XY`` combination maps to the status that decides whether the file counts."""
+    change_set = git.ChangeSet.from_git_status_porcelain_z(porcelain(*entries))
+    assert [(c.a_path, c.b_path, c.status.value) for c in change_set.changes] == expected
 
-    diffs = [diff1, diff2]
-    change_set = git.ChangeSet.from_diff_objs(diffs)
 
-    assert len(change_set.changes) == 2
-    assert change_set.changes[0].name == "new_file.py"  # Uses b_path when a_path is None
-    assert change_set.changes[1].name == "existing_file.py"  # Uses a_path when available
-
-
-@patch("pytest_impacted.git.Repo")
-def test_impacted_files_for_unstaged_mode_with_none_names(mock_repo):
-    """Test impacted_files_for_unstaged_mode with files that have None names."""
-    # Create diff objects where some have None names
-    diff1 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
-    diff2 = MagicMock(a_path=None, b_path=None, change_type="D")  # This will have None name
-    diff_result = [diff1, diff2]
-
-    repo = DummyRepo(dirty=True, diff_result=diff_result, untracked_files=["untracked.py"])
-    result = git.impacted_files_for_unstaged_mode(repo)
-
-    # Should filter out None names and only include valid files
-    assert set(result) == {"file1.py", "untracked.py"}
+def test_changeset_from_git_status_porcelain_z_path_with_space():
+    change_set = git.ChangeSet.from_git_status_porcelain_z(porcelain(" M dir with space/a b.py"))
+    assert change_set.changes[0].name == "dir with space/a b.py"
 
 
 @patch("pytest_impacted.git.Repo")
@@ -561,11 +534,7 @@ def test_git_status_from_git_diff_name_status_copy_and_rename():
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_unstaged_mode_with_renamed_files(mock_repo):
     """Test impacted_files_for_unstaged_mode includes both paths for renamed files."""
-    diff1 = MagicMock(a_path="old_name.py", b_path="new_name.py", change_type="R")
-    diff2 = MagicMock(a_path="file1.py", b_path=None, change_type="M")
-    diff_result = [diff1, diff2]
-
-    repo = DummyRepo(dirty=True, diff_result=diff_result)
+    repo = DummyRepo(status_output=porcelain("R  new_name.py", "old_name.py", " M file1.py"))
     result = git.impacted_files_for_unstaged_mode(repo)
 
     assert set(result) == {"old_name.py", "new_name.py", "file1.py"}
@@ -735,11 +704,8 @@ def test_find_impacted_files_monorepo_branch_mode(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_monorepo_unstaged_mode(mock_repo):
     """In a monorepo, unstaged files are also normalized to CWD-relative paths."""
-    diff1 = MagicMock(a_path="backend/src/module.py", b_path=None, change_type="M")
     mock_repo.return_value = DummyRepo(
-        dirty=True,
-        diff_result=[diff1],
-        untracked_files=["backend/src/new_file.py"],
+        status_output=porcelain(" M backend/src/module.py", "?? backend/src/new_file.py"),
         working_tree_dir="/monorepo",
     )
 
@@ -771,19 +737,34 @@ def test_find_impacted_files_monorepo_files_outside_cwd(mock_repo):
 
 
 @pytest.fixture
-def real_repo(tmp_path):
+def isolated_git_config(monkeypatch):
+    """Shield the repositories below from the developer's global/system git config.
+
+    Hooks from ``init.templateDir``, ``core.excludesFile`` patterns or
+    ``feature.manyFiles`` (index v4) would otherwise change the outcome.
+    """
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+@pytest.fixture
+def real_repo(tmp_path, isolated_git_config):
     """A committed repository with one package file, returning ``(repo, root)``."""
     repo = Repo.init(tmp_path)
-    with repo.config_writer() as cfg:
-        cfg.set_value("user", "email", "test@example.com")
-        cfg.set_value("user", "name", "Test")
+    repo.git.config("user.email", "test@example.com")
+    repo.git.config("user.name", "Test")
     pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
     (pkg / "a.py").write_text("x = 1\n")
-    repo.index.add(["pkg/__init__.py", "pkg/a.py"])
-    repo.index.commit("init")
+    (pkg / "b.py").write_text("y = 1\n")
+    repo.git.add("--all")
+    repo.git.commit("-m", "init")
     return repo, tmp_path
+
+
+def unstaged(root) -> list[str] | None:
+    return git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None)
 
 
 def test_unstaged_mode_sees_staged_only_modification(real_repo):
@@ -792,7 +773,7 @@ def test_unstaged_mode_sees_staged_only_modification(real_repo):
     (root / "pkg" / "a.py").write_text("x = 2\n")
     repo.git.add("pkg/a.py")
 
-    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) == ["pkg/a.py"]
+    assert unstaged(root) == ["pkg/a.py"]
 
 
 def test_unstaged_mode_sees_staged_new_file(real_repo):
@@ -800,7 +781,7 @@ def test_unstaged_mode_sees_staged_new_file(real_repo):
     (root / "pkg" / "new.py").write_text("y = 1\n")
     repo.git.add("pkg/new.py")
 
-    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) == ["pkg/new.py"]
+    assert unstaged(root) == ["pkg/new.py"]
 
 
 def test_unstaged_mode_reports_file_edited_after_staging_once(real_repo):
@@ -809,7 +790,42 @@ def test_unstaged_mode_reports_file_edited_after_staging_once(real_repo):
     repo.git.add("pkg/a.py")
     (root / "pkg" / "a.py").write_text("x = 3\n")
 
-    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) == ["pkg/a.py"]
+    assert unstaged(root) == ["pkg/a.py"]
+
+
+def test_unstaged_mode_sees_staged_edit_reverted_on_disk(real_repo):
+    """Staged content differs from HEAD even though the worktree matches HEAD again (``MM``)."""
+    repo, root = real_repo
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    repo.git.add("pkg/a.py")
+    (root / "pkg" / "a.py").write_text("x = 1\n")
+
+    assert unstaged(root) == ["pkg/a.py"]
+
+
+def test_unstaged_mode_sees_rename(real_repo):
+    repo, root = real_repo
+    repo.git.mv("pkg/a.py", "pkg/renamed.py")
+
+    assert unstaged(root) == ["pkg/a.py", "pkg/renamed.py"]
+
+
+def test_unstaged_mode_sees_type_change(real_repo):
+    """Replacing a file with a symlink changes what ``import`` yields."""
+    _repo, root = real_repo
+    (root / "pkg" / "a.py").unlink()
+    (root / "pkg" / "a.py").symlink_to("b.py")
+
+    assert unstaged(root) == ["pkg/a.py"]
+
+
+def test_unstaged_mode_ignores_file_staged_then_removed_from_disk(real_repo):
+    repo, root = real_repo
+    (root / "pkg" / "new.py").write_text("y = 1\n")
+    repo.git.add("pkg/new.py")
+    (root / "pkg" / "new.py").unlink()
+
+    assert unstaged(root) is None
 
 
 def test_unstaged_mode_still_sees_plain_worktree_edit_and_untracked(real_repo):
@@ -817,23 +833,43 @@ def test_unstaged_mode_still_sees_plain_worktree_edit_and_untracked(real_repo):
     (root / "pkg" / "a.py").write_text("x = 2\n")
     (root / "pkg" / "untracked.py").write_text("z = 1\n")
 
-    result = git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None)
+    assert unstaged(root) == ["pkg/a.py", "pkg/untracked.py"]
 
-    assert result == ["pkg/a.py", "pkg/untracked.py"]
+
+def test_unstaged_mode_lists_files_inside_untracked_directory(real_repo):
+    _repo, root = real_repo
+    (root / "newdir").mkdir()
+    (root / "newdir" / "mod.py").write_text("z = 1\n")
+
+    assert unstaged(root) == ["newdir/mod.py"]
 
 
 def test_unstaged_mode_clean_real_repo_returns_none(real_repo):
     _repo, root = real_repo
-    assert git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None) is None
+    assert unstaged(root) is None
 
 
-def test_unstaged_mode_repo_without_commits_treats_staged_files_as_added(tmp_path):
+def test_unstaged_mode_repo_without_commits_treats_staged_files_as_added(tmp_path, isolated_git_config):
     """Before the first commit there is no HEAD to diff against; everything staged is new."""
     repo = Repo.init(tmp_path)
     (tmp_path / "a.py").write_text("x = 1\n")
     (tmp_path / "b.py").write_text("y = 1\n")
     repo.git.add("a.py")
 
-    result = git.find_impacted_files_in_repo(tmp_path, git.GitMode.UNSTAGED, None)
+    assert unstaged(tmp_path) == ["a.py", "b.py"]
 
-    assert result == ["a.py", "b.py"]
+
+def test_unstaged_mode_works_with_index_v4(tmp_path, isolated_git_config):
+    """``feature.manyFiles`` writes an index format GitPython cannot parse; the CLI path must not care."""
+    repo = Repo.init(tmp_path)
+    repo.git.config("feature.manyFiles", "true")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    repo.git.add("a.py")
+    repo.git.update_index("--index-version", "4")
+
+    assert unstaged(tmp_path) == ["a.py"]
+
+
+def test_unstaged_mode_bare_repo_returns_none(tmp_path, isolated_git_config):
+    Repo.init(tmp_path, bare=True)
+    assert unstaged(tmp_path) is None

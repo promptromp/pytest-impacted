@@ -281,7 +281,7 @@ graph LR
     H -->|--impacted-invalidate-all| G
 ```
 
-1. **Git introspection** identifies which files changed (unstaged edits or branch diff)
+1. **Git introspection** identifies which files changed (uncommitted edits, staged or not, or a branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules

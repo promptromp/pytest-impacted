@@ -99,7 +99,13 @@ class GitStatus(StrEnum):
 
 
 # Statuses that indicate a file is impactful for test coverage.
-_IMPACTFUL_STATUSES = (GitStatus.MODIFIED, GitStatus.ADDED, GitStatus.RENAMED, GitStatus.COPIED)
+_IMPACTFUL_STATUSES = (
+    GitStatus.MODIFIED,
+    GitStatus.ADDED,
+    GitStatus.RENAMED,
+    GitStatus.COPIED,
+    GitStatus.TYPE_CHANGE,
+)
 
 
 class Change:
@@ -158,23 +164,37 @@ class ChangeSet:
         return "\n".join(str(change) for change in self.changes)
 
     @classmethod
-    def from_diff_objs(cls, diffs: list[Diff]) -> "ChangeSet":
-        """Create a ChangeSet from a list of git diff objects."""
+    def from_git_status_porcelain_z(cls, status_str: str) -> "ChangeSet":
+        """Create a ChangeSet from ``git status --porcelain=v1 -z`` output.
+
+        Each entry is ``XY path`` where ``X`` is the index-vs-HEAD status and
+        ``Y`` the worktree-vs-index status; renames and copies are followed by a
+        second NUL-terminated field holding the original path. A single entry
+        therefore describes both the staged and the unstaged state of a file,
+        which is why unstaged mode reads this rather than ``git diff``.
+
+        ``??`` (untracked) is reported as ADDED. An entry deleted from the
+        working tree (``Y == D``) is reported as DELETED regardless of ``X``:
+        there is no file left to analyze. Otherwise the staged status wins
+        when present, so ``MM`` and ``AM`` are MODIFIED and ADDED, and a file
+        staged with new content but reverted on disk (``M`` + unchanged
+        worktree) still counts.
+        """
         changes = []
-        for diff in diffs:
-            status = GitStatus.from_git_diff_name_status(diff.change_type) if diff.change_type else None
-            if status in (GitStatus.RENAMED, GitStatus.COPIED):
-                changes.append(Change(a_path=diff.a_path, b_path=diff.b_path, status=status))
+        fields = iter(status_str.split("\0"))
+        for entry in fields:
+            if not entry:
+                continue
+            x, y, path = entry[0], entry[1], entry[3:]
+            if x + y == "??":
+                changes.append(Change(a_path=path, status=GitStatus.ADDED))
+            elif x in "RC" or y in "RC":
+                original = next(fields, None)
+                changes.append(Change(a_path=original, b_path=path, status=GitStatus(x if x in "RC" else y)))
+            elif y == "D":
+                changes.append(Change(a_path=path, status=GitStatus.DELETED))
             else:
-                # a_path would be None if this is a new file in which case
-                # we use the b_path to get its name.
-                changes.append(
-                    Change(
-                        a_path=diff.a_path if diff.a_path is not None else diff.b_path,
-                        b_path=None,
-                        status=status,
-                    )
-                )
+                changes.append(Change(a_path=path, status=GitStatus(y if x == " " else x)))
         return cls(changes)
 
     @classmethod
@@ -245,7 +265,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     """Find impacted files in the repository. The definition of impacted is dependent on the git mode:
 
     UNSTAGED:
-        - All files that have been modified in the working directory according to git diff.
+        - All files with uncommitted changes, whether staged with ``git add`` or not.
         - Any untracked files are also included.
 
     BRANCH:
@@ -282,6 +302,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
 
     if impacted_files is None:
         return None
+    impacted_files = sorted(set(impacted_files))
 
     # Normalize git-root-relative paths to working-dir-relative paths
     if repo.working_tree_dir is None:
@@ -302,41 +323,28 @@ def _collect_paths_for_change(item: Change) -> list[str | None]:
     return [item.name]
 
 
-def _uncommitted_changes(repo: Repo) -> ChangeSet:
-    """Every uncommitted change — staged or not — relative to the last commit.
-
-    ``repo.index.diff(None)`` only compares the index to the working tree, so a
-    change that has been ``git add``-ed vanishes from it. Diffing HEAD against
-    the working tree (``commit.diff(None)``) reports staged and unstaged edits
-    alike, each file once, with change types oriented from HEAD to worktree.
-
-    Before the first commit there is no HEAD to diff against; everything in
-    the index is then a new file.
-    """
-    try:
-        head = repo.head.commit
-    except ValueError:
-        return ChangeSet([Change(a_path=str(path), status=GitStatus.ADDED) for path, _stage in repo.index.entries])
-    return ChangeSet.from_diff_objs(head.diff(None))
+def _impactful_paths(change_set: ChangeSet) -> list[str]:
+    """The file paths from *change_set* whose change could affect test outcomes."""
+    paths: list[str | None] = []
+    for item in change_set.changes:
+        if item.status in _IMPACTFUL_STATUSES:
+            paths.extend(_collect_paths_for_change(item))
+    return without_nones(paths)
 
 
 def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
-    """Get the impacted files when in the UNSTAGED git mode."""
-    if not repo.is_dirty(untracked_files=True):
+    """Get the impacted files when in the UNSTAGED git mode.
+
+    A single ``git status`` call covers every kind of uncommitted work —
+    staged, unstaged, staged-then-edited, untracked — and needs no HEAD, so a
+    repository without commits works too. Diffing against the index would miss
+    staged edits; diffing HEAD against the worktree would miss a staged edit
+    whose file was reverted on disk.
+    """
+    if repo.bare:
         return None
-
-    change_set = _uncommitted_changes(repo)
-
-    impacted_files = []
-    for item in change_set.changes:
-        if item.status in _IMPACTFUL_STATUSES:
-            impacted_files.extend(_collect_paths_for_change(item))
-
-    # Nb. we also include untracked files as they are also
-    # potentially impactful for unit-test coverage.
-    impacted_files.extend(repo.untracked_files)
-
-    return sorted(set(without_nones(impacted_files))) or None
+    status = repo.git.status("--porcelain=v1", "-z", "--untracked-files=all")
+    return _impactful_paths(ChangeSet.from_git_status_porcelain_z(status)) or None
 
 
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:
@@ -349,14 +357,7 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | 
         current_ref = repo.head.commit
 
     diffs = repo.git.diff(*rev_args(base_branch, current_ref), name_status=True)
-    change_set = ChangeSet.from_git_diff_name_status_output(diffs)
-
-    impacted_files = []
-    for item in change_set.changes:
-        if item.status in _IMPACTFUL_STATUSES:
-            impacted_files.extend(_collect_paths_for_change(item))
-
-    return without_nones(impacted_files) or None
+    return _impactful_paths(ChangeSet.from_git_diff_name_status_output(diffs)) or None
 
 
 def deleted_files_from_diff(change_set: ChangeSet) -> list[str]:
