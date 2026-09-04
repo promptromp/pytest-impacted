@@ -24,7 +24,7 @@ This runs only the tests impacted by files with uncommitted modifications (stage
 
 ### Unstaged Mode (default)
 
-Compares your working tree against the current HEAD, so every uncommitted change counts — whether or not it has been staged with `git add` — plus untracked files:
+Counts every uncommitted change — whether or not it has been staged with `git add` — plus untracked files:
 
 ```bash
 pytest --impacted --impacted-module=my_package --impacted-git-mode=unstaged

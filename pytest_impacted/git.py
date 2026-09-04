@@ -129,30 +129,6 @@ class Change:
         """The name of the file."""
         return self.a_path if self.a_path is not None else self.b_path
 
-    @classmethod
-    def from_git_diff_name_status(cls, *, name: str | None, status: str | None) -> "Change":
-        """Create a Change from a git diff.
-
-        Input is the output of `git diff --name-status`.
-        For rename and copy operations, the name will contain both source and destination
-        paths separated by a tab.
-
-        """
-        if status is not None and status.startswith(("R", "C")) and name is not None and "\t" in name:
-            # For rename/copy operations, split the name into source and destination
-            a_path, b_path = name.split("\t", 1)
-            return cls(
-                a_path=a_path,
-                b_path=b_path,
-                status=GitStatus.from_git_diff_name_status(status),
-            )
-
-        return cls(
-            a_path=name,
-            b_path=None,
-            status=GitStatus.from_git_diff_name_status(status) if status is not None else None,
-        )
-
 
 class ChangeSet:
     """A set of changes to files in a git repository."""
@@ -164,21 +140,29 @@ class ChangeSet:
         return "\n".join(str(change) for change in self.changes)
 
     @classmethod
-    def from_git_diff_name_status_output(cls, diffs_str: str) -> "ChangeSet":
-        """Create a ChangeSet from a list of git diffs.
+    def from_git_diff_name_status_output(cls, output: str) -> "ChangeSet":
+        """Create a ChangeSet from ``git diff --name-status -z`` output.
 
-        Input is the output of `git diff --name-status`.
+        Records are NUL-separated: a status token followed by one path, or by
+        the source and destination paths for a rename/copy (``R100``, ``C85``).
+        ``-z`` matters: without it git C-quotes any path containing non-ASCII,
+        tab, quote or backslash characters (``core.quotePath``), and the quoted
+        string would never match a file on disk.
 
-        Example input format:
-        ```
-        M\tsetup.py
-        D\tsetup.cfg
-        ```
+        Example (NULs shown as ``|``)::
 
+            M|setup.py|D|setup.cfg|R100|old.py|new.py|
         """
-        diffs = [line.split("\t", 1) for line in diffs_str.splitlines() if line]
-
-        changes = [Change.from_git_diff_name_status(status=status, name=name) for (status, name) in diffs]
+        tokens = iter(output.split("\0"))
+        changes = []
+        for status in tokens:
+            if not status:
+                continue
+            if status.startswith(("R", "C")):
+                a_path, b_path = next(tokens, None) or None, next(tokens, None) or None
+            else:
+                a_path, b_path = next(tokens, None) or None, None
+            changes.append(Change(a_path=a_path, b_path=b_path, status=GitStatus.from_git_diff_name_status(status)))
         return cls(changes)
 
 
@@ -272,10 +256,20 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     return normalize_git_paths(impacted_files, git_root, working_dir)
 
 
-#: ``--name-status`` is what :meth:`ChangeSet.from_git_diff_name_status_output`
-#: parses; ``--find-renames`` pins rename detection so results do not depend on
-#: each developer's ``diff.renames`` configuration.
-_DIFF_FLAGS = ("--name-status", "--find-renames")
+#: ``--name-status -z`` is what :meth:`ChangeSet.from_git_diff_name_status_output`
+#: parses (``-z`` keeps non-ASCII paths unquoted); ``--find-renames`` pins rename
+#: detection so results do not depend on each developer's ``diff.renames``.
+_DIFF_FLAGS = ("--name-status", "-z", "--find-renames")
+
+
+def _name_status_diff(repo: Repo, *args: str) -> ChangeSet:
+    """Run ``git diff`` with the project's fixed flags and parse the result.
+
+    Every diff in this module goes through here so the flags cannot drift
+    between call sites. *args* follow the flags, so revisions produced by
+    :func:`rev_args` keep their ``--end-of-options`` guard in front of them.
+    """
+    return ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS, *args))
 
 
 def _collect_paths_for_change(item: Change) -> list[str | None]:
@@ -309,9 +303,13 @@ def impacted_files_for_unstaged_mode(repo: Repo) -> list[str]:
     """
     if repo.bare:
         return []
-    staged = ChangeSet.from_git_diff_name_status_output(repo.git.diff("--cached", *_DIFF_FLAGS))
-    unstaged = ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS))
-    return [*_impactful_paths(staged), *_impactful_paths(unstaged), *repo.untracked_files]
+    staged = _name_status_diff(repo, "--cached")
+    unstaged = _name_status_diff(repo)
+    # A file staged and then removed from disk shows as added/modified in the
+    # index view but deleted in the worktree view; nothing is left to analyze.
+    gone = set(deleted_files_from_diff(unstaged))
+    staged_paths = [path for path in _impactful_paths(staged) if path not in gone]
+    return [*staged_paths, *_impactful_paths(unstaged), *repo.untracked_files]
 
 
 def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
@@ -323,8 +321,7 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
         # Detached HEAD state (common in CI) — fall back to HEAD commit
         current_ref = repo.head.commit
 
-    diffs = repo.git.diff(*_DIFF_FLAGS, *rev_args(base_branch, current_ref))
-    return _impactful_paths(ChangeSet.from_git_diff_name_status_output(diffs))
+    return _impactful_paths(_name_status_diff(repo, *rev_args(base_branch, current_ref)))
 
 
 def deleted_files_from_diff(change_set: ChangeSet) -> list[str]:

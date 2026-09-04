@@ -8,7 +8,7 @@
 **Run only the tests that matter.** A pytest plugin that uses git diff, AST parsing, and dependency graph analysis to selectively run tests impacted by your code changes.
 
 ```bash
-pytest --impacted --impacted-module=my_package     # unstaged changes
+pytest --impacted --impacted-module=my_package     # uncommitted changes
 pytest --impacted --impacted-module=my_package \
        --impacted-git-mode=branch \
        --impacted-base-branch=main                 # branch changes vs main

@@ -12,12 +12,18 @@ from pytest_impacted import git
 from pytest_impacted.git import find_repo, normalize_git_paths
 
 
+def name_status_z(*records: tuple[str, ...]) -> str:
+    """Render ``(status, path[, path])`` records as ``git diff --name-status -z`` output."""
+    return "".join(f"{field}\0" for record in records for field in record)
+
+
 class DummyRepo:
     """Stand-in for :class:`git.Repo` exposing only what the git module calls.
 
-    ``staged`` / ``unstaged`` are ``git diff --name-status`` outputs for the
+    ``staged`` / ``unstaged`` are ``git diff --name-status -z`` outputs for the
     index-vs-HEAD and worktree-vs-index views used by UNSTAGED mode;
-    ``diff_branch_result`` is the same format for BRANCH mode.
+    ``diff_branch_result`` is the same format for BRANCH mode. Build them with
+    :func:`name_status_z`.
     """
 
     def __init__(
@@ -63,35 +69,41 @@ def test_find_impacted_files_in_repo_unstaged_clean(mock_repo):
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_dirty(mock_repo):
-    mock_repo.return_value = DummyRepo(staged="A\tfile2.py", unstaged="M\tfile1.py")
+    mock_repo.return_value = DummyRepo(
+        staged=name_status_z(("A", "file2.py")), unstaged=name_status_z(("M", "file1.py"))
+    )
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result == ["file1.py", "file2.py"]
     assert mock_repo.return_value.git.diff.call_args_list == [
-        call("--cached", "--name-status", "--find-renames"),
-        call("--name-status", "--find-renames"),
+        call("--name-status", "-z", "--find-renames", "--cached"),
+        call("--name-status", "-z", "--find-renames"),
     ]
 
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_unstaged_dirty_with_untracked_files(mock_repo):
     mock_repo.return_value = DummyRepo(
-        staged="A\tfile2.py", unstaged="M\tfile1.py", untracked_files=["file3.py", "file4.py"]
+        staged=name_status_z(("A", "file2.py")),
+        unstaged=name_status_z(("M", "file1.py")),
+        untracked_files=["file3.py", "file4.py"],
     )
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result == ["file1.py", "file2.py", "file3.py", "file4.py"]
 
 
 @patch("pytest_impacted.git.Repo")
-def test_find_impacted_files_in_repo_unstaged_dirty_no_changes(mock_repo):
+def test_find_impacted_files_in_repo_unstaged_only_deletions(mock_repo):
     """Test UNSTAGED mode when the only changes are deletions."""
-    mock_repo.return_value = DummyRepo(staged="D\tgone.py", unstaged="D\talso_gone.py")
+    mock_repo.return_value = DummyRepo(
+        staged=name_status_z(("D", "gone.py")), unstaged=name_status_z(("D", "also_gone.py"))
+    )
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result is None
 
 
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_branch(mock_repo):
-    diff_branch_result = "M\tfile3.py\nA\tfile4.py\n"
+    diff_branch_result = name_status_z(("M", "file3.py"), ("A", "file4.py"))
     mock_repo.return_value = DummyRepo(diff_branch_result=diff_branch_result)
     result = git.find_impacted_files_in_repo(".", git.GitMode.BRANCH, "main")
     assert set(result) == {"file3.py", "file4.py"}
@@ -147,10 +159,12 @@ def test_git_status_from_git_diff_name_status(input_status, expected_status):
 
 def test_changeset_from_git_diff_name_status_with_scores():
     """Test ChangeSet.from_git_diff_name_status_output with rename and copy scores."""
-    diff_output = """M\tmodified.py
-R100\told_name.py\tnew_name.py
-C85\toriginal.py\tcopy.py
-D\tdeleted.py"""
+    diff_output = name_status_z(
+        ("M", "modified.py"),
+        ("R100", "old_name.py", "new_name.py"),
+        ("C85", "original.py", "copy.py"),
+        ("D", "deleted.py"),
+    )
 
     change_set = git.ChangeSet.from_git_diff_name_status_output(diff_output)
     changes = change_set.changes
@@ -208,46 +222,6 @@ def test_change_class():
     assert str(change_str) == "M\tfile.py"
 
 
-def test_change_from_git_diff_name_status_simple():
-    """Test Change.from_git_diff_name_status with simple status codes."""
-    # Test modified file
-    change = git.Change.from_git_diff_name_status(name="file.py", status="M")
-    assert change.a_path == "file.py"
-    assert change.b_path is None
-    assert change.status == git.GitStatus.MODIFIED
-
-    # Test added file
-    change = git.Change.from_git_diff_name_status(name="new_file.py", status="A")
-    assert change.a_path == "new_file.py"
-    assert change.status == git.GitStatus.ADDED
-
-    # Test with None status
-    change = git.Change.from_git_diff_name_status(name="file.py", status=None)
-    assert change.a_path == "file.py"
-    assert change.status is None
-
-
-def test_change_from_git_diff_name_status_rename_copy():
-    """Test Change.from_git_diff_name_status with rename and copy operations."""
-    # Test rename with tab-separated paths
-    change = git.Change.from_git_diff_name_status(name="old_file.py\tnew_file.py", status="R100")
-    assert change.a_path == "old_file.py"
-    assert change.b_path == "new_file.py"
-    assert change.status == git.GitStatus.RENAMED
-
-    # Test copy with tab-separated paths
-    change = git.Change.from_git_diff_name_status(name="original.py\tcopy.py", status="C85")
-    assert change.a_path == "original.py"
-    assert change.b_path == "copy.py"
-    assert change.status == git.GitStatus.COPIED
-
-    # Test rename without tab (edge case)
-    change = git.Change.from_git_diff_name_status(name="file.py", status="R100")
-    assert change.a_path == "file.py"
-    assert change.b_path is None
-    assert change.status == git.GitStatus.RENAMED
-
-
 def test_changeset_class():
     """Test the ChangeSet class."""
     changes = [
@@ -263,9 +237,7 @@ def test_changeset_class():
 
 def test_changeset_from_git_diff_name_status_output():
     """Test ChangeSet.from_git_diff_name_status_output method."""
-    diff_output = """M\tmodified.py
-A\tadded.py
-D\tdeleted.py"""
+    diff_output = name_status_z(("M", "modified.py"), ("A", "added.py"), ("D", "deleted.py"))
 
     change_set = git.ChangeSet.from_git_diff_name_status_output(diff_output)
 
@@ -279,6 +251,23 @@ def test_changeset_from_git_diff_name_status_output_empty():
     """Test ChangeSet.from_git_diff_name_status_output with empty input."""
     change_set = git.ChangeSet.from_git_diff_name_status_output("")
     assert len(change_set.changes) == 0
+
+
+def test_changeset_from_git_diff_name_status_output_keeps_special_characters():
+    """``-z`` output carries paths verbatim: no C-quoting of non-ASCII, tabs, quotes or backslashes."""
+    output = name_status_z(("M", "pkg/café.py"), ("A", 'weird\t"name"\\.py'), ("R100", "sp ace.py", "naïve.py"))
+    change_set = git.ChangeSet.from_git_diff_name_status_output(output)
+    assert [(c.a_path, c.b_path) for c in change_set.changes] == [
+        ("pkg/café.py", None),
+        ('weird\t"name"\\.py', None),
+        ("sp ace.py", "naïve.py"),
+    ]
+
+
+def test_changeset_from_git_diff_name_status_output_truncated_rename():
+    """A rename record missing its destination does not crash the parser."""
+    change_set = git.ChangeSet.from_git_diff_name_status_output("R100\0old.py\0")
+    assert (change_set.changes[0].a_path, change_set.changes[0].b_path) == ("old.py", None)
 
 
 @patch("pytest_impacted.git.Repo")
@@ -300,7 +289,7 @@ def test_impacted_files_for_unstaged_mode_only_untracked_files(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_unstaged_mode_with_deleted_files(mock_repo):
     """Test impacted_files_for_unstaged_mode with deleted files."""
-    repo = DummyRepo(unstaged="M\tfile1.py\nD\tdeleted.py")
+    repo = DummyRepo(unstaged=name_status_z(("M", "file1.py"), ("D", "deleted.py")))
     result = git.impacted_files_for_unstaged_mode(repo)
 
     # Should only include modified and added files, not deleted
@@ -310,9 +299,7 @@ def test_impacted_files_for_unstaged_mode_with_deleted_files(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_branch_mode_with_deleted_files(mock_repo):
     """Test impacted_files_for_branch_mode with deleted files."""
-    diff_output = """M\tmodified.py
-D\tdeleted.py
-A\tadded.py"""
+    diff_output = name_status_z(("M", "modified.py"), ("D", "deleted.py"), ("A", "added.py"))
 
     repo = DummyRepo(diff_branch_result=diff_output)
     result = git.impacted_files_for_branch_mode(repo, "main")
@@ -374,30 +361,10 @@ def test_git_status_from_git_diff_name_status_edge_cases():
     assert git.GitStatus.from_git_diff_name_status("B") == git.GitStatus.PAIRING_BROKEN
 
 
-def test_changeset_from_git_diff_name_status_output_single_column():
-    """Test ChangeSet.from_git_diff_name_status_output with single column input."""
-    diff_output = "M"
-    # This should raise a ValueError due to unpacking error when split doesn't return 2 elements
-    with pytest.raises(ValueError):
-        git.ChangeSet.from_git_diff_name_status_output(diff_output)
-
-
-def test_changeset_from_git_diff_name_status_output_malformed():
-    """Test ChangeSet.from_git_diff_name_status_output with malformed input."""
-    # This tests the edge case where split doesn't return exactly 2 elements
-    diff_output = "M\tfile1.py\textra_data"
-    change_set = git.ChangeSet.from_git_diff_name_status_output(diff_output)
-
-    assert len(change_set.changes) == 1
-    # The split with maxsplit=1 should handle this correctly
-    assert change_set.changes[0].status == git.GitStatus.MODIFIED
-    assert change_set.changes[0].name == "file1.py\textra_data"
-
-
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_in_repo_with_path_object(mock_repo):
     """Test find_impacted_files_in_repo with Path object instead of string."""
-    mock_repo.return_value = DummyRepo(unstaged="M\tfile1.py")
+    mock_repo.return_value = DummyRepo(unstaged=name_status_z(("M", "file1.py")))
 
     result = git.find_impacted_files_in_repo(Path("."), git.GitMode.UNSTAGED, None)
     assert result == ["file1.py"]
@@ -446,22 +413,6 @@ def test_changeset_str_multiple_changes():
     assert str(change_set) == expected
 
 
-def test_change_from_git_diff_name_status_with_none_name():
-    """Test Change.from_git_diff_name_status with None name."""
-    change = git.Change.from_git_diff_name_status(name=None, status="M")
-    assert change.a_path is None
-    assert change.b_path is None
-    assert change.status == git.GitStatus.MODIFIED
-
-
-def test_change_from_git_diff_name_status_rename_without_tab():
-    """Test Change.from_git_diff_name_status with rename status but no tab in name."""
-    change = git.Change.from_git_diff_name_status(name="file.py", status="R100")
-    assert change.a_path == "file.py"
-    assert change.b_path is None
-    assert change.status == git.GitStatus.RENAMED
-
-
 @pytest.mark.parametrize(
     ("status", "impactful"),
     [
@@ -486,7 +437,7 @@ def test_impactful_statuses(status, impactful):
 def test_impacted_files_for_branch_mode_with_none_names(mock_repo):
     """Test impacted_files_for_branch_mode with files that have None names."""
     # Create diff output that results in None names
-    diff_output = "M\tfile1.py\nD\t"  # Second line has empty filename
+    diff_output = name_status_z(("M", "file1.py"), ("D", ""))  # Second record has an empty path
 
     repo = DummyRepo(diff_branch_result=diff_output)
     result = git.impacted_files_for_branch_mode(repo, "main")
@@ -514,9 +465,21 @@ def test_git_status_from_git_diff_name_status_copy_and_rename():
 
 
 @patch("pytest_impacted.git.Repo")
+def test_impacted_files_for_unstaged_mode_staged_then_removed_from_disk(mock_repo):
+    """Added in the index view, deleted in the worktree view: nothing left to analyze."""
+    repo = DummyRepo(
+        staged=name_status_z(("A", "new.py"), ("M", "kept.py")),
+        unstaged=name_status_z(("D", "new.py")),
+    )
+    assert git.impacted_files_for_unstaged_mode(repo) == ["kept.py"]
+
+
+@patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_unstaged_mode_with_renamed_files(mock_repo):
     """Test impacted_files_for_unstaged_mode includes both paths for renamed files."""
-    repo = DummyRepo(staged="R100\told_name.py\tnew_name.py", unstaged="M\tfile1.py")
+    repo = DummyRepo(
+        staged=name_status_z(("R100", "old_name.py", "new_name.py")), unstaged=name_status_z(("M", "file1.py"))
+    )
     result = git.impacted_files_for_unstaged_mode(repo)
 
     assert set(result) == {"old_name.py", "new_name.py", "file1.py"}
@@ -525,7 +488,7 @@ def test_impacted_files_for_unstaged_mode_with_renamed_files(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_branch_mode_with_renamed_files(mock_repo):
     """Test impacted_files_for_branch_mode includes both paths for renamed files."""
-    diff_output = "R100\told_name.py\tnew_name.py\nM\tmodified.py\n"
+    diff_output = name_status_z(("R100", "old_name.py", "new_name.py"), ("M", "modified.py"))
     repo = DummyRepo(diff_branch_result=diff_output)
     result = git.impacted_files_for_branch_mode(repo, "main")
 
@@ -535,7 +498,7 @@ def test_impacted_files_for_branch_mode_with_renamed_files(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_branch_mode_with_copied_files(mock_repo):
     """Test impacted_files_for_branch_mode includes both paths for copied files."""
-    diff_output = "C85\toriginal.py\tcopy.py\nA\tnew_file.py\n"
+    diff_output = name_status_z(("C85", "original.py", "copy.py"), ("A", "new_file.py"))
     repo = DummyRepo(diff_branch_result=diff_output)
     result = git.impacted_files_for_branch_mode(repo, "main")
 
@@ -545,7 +508,7 @@ def test_impacted_files_for_branch_mode_with_copied_files(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_branch_mode_detached_head(mock_repo):
     """Test impacted_files_for_branch_mode handles detached HEAD (common in CI)."""
-    diff_output = "M\tfile1.py\n"
+    diff_output = name_status_z(("M", "file1.py"))
     repo = DummyRepo(diff_branch_result=diff_output)
 
     # Simulate detached HEAD: accessing head.reference raises TypeError
@@ -559,7 +522,7 @@ def test_impacted_files_for_branch_mode_detached_head(mock_repo):
 
     assert result == ["file1.py"]
     # Verify git.diff was called with the commit hash fallback
-    repo.git.diff.assert_called_once_with("--name-status", "--find-renames", "--end-of-options", "main", "abc123")
+    repo.git.diff.assert_called_once_with("--name-status", "-z", "--find-renames", "--end-of-options", "main", "abc123")
 
 
 # --- Tests for validate_rev (git option-injection guard) ---
@@ -581,7 +544,7 @@ def test_validate_rev_rejects_option_like_refs(rev):
 @patch("pytest_impacted.git.Repo")
 def test_impacted_files_for_branch_mode_rejects_option_like_base_branch(mock_repo):
     """An option-like base branch never reaches the git CLI."""
-    repo = DummyRepo(diff_branch_result="M\tfile1.py\n")
+    repo = DummyRepo(diff_branch_result=name_status_z(("M", "file1.py")))
 
     with pytest.raises(git.InvalidGitRefError):
         git.impacted_files_for_branch_mode(repo, "--output=/tmp/pwned")
@@ -616,7 +579,7 @@ def test_rev_args_rejects_option_like_revisions(rev):
 
 def test_rev_args_validates_every_revision_including_the_current_ref():
     """The second operand is guarded too — the guard is uniform, not per-call-site."""
-    repo = DummyRepo(diff_branch_result="M\tfile1.py\n")
+    repo = DummyRepo(diff_branch_result=name_status_z(("M", "file1.py")))
     repo.head.reference = "--output=/tmp/pwned"
 
     with pytest.raises(git.InvalidGitRefError):
@@ -672,7 +635,7 @@ def test_normalize_git_paths_empty_list():
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_monorepo_branch_mode(mock_repo):
     """In a monorepo, git-relative paths are converted to CWD-relative."""
-    diff_output = "M\tbackend/src/pkg/module.py\nA\tbackend/tests/test_foo.py\n"
+    diff_output = name_status_z(("M", "backend/src/pkg/module.py"), ("A", "backend/tests/test_foo.py"))
     mock_repo.return_value = DummyRepo(
         diff_branch_result=diff_output,
         working_tree_dir="/monorepo",
@@ -687,7 +650,7 @@ def test_find_impacted_files_monorepo_branch_mode(mock_repo):
 def test_find_impacted_files_monorepo_unstaged_mode(mock_repo):
     """In a monorepo, unstaged files are also normalized to CWD-relative paths."""
     mock_repo.return_value = DummyRepo(
-        unstaged="M\tbackend/src/module.py",
+        unstaged=name_status_z(("M", "backend/src/module.py")),
         untracked_files=["backend/src/new_file.py"],
         working_tree_dir="/monorepo",
     )
@@ -700,7 +663,7 @@ def test_find_impacted_files_monorepo_unstaged_mode(mock_repo):
 @patch("pytest_impacted.git.Repo")
 def test_find_impacted_files_monorepo_files_outside_cwd(mock_repo):
     """Files in sibling directories are returned as absolute paths."""
-    diff_output = "M\tbackend/src/module.py\nM\tfrontend/app.js\n"
+    diff_output = name_status_z(("M", "backend/src/module.py"), ("M", "frontend/app.js"))
     mock_repo.return_value = DummyRepo(
         diff_branch_result=diff_output,
         working_tree_dir="/monorepo",
@@ -723,22 +686,23 @@ def test_find_impacted_files_monorepo_files_outside_cwd(mock_repo):
 def isolated_git_config(monkeypatch, tmp_path):
     """Shield the repositories below from the developer's global/system git config.
 
-    Hooks from ``init.templateDir``, ``core.excludesFile`` patterns or
-    ``feature.manyFiles`` (index v4) would otherwise change the outcome.
+    Hooks from ``init.templateDir``, ``core.excludesFile`` patterns or a
+    ``diff.renames`` override would otherwise change the outcome.
     """
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)  # git >= 2.32
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     # Older git only knows $HOME/.gitconfig and $XDG_CONFIG_HOME/git/config.
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "test@example.com")
 
 
 @pytest.fixture
 def real_repo(tmp_path, isolated_git_config):
     """A committed repository with one package file, returning ``(repo, root)``."""
     repo = Repo.init(tmp_path)
-    repo.git.config("user.email", "test@example.com")
-    repo.git.config("user.name", "Test")
     pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
@@ -819,6 +783,25 @@ def test_unstaged_mode_sees_conflicted_files(real_repo):
         repo.git.merge("theirs")
 
     assert unstaged(root) == ["pkg/a.py"]
+
+
+def test_unstaged_mode_ignores_file_staged_then_removed_from_disk(real_repo):
+    repo, root = real_repo
+    (root / "pkg" / "new.py").write_text("y = 1\n")
+    repo.git.add("pkg/new.py")
+    (root / "pkg" / "new.py").unlink()
+
+    assert unstaged(root) is None
+
+
+def test_unstaged_mode_keeps_non_ascii_paths_unquoted(real_repo):
+    """With ``core.quotePath`` at its default, plain ``git diff`` would print ``"pkg/caf\\303\\251.py"``."""
+    repo, root = real_repo
+    (root / "pkg" / "café.py").write_text("x = 1\n")
+    repo.git.add("pkg/café.py")
+    (root / "pkg" / "café.py").write_text("x = 2\n")
+
+    assert unstaged(root) == ["pkg/café.py"]
 
 
 def test_unstaged_mode_still_sees_plain_worktree_edit_and_untracked(real_repo):
