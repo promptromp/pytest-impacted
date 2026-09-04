@@ -8,7 +8,6 @@ from typing import Any
 
 try:
     from git import Repo
-    from git.diff import Diff
 
     GIT_AVAILABLE = True
 except ImportError:
@@ -105,6 +104,7 @@ _IMPACTFUL_STATUSES = (
     GitStatus.RENAMED,
     GitStatus.COPIED,
     GitStatus.TYPE_CHANGE,
+    GitStatus.UNMERGED,
 )
 
 
@@ -164,40 +164,6 @@ class ChangeSet:
         return "\n".join(str(change) for change in self.changes)
 
     @classmethod
-    def from_git_status_porcelain_z(cls, status_str: str) -> "ChangeSet":
-        """Create a ChangeSet from ``git status --porcelain=v1 -z`` output.
-
-        Each entry is ``XY path`` where ``X`` is the index-vs-HEAD status and
-        ``Y`` the worktree-vs-index status; renames and copies are followed by a
-        second NUL-terminated field holding the original path. A single entry
-        therefore describes both the staged and the unstaged state of a file,
-        which is why unstaged mode reads this rather than ``git diff``.
-
-        ``??`` (untracked) is reported as ADDED. An entry deleted from the
-        working tree (``Y == D``) is reported as DELETED regardless of ``X``:
-        there is no file left to analyze. Otherwise the staged status wins
-        when present, so ``MM`` and ``AM`` are MODIFIED and ADDED, and a file
-        staged with new content but reverted on disk (``M`` + unchanged
-        worktree) still counts.
-        """
-        changes = []
-        fields = iter(status_str.split("\0"))
-        for entry in fields:
-            if not entry:
-                continue
-            x, y, path = entry[0], entry[1], entry[3:]
-            if x + y == "??":
-                changes.append(Change(a_path=path, status=GitStatus.ADDED))
-            elif x in "RC" or y in "RC":
-                original = next(fields, None)
-                changes.append(Change(a_path=original, b_path=path, status=GitStatus(x if x in "RC" else y)))
-            elif y == "D":
-                changes.append(Change(a_path=path, status=GitStatus.DELETED))
-            else:
-                changes.append(Change(a_path=path, status=GitStatus(y if x == " " else x)))
-        return cls(changes)
-
-    @classmethod
     def from_git_diff_name_status_output(cls, diffs_str: str) -> "ChangeSet":
         """Create a ChangeSet from a list of git diffs.
 
@@ -210,7 +176,7 @@ class ChangeSet:
         ```
 
         """
-        diffs = [line.split("\t", 1) for line in diffs_str.splitlines()]
+        diffs = [line.split("\t", 1) for line in diffs_str.splitlines() if line]
 
         changes = [Change.from_git_diff_name_status(status=status, name=name) for (status, name) in diffs]
         return cls(changes)
@@ -219,12 +185,6 @@ class ChangeSet:
 def without_nones(items: list[Any | None]) -> list[Any]:
     """Remove all Nones from the list."""
     return [item for item in items if item is not None]
-
-
-def describe_index_diffs(diffs: list[Diff]) -> None:
-    """Describe the index diffs to stdout."""
-    for diff in diffs:
-        print(f"diff: {diff!s}")
 
 
 def find_repo(path: str | Path) -> "Repo":
@@ -300,9 +260,9 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         case _:
             raise ValueError(f"Invalid git mode: {git_mode}")
 
-    if impacted_files is None:
-        return None
     impacted_files = sorted(set(impacted_files))
+    if not impacted_files:
+        return None
 
     # Normalize git-root-relative paths to working-dir-relative paths
     if repo.working_tree_dir is None:
@@ -310,6 +270,12 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     git_root = Path(repo.working_tree_dir).resolve()
     working_dir = Path(repo_dir).resolve()
     return normalize_git_paths(impacted_files, git_root, working_dir)
+
+
+#: ``--name-status`` is what :meth:`ChangeSet.from_git_diff_name_status_output`
+#: parses; ``--find-renames`` pins rename detection so results do not depend on
+#: each developer's ``diff.renames`` configuration.
+_DIFF_FLAGS = ("--name-status", "--find-renames")
 
 
 def _collect_paths_for_change(item: Change) -> list[str | None]:
@@ -332,22 +298,23 @@ def _impactful_paths(change_set: ChangeSet) -> list[str]:
     return without_nones(paths)
 
 
-def impacted_files_for_unstaged_mode(repo: Repo) -> list[str] | None:
+def impacted_files_for_unstaged_mode(repo: Repo) -> list[str]:
     """Get the impacted files when in the UNSTAGED git mode.
 
-    A single ``git status`` call covers every kind of uncommitted work —
-    staged, unstaged, staged-then-edited, untracked — and needs no HEAD, so a
-    repository without commits works too. Diffing against the index would miss
-    staged edits; diffing HEAD against the worktree would miss a staged edit
-    whose file was reverted on disk.
+    Uncommitted work is the union of three views: the index against HEAD
+    (``git diff --cached``, which also works before the first commit and
+    catches a staged edit whose file was reverted on disk), the working tree
+    against the index (``git diff``), and untracked files. Diffing only one
+    of them misses the others.
     """
     if repo.bare:
-        return None
-    status = repo.git.status("--porcelain=v1", "-z", "--untracked-files=all")
-    return _impactful_paths(ChangeSet.from_git_status_porcelain_z(status)) or None
+        return []
+    staged = ChangeSet.from_git_diff_name_status_output(repo.git.diff("--cached", *_DIFF_FLAGS))
+    unstaged = ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS))
+    return [*_impactful_paths(staged), *_impactful_paths(unstaged), *repo.untracked_files]
 
 
-def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | None:
+def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
     """Get the impacted files when in the BRANCH git mode."""
 
     try:
@@ -356,8 +323,8 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str] | 
         # Detached HEAD state (common in CI) — fall back to HEAD commit
         current_ref = repo.head.commit
 
-    diffs = repo.git.diff(*rev_args(base_branch, current_ref), name_status=True)
-    return _impactful_paths(ChangeSet.from_git_diff_name_status_output(diffs)) or None
+    diffs = repo.git.diff(*_DIFF_FLAGS, *rev_args(base_branch, current_ref))
+    return _impactful_paths(ChangeSet.from_git_diff_name_status_output(diffs))
 
 
 def deleted_files_from_diff(change_set: ChangeSet) -> list[str]:
