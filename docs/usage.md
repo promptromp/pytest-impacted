@@ -320,6 +320,8 @@ cd rust && maturin develop --release
 
 When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential astroid parsing. No configuration or flags are needed — the extension is detected at import time.
 
+Both backends extract the same imports from the same source, so switching backends does not change which tests run. The one known difference is grammar: astroid parses with the running interpreter's grammar, while ruff's parser accepts newer syntax on any interpreter. A module using syntax newer than your Python (for example PEP 695 `type` aliases on 3.11) logs a syntax-error warning and contributes no edges on the pure-Python backend; every test that imports it is then selected only through other paths.
+
 The Rust extension:
 
 1. Reads all source files in parallel via rayon

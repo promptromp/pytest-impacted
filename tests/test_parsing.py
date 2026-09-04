@@ -1,5 +1,6 @@
 """Unit tests for the parsing module."""
 
+import sys
 import tempfile
 
 import pytest
@@ -49,7 +50,8 @@ def test_parse_file_imports_zero_byte_file():
 
 def test_parse_file_imports_from_statements():
     """Test parse_file_imports with various from-import statement scenarios."""
-    # Test importing a sub-module vs a symbol
+    # Whether ``path`` is a submodule or a symbol is undecidable without importing,
+    # so both the package and the qualified name are reported.
     source = """\
 from pathlib import Path
 from typing import List, Dict
@@ -75,7 +77,7 @@ from sys import modules
             "sys.modules",
         }
 
-    # Test importing non-module items
+    # Symbols are reported as candidates too; the graph builder filters them out.
     source = """\
 from datetime import datetime
 from collections import defaultdict
@@ -259,46 +261,90 @@ def broken(
 
 def test_parse_file_imports_never_executes_package_code(tmp_path, monkeypatch):
     """Resolving ``from pkg import name`` must not import ``pkg``: its ``__init__`` may have side effects."""
-    pkg = tmp_path / "pkg"
+    pkg_name = "sideeffect_pkg_for_parsing_test"
+    pkg = tmp_path / pkg_name
     pkg.mkdir()
     sentinel = tmp_path / "EXECUTED"
     (pkg / "__init__.py").write_text(f"open({str(sentinel)!r}, 'w').close()\n")
     (pkg / "a.py").write_text("x = 1\n")
     test_file = tmp_path / "test_a.py"
-    test_file.write_text("from pkg import a\nfrom pkg.a import x\n")
+    test_file.write_text(f"from {pkg_name} import a\nfrom {pkg_name}.a import x\n")
+    # A cached parent package would let find_spec skip __init__; make sure the guard is real.
+    monkeypatch.delitem(sys.modules, pkg_name, raising=False)
     monkeypatch.syspath_prepend(str(tmp_path))
 
     imports = parsing.parse_file_imports(str(test_file), "test_a")
 
     assert not sentinel.exists(), "package __init__ ran during static analysis"
-    assert set(imports) == {"pkg", "pkg.a", "pkg.a.x"}
+    assert set(imports) == {pkg_name, f"{pkg_name}.a", f"{pkg_name}.a.x"}
 
 
-def test_parse_file_imports_matches_rust_backend(tmp_path):
-    """Both backends must agree, or the fast extra silently changes which tests run."""
-    rust = pytest.importorskip("pytest_impacted_rs")
-    source = """\
+def test_parse_file_imports_strips_utf8_bom(tmp_path):
+    """Editors on Windows often save a BOM; ruff ignores it, astroid must not choke on it."""
+    path = tmp_path / "mod.py"
+    path.write_bytes(b"\xef\xbb\xbfimport foo\nfrom bar import baz\n")
+
+    assert parsing.parse_file_imports(str(path), "mod") == ["bar", "bar.baz", "foo"]
+
+
+def test_parse_file_imports_star_import_names_only_the_package(tmp_path):
+    path = tmp_path / "mod.py"
+    path.write_text("from pkg import *\nfrom . import *\n")
+
+    assert parsing.parse_file_imports(str(path), "top.mid.mod") == ["pkg", "top.mid"]
+
+
+PARITY_SOURCE = """\
 import os, sys as system
 from pathlib import Path
 from os import path, sep
 from . import sibling
 from .models.b import Thing
 from ..up import x
+from pkg import *
 try:
     import ujson as json
 except ImportError:
     import json
 if sys.platform == "win32":
     from ctypes import windll
+match system.platform:
+    case "linux":
+        from posixpath import join
+    case _:
+        from ntpath import join
+while False:
+    import while_body
+else:
+    import while_else
+for _ in ():
+    import for_body
+with open(os.devnull) as fh:
+    import with_body
 def f():
     from functools import lru_cache
 class C:
     from collections import OrderedDict
 """
-    path = tmp_path / "mod.py"
-    path.write_text(source)
 
-    python = parsing.parse_file_imports(str(path), "my_package.sub.mod")
-    rust_result = rust.parse_file_imports(str(path), "my_package.sub.mod", False)
+
+@pytest.mark.parametrize(
+    ("module_name", "is_package"),
+    [
+        ("my_package.sub.mod", False),
+        ("my_package.sub", True),
+        ("top_level", False),
+    ],
+)
+def test_parse_file_imports_matches_rust_backend(tmp_path, module_name, is_package):
+    """Both backends must agree, or the fast extra silently changes which tests run."""
+    rust = pytest.importorskip("pytest_impacted_rs")
+    path = tmp_path / "mod.py"
+    path.write_text(PARITY_SOURCE)
+
+    python = parsing.parse_file_imports(str(path), module_name, is_package=is_package)
+    rust_result = rust.parse_file_imports(str(path), module_name, is_package)
 
     assert python == rust_result
+    assert "posixpath.join" in python, "match-case bodies must be scanned"
+    assert "pkg.*" not in python
