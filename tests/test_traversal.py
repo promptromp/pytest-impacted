@@ -40,16 +40,6 @@ def test_iter_namespace_with_string():
     assert all(m.name.startswith("pytest_impacted.") for m in modules)
 
 
-def test_iter_namespace_with_module():
-    """Test iter_namespace with module input."""
-    # Test with a known package
-    package = importlib.import_module("pytest_impacted")
-    modules = list(iter_namespace(package))
-    assert len(modules) > 0
-    # pkgutil.iter_modules returns ModuleInfo objects, not ModuleType
-    assert all(hasattr(m, "name") for m in modules)
-
-
 def test_discover_submodules():
     """Test discover_submodules function."""
     modules = discover_submodules("pytest_impacted")
@@ -126,12 +116,6 @@ def test_path_to_package_name():
     assert path_to_package_name("tests/") == "tests"
 
 
-def test_iter_namespace_invalid_input():
-    """Test iter_namespace with invalid input types."""
-    with pytest.raises(ValueError, match="Invalid namespace package"):
-        list(iter_namespace(123))  # type: ignore
-
-
 def test_discover_submodules_skips_missing_files():
     """Test discover_submodules skips modules whose files don't exist on disk."""
     traversal.discover_submodules.cache_clear()
@@ -177,17 +161,6 @@ def test_discover_submodules_empty(monkeypatch):
     monkeypatch.setattr("pytest_impacted.traversal.iter_namespace", lambda pkg, **kwargs: [])
     result = discover_submodules("some_package")
     assert result == {}
-
-
-def test_iter_namespace_module_without_path(monkeypatch):
-    """Test iter_namespace for a module without __path__ attribute."""
-
-    class Dummy:
-        __name__ = "dummy"
-
-    dummy = Dummy()
-    with pytest.raises(ValueError):
-        list(iter_namespace(dummy))
 
 
 def test_resolve_files_to_modules_with_tests_package():

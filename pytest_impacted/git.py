@@ -1,24 +1,10 @@
 """Git related functions."""
 
-# Load-bearing, not cosmetic: ``Repo`` is only bound when GitPython imports, so
-# postponed annotations are what keep this module importable without it.
 from __future__ import annotations
-import warnings
 from enum import StrEnum
 from pathlib import Path
 
-
-try:
-    from git import Repo
-
-    GIT_AVAILABLE = True
-except ImportError:
-    GIT_AVAILABLE = False
-    warnings.warn(
-        "GitPython package is not available. Git-related functionality will be disabled. "
-        "To enable git functionality, install GitPython and ensure git CLI is available.",
-        stacklevel=2,
-    )
+from git import Repo
 
 
 class InvalidGitRefError(ValueError):
@@ -188,14 +174,6 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     :param base_branch: the base branch to compare against.
 
     """
-    if not GIT_AVAILABLE:
-        warnings.warn(
-            "Git functionality is disabled because GitPython is not available. "
-            "To enable git functionality, install GitPython and ensure git CLI is available.",
-            stacklevel=2,
-        )
-        return None
-
     repo = find_repo(repo_dir)
     if repo.bare:
         raise ValueError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")

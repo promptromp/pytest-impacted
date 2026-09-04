@@ -3,7 +3,6 @@
 import logging
 import os
 import pkgutil
-import types
 from functools import lru_cache
 from pathlib import Path
 
@@ -52,27 +51,18 @@ def find_non_package_prefix(fs_path: str) -> tuple[str, str]:
     return "", fs_path
 
 
-def iter_namespace(ns_package: str | types.ModuleType, *, scan_path: str | None = None) -> list[pkgutil.ModuleInfo]:
+def iter_namespace(ns_package: str, *, scan_path: str | None = None) -> list[pkgutil.ModuleInfo]:
     """Iterate over all submodules of a namespace package.
 
-    :param ns_package: namespace package (name or actual module)
+    :param ns_package: dotted package name
     :param scan_path: optional filesystem path to scan instead of deriving from *ns_package*.
         When provided, the filesystem search uses *scan_path* while module name
         prefixes are still derived from *ns_package*.
     """
     logger.debug("Iterating over namespace for package: %s", ns_package)
 
-    match ns_package:
-        case str():
-            path = [scan_path or package_name_to_path(ns_package)]
-            prefix = f"{ns_package}."
-        case types.ModuleType():
-            path = list(ns_package.__path__)
-            prefix = f"{ns_package.__name__}."
-        case _:
-            raise ValueError(f"Invalid namespace package: {ns_package}")
-
-    module_infos = list(pkgutil.iter_modules(path=path, prefix=prefix))
+    path = [scan_path or package_name_to_path(ns_package)]
+    module_infos = list(pkgutil.iter_modules(path=path, prefix=f"{ns_package}."))
 
     logger.debug("Materialized module_infos: %s", module_infos)
 

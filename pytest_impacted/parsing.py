@@ -4,7 +4,6 @@ import importlib.util
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 import astroid
 from astroid.nodes import Import, ImportFrom
@@ -33,39 +32,17 @@ class _ModuleProxy:
             self.__package__ = ""
 
 
-def normalize_path(path_like: Any) -> Path:
-    """Normalize various path-like objects to pathlib.Path.
-
-    Handles different path types that might be returned by GitPython:
-    - Regular strings
-    - pathlib.Path objects
-    - py.path.local.LocalPath objects (with .strpath attribute)
-    - Objects implementing the filesystem path protocol (__fspath__)
-
-    Args:
-        path_like: A path-like object of various types
-
-    Returns:
-        A pathlib.Path object
+def normalize_path(path_like: str | os.PathLike[str]) -> Path:
+    """Normalize a string or any :class:`os.PathLike` (``pathlib.Path``, ``py.path.local``) to a Path.
 
     Raises:
-        ValueError: If the path cannot be normalized
+        ValueError: If the object is not path-like.
     """
     if isinstance(path_like, Path):
         return path_like
-
-    if hasattr(path_like, "strpath"):
-        # py.path.local.LocalPath object
-        return Path(path_like.strpath)
-
-    if hasattr(path_like, "__fspath__"):
-        # Objects implementing filesystem path protocol
-        return Path(path_like.__fspath__())
-
-    # Fallback: try string conversion
     try:
-        return Path(str(path_like))
-    except Exception as e:
+        return Path(os.fspath(path_like))
+    except TypeError as e:
         raise ValueError(f"Cannot normalize path-like object {path_like!r} of type {type(path_like)}") from e
 
 
@@ -156,8 +133,6 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
     try:
         source = Path(file_path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        if os.path.exists(file_path) and os.stat(file_path).st_size == 0:
-            return []
         logger.error("Error reading file %s", file_path)
         return []
 

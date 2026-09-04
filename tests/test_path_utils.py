@@ -24,19 +24,11 @@ class TestNormalizePath:
         assert result == original
         assert result is original  # Should return the same object
 
-    def test_normalize_localpath_object(self):
-        """Test normalizing a mock LocalPath object."""
-
-        class MockLocalPath:
-            """Mock LocalPath object with strpath attribute."""
-
-            def __init__(self, path_str: str):
-                self.strpath = path_str
-
-        mock_path = MockLocalPath("/some/path/file.py")
-        result = normalize_path(mock_path)
-        assert isinstance(result, Path)
-        assert str(result) == "/some/path/file.py"
+    def test_normalize_py_path_local(self, tmp_path):
+        """pytest's legacy ``py.path.local`` (``config.rootdir`` on old pytest) implements ``__fspath__``."""
+        py = pytest.importorskip("py")
+        result = normalize_path(py.path.local(str(tmp_path)))
+        assert result == tmp_path
 
     def test_normalize_fspath_object(self):
         """Test normalizing an object with __fspath__ method."""
@@ -58,48 +50,8 @@ class TestNormalizePath:
     def test_normalize_invalid_object_raises_error(self):
         """Test that invalid objects raise ValueError."""
 
-        class InvalidPath:
-            """Object that can't be converted to a path."""
-
-            def __str__(self):
-                raise RuntimeError("Cannot convert to string")
-
         with pytest.raises(ValueError, match="Cannot normalize path-like object"):
-            normalize_path(InvalidPath())
-
-    def test_normalize_object_with_str_conversion(self):
-        """Test normalizing an object that can be string-converted."""
-
-        class CustomPath:
-            """Custom object that can be converted to string."""
-
-            def __init__(self, path_str: str):
-                self._path = path_str
-
-            def __str__(self) -> str:
-                return self._path
-
-        custom_path = CustomPath("/some/path/file.py")
-        result = normalize_path(custom_path)
-        assert isinstance(result, Path)
-        assert str(result) == "/some/path/file.py"
-
-    def test_normalize_prioritizes_strpath_over_str(self):
-        """Test that strpath is prioritized over __str__ method."""
-
-        class PathWithBoth:
-            """Object with both strpath and __str__ methods."""
-
-            def __init__(self, strpath_val: str, str_val: str):
-                self.strpath = strpath_val
-                self._str_val = str_val
-
-            def __str__(self) -> str:
-                return self._str_val
-
-        path_obj = PathWithBoth("/from/strpath", "/from/str")
-        result = normalize_path(path_obj)
-        assert str(result) == "/from/strpath"  # Should use strpath, not __str__
+            normalize_path(object())
 
     def test_normalize_prioritizes_fspath_over_str(self):
         """Test that __fspath__ is prioritized over __str__ method."""
