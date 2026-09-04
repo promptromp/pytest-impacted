@@ -1,6 +1,5 @@
 """Python code parsing (AST) utilities."""
 
-import importlib.util
 import logging
 import os
 from pathlib import Path
@@ -127,13 +126,16 @@ def _extract_imports_from_node(node: Import | ImportFrom, module: _ModuleProxy) 
     elif isinstance(node, ImportFrom):
         resolved_modname = _resolve_relative_import(module, node) if node.level and node.level > 0 else node.modname
 
-        # Check if imported names are modules or just symbols
+        # ``from pkg import name`` may bind a submodule or a symbol. Telling
+        # them apart would mean importing ``pkg`` (importlib.util.find_spec
+        # imports every parent package), which must never happen at analysis
+        # time. Emit both candidates instead: the graph builder keeps only the
+        # ones that name discovered modules, so the extra edge to ``pkg``
+        # itself is a deliberate false positive. Mirrors the Rust backend.
+        if resolved_modname:
+            imports.add(resolved_modname)
         for name, *_ in node.names:
-            full_name = f"{resolved_modname}.{name}" if resolved_modname else name
-            if is_module_path(full_name, package=module.__name__):
-                imports.add(full_name)
-            else:
-                imports.add(resolved_modname)
+            imports.add(f"{resolved_modname}.{name}" if resolved_modname else name)
 
     return imports
 
@@ -177,39 +179,6 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         imports.update(_extract_imports_from_node(node, module_proxy))
 
     return sorted(imports)
-
-
-def is_module_path(module_path: str, package: str | None = None) -> bool:
-    """
-    Checks if a given string represents a valid module path.
-
-    Args:
-        module_path: The string representing the module path (e.g., "pkg.foo.bar").
-        package: The package to search for the module in. used for relative imports.
-
-    Returns:
-        True if the path points to a module, False otherwise.
-    """
-    try:
-        spec = importlib.util.find_spec(module_path, package=package)
-        return spec is not None
-    except ModuleNotFoundError:
-        return False
-    except ValueError:
-        # find_spec raises ValueError for invalid module names (empty strings, leading dots, etc.)
-        logger.debug(
-            "ValueError while trying to find spec for module %s in package %s",
-            module_path,
-            package,
-        )
-        return False
-    except ImportError:
-        logger.exception(
-            "ImportError while trying to find spec for module %s in package %s",
-            module_path,
-            package,
-        )
-        return False
 
 
 def is_test_module(module_name: str) -> bool:

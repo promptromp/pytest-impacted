@@ -107,20 +107,20 @@ def main():
         print(f"Speedup (Rust seq vs Python):      {python_time / rust_seq_time:.1f}x")
         print(f"Speedup (Rust parallel vs Python):  {python_time / rust_par_time:.1f}x")
 
-        # Correctness check: Rust results should be a superset of Python results
-        # (Rust returns more because it doesn't use is_module_path() filtering)
+        # Correctness check: both backends emit the same candidates for
+        # ``from pkg import name`` (the package and the qualified name), so the
+        # results must match exactly.
         print()
-        print("Correctness check (Rust results should be superset of Python):")
+        print("Correctness check (Rust results should equal Python):")
         all_match = True
         for name in python_results:
             python_set = set(python_results.get(name, []))
             rust_set = set(rust_par_results.get(name, []))
-            missing = python_set - rust_set
-            if missing:
-                print(f"  MISMATCH in {name}: Python found {missing} not in Rust results")
+            if python_set != rust_set:
+                print(f"  MISMATCH in {name}: only Python {python_set - rust_set}, only Rust {rust_set - python_set}")
                 all_match = False
         if all_match:
-            print("  All Python imports are present in Rust results.")
+            print("  Both backends agree on every module.")
     else:
         print()
         print("Skipping Rust benchmarks (extension not available)")

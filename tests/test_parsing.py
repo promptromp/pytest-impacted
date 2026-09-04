@@ -20,7 +20,7 @@ from typing import List, Dict
         f.write(source)
         f.flush()
         imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
-        assert set(imports) == {"os", "sys", "pathlib", "typing"}
+        assert set(imports) == {"os", "sys", "pathlib", "pathlib.Path", "typing", "typing.List", "typing.Dict"}
 
 
 def test_parse_file_imports_empty_source():
@@ -60,7 +60,20 @@ from sys import modules
         f.write(source)
         f.flush()
         imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
-        assert set(imports) == {"pathlib", "typing", "os.path", "sys"}
+        # Both the package and the imported name are reported: without importing
+        # the package there is no way to know whether ``path`` is a submodule or
+        # a symbol, and the graph builder filters to discovered modules anyway.
+        assert set(imports) == {
+            "pathlib",
+            "pathlib.Path",
+            "typing",
+            "typing.List",
+            "typing.Dict",
+            "os",
+            "os.path",
+            "sys",
+            "sys.modules",
+        }
 
     # Test importing non-module items
     source = """\
@@ -72,7 +85,14 @@ from unittest.mock import patch
         f.write(source)
         f.flush()
         imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
-        assert set(imports) == {"datetime", "collections", "unittest.mock"}
+        assert set(imports) == {
+            "datetime",
+            "datetime.datetime",
+            "collections",
+            "collections.defaultdict",
+            "unittest.mock",
+            "unittest.mock.patch",
+        }
 
     # Test mixed imports
     source = """\
@@ -85,7 +105,16 @@ from unittest.mock import patch
         f.write(source)
         f.flush()
         imports = parsing.parse_file_imports(f.name, "mypkg.mymod")
-        assert set(imports) == {"os", "pathlib", "typing", "unittest.mock"}
+        assert set(imports) == {
+            "os",
+            "pathlib",
+            "pathlib.Path",
+            "typing",
+            "typing.List",
+            "typing.Dict",
+            "unittest.mock",
+            "unittest.mock.patch",
+        }
 
 
 @pytest.mark.parametrize(
@@ -118,26 +147,6 @@ def test_is_test_module(module_name, expected):
         expected: The expected result (True if it should be considered a test module)
     """
     assert parsing.is_test_module(module_name) is expected
-
-
-@pytest.mark.parametrize(
-    "module_path,package,expected",
-    [
-        (".parsing", "pytest_impacted", True),
-        ("tests.test_parsing", "tests", True),
-        ("pytest_impacted.nonexistent", "pytest_impacted", False),
-        ("pytest_impacted.nonexistent.module", "pytest_impacted", False),
-        ("os", None, True),
-        ("sys", None, True),
-        ("nonexistent.module", None, False),
-        # ValueError cases: empty string, leading dots without package
-        ("", None, False),
-        ("..invalid", None, False),
-    ],
-)
-def test_is_module_path(module_path, package, expected):
-    """Test is_module_path with various import scenarios."""
-    assert parsing.is_module_path(module_path, package=package) is expected
 
 
 def test_parse_file_imports_nested_in_try_except():
@@ -195,8 +204,9 @@ from . import utils
 
         # from .models.b should resolve to my_package.models.b
         assert "my_package.models.b" in imports
-        # from . import utils should resolve to my_package
+        # from . import utils should resolve to my_package and my_package.utils
         assert "my_package" in imports
+        assert "my_package.utils" in imports
 
         # These unresolved paths should NOT be in the imports
         assert "models.b" not in imports
@@ -245,3 +255,50 @@ def broken(
         f.flush()
         imports = parsing.parse_file_imports(f.name, "mypkg.broken")
         assert imports == []
+
+
+def test_parse_file_imports_never_executes_package_code(tmp_path, monkeypatch):
+    """Resolving ``from pkg import name`` must not import ``pkg``: its ``__init__`` may have side effects."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    sentinel = tmp_path / "EXECUTED"
+    (pkg / "__init__.py").write_text(f"open({str(sentinel)!r}, 'w').close()\n")
+    (pkg / "a.py").write_text("x = 1\n")
+    test_file = tmp_path / "test_a.py"
+    test_file.write_text("from pkg import a\nfrom pkg.a import x\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    imports = parsing.parse_file_imports(str(test_file), "test_a")
+
+    assert not sentinel.exists(), "package __init__ ran during static analysis"
+    assert set(imports) == {"pkg", "pkg.a", "pkg.a.x"}
+
+
+def test_parse_file_imports_matches_rust_backend(tmp_path):
+    """Both backends must agree, or the fast extra silently changes which tests run."""
+    rust = pytest.importorskip("pytest_impacted_rs")
+    source = """\
+import os, sys as system
+from pathlib import Path
+from os import path, sep
+from . import sibling
+from .models.b import Thing
+from ..up import x
+try:
+    import ujson as json
+except ImportError:
+    import json
+if sys.platform == "win32":
+    from ctypes import windll
+def f():
+    from functools import lru_cache
+class C:
+    from collections import OrderedDict
+"""
+    path = tmp_path / "mod.py"
+    path.write_text(source)
+
+    python = parsing.parse_file_imports(str(path), "my_package.sub.mod")
+    rust_result = rust.parse_file_imports(str(path), "my_package.sub.mod", False)
+
+    assert python == rust_result
