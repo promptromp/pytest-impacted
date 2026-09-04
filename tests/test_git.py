@@ -581,7 +581,7 @@ def unstaged(root) -> list[str] | None:
     return git.find_impacted_files_in_repo(root, git.GitMode.UNSTAGED, None)
 
 
-def branch(root, base="main") -> list[str] | None:
+def branch(root, base) -> list[str] | None:
     return git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base)
 
 

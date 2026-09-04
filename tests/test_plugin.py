@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,8 +30,13 @@ CLI_OPTION_DESTS = {
 }
 
 
-def test_pytest_addoption():
-    """Every option lands in the ``impacted`` group, and every ini key is registered."""
+@patch("pytest_impacted.plugin.discover_extension_metadata", return_value=())
+def test_pytest_addoption(_mock_extensions):
+    """Every option lands in the ``impacted`` group, and every one has a matching ini key.
+
+    Extensions register options of their own, so they are stubbed out here —
+    otherwise merely installing one would fail this test.
+    """
     mock_group = MagicMock()
     mock_parser = MagicMock()
     mock_parser.getgroup.return_value = mock_group
@@ -42,7 +47,7 @@ def test_pytest_addoption():
     registered = {call.kwargs["dest"] for call in mock_group.addoption.call_args_list}
     assert registered == CLI_OPTION_DESTS
     ini_names = {call.args[0] for call in mock_parser.addini.call_args_list}
-    assert CLI_OPTION_DESTS - {"impacted_disable_ext"} <= ini_names
+    assert ini_names == CLI_OPTION_DESTS
 
 
 def test_pytest_configure(pytestconfig):

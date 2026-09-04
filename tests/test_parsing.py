@@ -30,7 +30,7 @@ def test_parse_file_imports_empty_source(tmp_path):
     assert imports == []
 
 
-def test_parse_file_imports_nonexistent_file(tmp_path):
+def test_parse_file_imports_nonexistent_file():
     """Test parse_file_imports with a file that doesn't exist."""
     imports = parsing.parse_file_imports("/nonexistent/path.py", "mypkg.mymod")
     assert imports == []
