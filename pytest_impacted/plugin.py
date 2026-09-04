@@ -3,7 +3,6 @@ from functools import partial
 from typing import Any
 
 import pytest
-from git import GitCommandError, InvalidGitRepositoryError
 from pytest import Config, Parser, UsageError
 
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
@@ -13,7 +12,7 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.git import GitMode, InvalidGitRefError, find_repo, rev_args
+from pytest_impacted.git import GIT_AVAILABLE, GitMode, InvalidGitRefError, find_repo, rev_args
 
 
 def pytest_addoption(parser: Parser):
@@ -335,6 +334,12 @@ def validate_tests_dir(tests_dir: str) -> None:
 
 def validate_base_branch(base_branch: str, root_dir: str) -> None:
     """Validate that --impacted-base-branch refers to a valid git ref."""
+    if not GIT_AVAILABLE:
+        return
+
+    # Importable only when GIT_AVAILABLE; see the guarded import in git.py.
+    from git import GitCommandError, InvalidGitRepositoryError  # noqa: PLC0415
+
     try:
         args = rev_args(base_branch)
         repo = find_repo(root_dir)

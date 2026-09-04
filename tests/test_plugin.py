@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -200,3 +203,23 @@ def testvalidate_module_src_layout_suggestion(tmp_path, monkeypatch):
 
     with pytest.raises(pytest.UsageError, match="--impacted-module=src/mypackage"):
         validate_module("mypackage")
+
+
+def test_plugin_imports_without_git_executable(tmp_path):
+    """The pytest11 entry point loads on every pytest run, so a missing git binary must not break pytest.
+
+    GitPython raises ImportError when the git executable is absent (slim
+    containers), which is why ``pytest_impacted.git`` guards its import.
+    """
+    script = "import pytest_impacted.plugin as p; print(p.GIT_AVAILABLE)"
+    result = subprocess.run(
+        [sys.executable, "-W", "ignore", "-c", script],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": str(tmp_path / "no-git")},
+        capture_output=True,
+        text=True,
+        check=False,  # assert below, so a failure reports the child's stderr
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
