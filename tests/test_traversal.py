@@ -476,6 +476,95 @@ def test_discover_ancestor_conftests_without_any(tmp_path):
     assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}
 
 
+@pytest.mark.parametrize(
+    ("files", "package", "aliases"),
+    [
+        pytest.param(
+            ["mysite/conftest.py", "mysite/mysite/__init__.py", "mysite/mysite/conftest.py"],
+            "mysite/mysite",
+            {},
+            id="named_like_a_conftest_in_the_package",
+        ),
+        pytest.param(
+            ["x/conftest.py", "x/x/conftest.py", "x/x/mod.py"],
+            "x/x",
+            {"x.conftest": "x.x.conftest"},
+            id="named_like_an_alias_of_a_package_file",
+        ),
+        pytest.param(
+            ["src/app/__init__.py", "src/app/conftest.py", "src/app/core/__init__.py"],
+            "src/app/core",
+            {"src.app.conftest": "app.conftest"},
+            id="importable_under_its_full_path_too",
+        ),
+        pytest.param(
+            ["src/company/conftest.py", "src/company/app/__init__.py"],
+            "src/company/app",
+            {"company.conftest": "src.company.conftest"},
+            id="below_a_namespace_package",
+        ),
+    ],
+)
+def test_every_conftest_is_one_module_under_its_own_name(tmp_path, files, package, aliases):
+    """An ancestor conftest never takes a name already in use, nor is it dropped for lack of one."""
+    for rel in files:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    project = discover_project_modules(package, root_dir=tmp_path)
+    names = [
+        resolve_files_to_modules([rel], package, root_dir=tmp_path) for rel in files if rel.endswith("conftest.py")
+    ]
+
+    assert all(len(found) == 1 for found in names), names
+    assert len({found[0] for found in names}) == len(names), names
+    assert {alias: project.aliases[alias] for alias in aliases} == aliases
+
+
+def test_a_conftest_keeps_its_own_name_before_another_takes_it_as_an_alias(tmp_path):
+    """``x/y/conftest.py`` can be imported as ``y.conftest`` too, but that is ``y/conftest.py``'s own name."""
+    for rel in ("x/y/pkg/__init__.py", "x/y/conftest.py", "y/conftest.py", "y/tests/test_a.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    project = discover_project_modules("x/y/pkg", "y/tests", root_dir=tmp_path)
+
+    assert project.modules["y.conftest"] == str((tmp_path / "y/conftest.py").resolve())
+    assert project.modules["x.y.conftest"] == str((tmp_path / "x/y/conftest.py").resolve())
+    assert "y.conftest" not in project.aliases
+
+
+def test_two_conftests_that_can_take_one_name_are_both_modules(tmp_path):
+    """``y.conftest`` can mean ``y/conftest.py`` or, with ``x/`` on ``sys.path``, ``x/y/conftest.py``:
+    one takes it, the other its next name or its last resort, and contests it."""
+    for rel in ("x/y/__init__.py", "x/y/conftest.py", "x/y/pkg/__init__.py", "y/conftest.py", "y/tests/test_a.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    discovered = traversal._discover_project("x/y/pkg", "y/tests", root_dir=tmp_path)
+
+    names = {path: name for name, path in discovered.modules.items()}
+    conftests = {names[str((tmp_path / rel).resolve())] for rel in ("x/y/conftest.py", "y/conftest.py")}
+    owner = discovered.aliases.get("y.conftest", "y.conftest")
+    assert {owner, *discovered.contested["y.conftest"]} == conftests
+
+
+def test_conftests_above_the_packages_are_project_modules_and_resolve(tmp_path, caplog):
+    """The graph has them as nodes, so an edit to one must resolve to its node like any module."""
+    for rel in ("conftest.py", "backend/conftest.py", "backend/app/__init__.py", "suite/test_x.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    project = discover_project_modules("backend/app", "suite", root_dir=tmp_path)
+    with caplog.at_level("WARNING", logger="pytest_impacted.traversal"):
+        resolved = resolve_files_to_modules(["conftest.py", "backend/conftest.py"], "backend/app", "suite", tmp_path)
+
+    assert project.modules["conftest"] == str((tmp_path / "conftest.py").resolve())
+    assert project.modules["backend.conftest"] == str((tmp_path / "backend/conftest.py").resolve())
+    assert resolved == ["conftest", "backend.conftest"]
+    assert "could not be resolved" not in caplog.text
+
+
 # --- implicit namespace sub-packages (PEP 420) -----------------------------------------
 
 
@@ -585,6 +674,30 @@ def test_an_unsearchable_package_directory_has_no_modules(tmp_path):
         locked.chmod(0o755)
 
     assert found == {}
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+@pytest.mark.parametrize(
+    "probe",
+    [
+        pytest.param(lambda root: discover_submodules("pkg", root_dir=root), id="discovery_under_it"),
+        pytest.param(lambda root: find_non_package_prefix("ns/data", root), id="its_package_prefix"),
+        pytest.param(
+            lambda root: resolve_files_to_modules(["pkg/data/gone.py"], "pkg", root_dir=root), id="a_file_in_it"
+        ),
+    ],
+)
+def test_a_listable_but_unsearchable_directory_raises_nothing(tmp_path, probe):
+    """Mode 644, as a badly permissioned or bind-mounted data dir can be: listing works, stat raises on 3.11–3.13."""
+    make_package(tmp_path, "", "pkg/data/__init__.py", "pkg/data/x.py", "ns/data/__init__.py")
+    locked = [tmp_path / "pkg/data", tmp_path / "ns/data"]
+    for directory in locked:
+        directory.chmod(0o644)
+    try:
+        probe(tmp_path)
+    finally:
+        for directory in locked:
+            directory.chmod(0o755)
 
 
 @pytest.mark.parametrize(

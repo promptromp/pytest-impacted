@@ -3,8 +3,9 @@
 import logging
 import os
 import pkgutil
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from functools import cache, lru_cache
+from itertools import chain
 from pathlib import Path
 from typing import NamedTuple
 
@@ -54,7 +55,7 @@ def find_non_package_prefix(fs_path: str, root: Path) -> tuple[str, str]:
     parts = Path(fs_path).parts
     for i in range(len(parts)):
         candidate = Path(*parts[: i + 1])
-        if (root / candidate / "__init__.py").exists():
+        if _is_regular_package(root / candidate):
             if i == 0:
                 return "", fs_path
             prefix = str(Path(*parts[:i]))
@@ -135,7 +136,8 @@ def _discover_pkgutil_impl(
         # Not with_suffix(): it would truncate at a dot in the final component.
         file_path = base.parent / f"{base.name}.py"
 
-        if file_path.exists():
+        # os.path, not Path.exists(): a file in an unsearchable directory is missing, rather than raising.
+        if os.path.isfile(file_path):
             results[name] = str(file_path.resolve())
         else:
             logger.warning("Module %s not found at expected path %s", name, file_path)
@@ -268,55 +270,6 @@ def clear_discovery_cache() -> None:
 discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: ignore[attr-defined]
 
 
-def _conftest_module_name(directory: Path, root: Path, taken: Collection[str]) -> str:
-    """Dotted name for ``directory/conftest.py`` that is not already in *taken*.
-
-    Preferably named the way package discovery names modules, dropping a
-    non-package prefix like ``src/``, so the conftest's relative imports resolve
-    to the modules they refer to. Dropping the prefix can clash with another
-    module, and a clash would drop the conftest from the graph, so the full
-    path from the root — unique among conftests — is the fallback.
-    """
-    relative = directory.relative_to(root)
-    if not relative.parts:
-        return "conftest"
-    _, importable = find_non_package_prefix(str(relative), root)
-    preferred = f"{path_to_package_name(importable)}.conftest"
-    return preferred if preferred not in taken else ".".join((*relative.parts, "conftest"))
-
-
-def discover_ancestor_conftests(
-    packages: Iterable[str], root_dir: str | Path | None = None, *, taken: Collection[str] = ()
-) -> dict[str, str]:
-    """Find the ``conftest.py`` files between *root_dir* and each package directory.
-
-    pytest loads every conftest from the rootdir down to a test file, so one
-    above the analysed packages — most often at the repository root — still
-    provides fixtures to their tests. Package discovery never sees it, so
-    without this its imports would be invisible to the dependency graph.
-
-    Args:
-        taken: Module names already in use (see :func:`_conftest_module_name`).
-
-    Returns:
-        Dict mapping a dotted name (``conftest``, ``backend.conftest``; a non-package
-        prefix such as ``src/`` is dropped, as package discovery does) -> absolute
-        file path, like :func:`discover_submodules`.
-    """
-    root = canonical_root(root_dir)
-    found: dict[str, str] = {}
-    for package in packages:
-        directory = (root / package_name_to_path(package)).parent
-        while directory.is_relative_to(root):
-            conftest = directory / "conftest.py"
-            if conftest.is_file() and (path := str(conftest.resolve())) not in found.values():
-                found[_conftest_module_name(directory, root, taken={*taken, *found})] = path
-            if directory == root:
-                break
-            directory = directory.parent
-    return found
-
-
 class ProjectModules(NamedTuple):
     """The modules of a project: one canonical name per file, plus the other names that reach it."""
 
@@ -324,6 +277,144 @@ class ProjectModules(NamedTuple):
     modules: dict[str, str]
     #: Another importable name -> the canonical name of the same file.
     aliases: dict[str, str]
+
+
+class _Discovered(NamedTuple):
+    """:class:`ProjectModules`, plus the importable names that more than one file can have."""
+
+    modules: dict[str, str]
+    aliases: dict[str, str]
+    #: A name some conftests above the package wanted but did not get -> those conftests'
+    #: canonical names: an import of it may mean any of them (see :func:`_name_conftests`).
+    contested: dict[str, set[str]]
+
+
+#: Starts the name of a conftest with no free importable name: no import spells one so.
+LAST_RESORT_PREFIX = "."
+
+
+def import_base(module_name: str) -> str:
+    """The name *module_name*'s relative imports resolve from: itself, less a :data:`LAST_RESORT_PREFIX`."""
+    return module_name.removeprefix(LAST_RESORT_PREFIX)
+
+
+class _ConftestCandidate(NamedTuple):
+    """The names a conftest can take."""
+
+    #: Importable names, preferred first (see :func:`_conftest_candidate`).
+    names: list[str]
+    #: Its name when every one of *names* is taken: unique, and spelled by no import.
+    last_resort: str
+
+
+def _conftest_candidate(directory: Path, root: Path) -> _ConftestCandidate:
+    """The names ``directory/conftest.py`` can be imported under, preferred first.
+
+    Preferably the way package discovery names modules, rooted at the first regular
+    package and dropping a non-package prefix like ``src/``, so the conftest's relative
+    imports resolve to the modules they refer to; then the name rooted at each other
+    directory that could be on ``sys.path``, as for a package's modules (see
+    :func:`_rooted_names`). The last resort is its full path with a leading dot.
+    """
+    parts = directory.relative_to(root).parts
+    last_resort = LAST_RESORT_PREFIX + ".".join((*parts, "conftest"))
+    if not parts:
+        return _ConftestCandidate(["conftest"], last_resort)
+    _, importable = find_non_package_prefix(str(Path(*parts)), root)
+    preferred = f"{path_to_package_name(importable)}.conftest"
+    rooted = _rooted_names(parts, (*parts, "conftest"), root, len(parts) - 1, _is_regular_package)
+    return _ConftestCandidate(list(dict.fromkeys([preferred, *rooted])), last_resort)
+
+
+def discover_ancestor_conftests(
+    packages: Iterable[str], root_dir: str | Path | None = None, *, taken: Iterable[str] = ()
+) -> dict[str, str]:
+    """Find the ``conftest.py`` files between *root_dir* and each package directory.
+
+    Returns:
+        Dict mapping each conftest's name (``conftest``, ``backend.conftest``; see
+        :func:`_discover_ancestor_conftests`) -> absolute file path, like :func:`discover_submodules`.
+        A conftest with no free importable name is keyed by :data:`LAST_RESORT_PREFIX` and its
+        path (``.mysite.conftest``): parse its imports under :func:`import_base` of that name.
+    """
+    return _discover_ancestor_conftests(packages, root_dir, taken=taken).modules
+
+
+def _discover_ancestor_conftests(
+    packages: Iterable[str],
+    root_dir: str | Path | None = None,
+    *,
+    taken: Iterable[str] = (),
+    known_paths: Iterable[str] = (),
+) -> _Discovered:
+    """Find the ``conftest.py`` files between *root_dir* and each package directory, and name them.
+
+    pytest loads every conftest from the rootdir down to a test file, so one
+    above the analysed packages — most often at the repository root — still
+    provides fixtures to their tests. Package discovery never sees it, so
+    without this its imports would be invisible to the dependency graph.
+
+    Each conftest is named from :func:`_conftest_candidate` around every name in *taken*
+    (see :func:`_name_conftests`).
+
+    Args:
+        taken: Names already in use, aliases included: a conftest never takes one.
+        known_paths: Files already named by another walk, which are skipped.
+
+    Returns:
+        The conftests (``conftest``, ``backend.conftest``; a non-package prefix such
+        as ``src/`` is dropped, as package discovery does), their aliases, and the
+        names they contest.
+    """
+    root = canonical_root(root_dir)
+    seen = set(known_paths)
+    candidates: dict[str, _ConftestCandidate] = {}
+    for package in packages:
+        directory = (root / package_name_to_path(package)).parent
+        while directory.is_relative_to(root):
+            conftest = directory / "conftest.py"
+            if os.path.isfile(conftest) and (path := str(conftest.resolve())) not in seen:
+                seen.add(path)
+                candidates[path] = _conftest_candidate(directory, root)
+            if directory == root:
+                break
+            directory = directory.parent
+    return _name_conftests(candidates, taken=taken)
+
+
+def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterable[str]) -> _Discovered:
+    """Name each conftest path from its candidates, never with a name in *taken*.
+
+    Names are handed out by rank across all conftests, in walk order, so one conftest's
+    second choice never takes another's first; the free names left are aliases, once
+    every conftest has its own. A conftest with no free name gets its last resort rather
+    than being dropped, which would lose every edge from it.
+
+    Which file a name two files can have means depends on ``sys.path`` and the import
+    mode, which analysis cannot know, so each name a conftest wanted but did not get is
+    *contested*: an import of it is an import of that conftest too. Every rule that picks
+    one winner loses tests in some layout.
+    """
+    used = set(taken)
+    chosen: dict[str, str] = {}
+    for rank in range(max((len(candidate.names) for candidate in candidates.values()), default=0)):
+        for path, candidate in candidates.items():
+            if path not in chosen and rank < len(candidate.names) and candidate.names[rank] not in used:
+                chosen[path] = candidate.names[rank]
+                used.add(candidate.names[rank])
+    modules = {chosen.get(path, candidate.last_resort): path for path, candidate in candidates.items()}
+    aliases: dict[str, str] = {}
+    for name, path in modules.items():
+        for alias in candidates[path].names:
+            if alias not in used:
+                aliases[alias] = name
+                used.add(alias)
+    contested: dict[str, set[str]] = {}
+    for name, path in modules.items():
+        for wanted in candidates[path].names:
+            if wanted != name and aliases.get(wanted) != name:
+                contested.setdefault(wanted, set()).add(name)
+    return _Discovered(modules, aliases, contested)
 
 
 def discover_project_modules(
@@ -343,7 +434,20 @@ def discover_project_modules(
       (see :func:`_root_aliases`).
     * A tests dir inside the package is walked twice: ``app.tests.x`` by the package
       walk, ``tests.x`` by the tests-dir walk.
+
+    Conftests above the two directories are modules too (see
+    :func:`_discover_ancestor_conftests`): pytest loads them, so they are graph nodes,
+    and an edit to one must resolve to its node like any other module. They are named
+    last, around every name already in use.
     """
+    modules, aliases, _ = _discover_project(package, tests_package, root_dir)
+    return ProjectModules(modules, aliases)
+
+
+def _discover_project(
+    package: str, tests_package: str | None = None, root_dir: str | Path | None = None
+) -> _Discovered:
+    """:func:`discover_project_modules`, with the names the conftests above the package contest."""
     root = canonical_root(root_dir)
     walked = discover_submodules(package, require_init=True, root_dir=root)
     names_by_path: dict[str, list[str]] = {}
@@ -366,7 +470,15 @@ def discover_project_modules(
                 modules[name] = path
             else:
                 aliases.setdefault(name, canonical_of[path])
-    return ProjectModules(modules, {alias: name for alias, name in aliases.items() if alias not in modules})
+    # The walk up from a tests dir inside the package passes conftests the walks already named.
+    packages = [package, tests_package] if tests_package else [package]
+    ancestors = _discover_ancestor_conftests(
+        packages, root_dir=root, taken=chain(modules, aliases), known_paths=modules.values()
+    )
+    modules = {**ancestors.modules, **modules}
+    aliases = {**ancestors.aliases, **aliases}
+    aliases = {alias: name for alias, name in aliases.items() if alias not in modules}
+    return _Discovered(modules, aliases, ancestors.contested)
 
 
 def discover_application_files(
@@ -404,7 +516,7 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
     like ``types`` for ``pkg/ns/types.py``. With no regular package on the way, the
     roots stop at the analysed directory itself, which is the package being named.
     """
-    is_regular_package = cache(lambda directory: (directory / "__init__.py").is_file())
+    is_regular_package = cache(_is_regular_package)
     last_root = len(Path(package_name_to_path(package)).parts) - 1
     aliases: dict[str, str] = {}
     for name, path in modules.items():
@@ -413,13 +525,34 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
             continue
         directories = file.relative_to(root).parent.parts
         parts = directories if file.name == "__init__.py" else (*directories, file.stem)
-        first_regular = next(
-            (end for end in range(len(directories)) if is_regular_package(root.joinpath(*directories[: end + 1]))),
-            last_root,
-        )
-        for start in range(min(first_regular, len(parts) - 1) + 1):
-            aliases.setdefault(".".join(parts[start:]), name)
+        for alias in _rooted_names(directories, parts, root, last_root, is_regular_package):
+            aliases.setdefault(alias, name)
     return aliases
+
+
+def _rooted_names(
+    directories: tuple[str, ...],
+    parts: tuple[str, ...],
+    root: Path,
+    last_root: int,
+    is_regular_package: Callable[[Path], bool],
+) -> list[str]:
+    """The dotted names of *parts* rooted at each of *directories* that could be on ``sys.path``.
+
+    That is any directory down to the first regular package — never one inside it,
+    which would invent names like ``types`` for ``pkg/ns/types.py`` — or down to index
+    *last_root* when there is none; never the bare last part.
+    """
+    first_regular = next(
+        (end for end in range(len(directories)) if is_regular_package(root.joinpath(*directories[: end + 1]))),
+        last_root,
+    )
+    return [".".join(parts[start:]) for start in range(min(first_regular, len(parts) - 1) + 1)]
+
+
+def _is_regular_package(directory: Path) -> bool:
+    """Whether *directory* has an ``__init__.py``; an unsearchable one has none, rather than raising."""
+    return os.path.isfile(directory / "__init__.py")
 
 
 def resolve_files_to_modules(
@@ -432,11 +565,22 @@ def resolve_files_to_modules(
 
     Uses filesystem-based discovery (no imports) to build the module mapping.
     *filenames* are interpreted relative to *root_dir*, as git reports them.
+    (A run resolves through its graph instead: see
+    :func:`~pytest_impacted.graph.resolve_files_to_nodes`.)
+    """
+    modules = discover_project_modules(ns_module, tests_package, root_dir=root_dir).modules
+    return modules_for_files(filenames, {path: name for name, path in modules.items()}, root_dir=root_dir)
+
+
+def modules_for_files(
+    filenames: Iterable[str], path_to_module: Mapping[str, str], root_dir: str | Path | None = None
+) -> list[str]:
+    """The module of each of *filenames* (relative to *root_dir*) in *path_to_module*, keyed by absolute path.
+
+    Non-Python files have none; a deleted file has none either, and one that exists
+    but is not a known module is logged.
     """
     root = canonical_root(root_dir)
-    modules = discover_project_modules(ns_module, tests_package, root_dir=root).modules
-    path_to_module = {path: name for name, path in modules.items()}
-
     resolved_modules = []
     for file in filenames:
         if not file.endswith(".py"):
@@ -445,7 +589,7 @@ def resolve_files_to_modules(
         abs_path = str((root / file).resolve())
         if abs_path in path_to_module:
             resolved_modules.append(path_to_module[abs_path])
-        elif not Path(abs_path).exists():
+        elif not os.path.exists(abs_path):
             logger.debug("File %s no longer exists; nothing to resolve", file)
         else:
             logger.warning(

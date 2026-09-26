@@ -12,7 +12,7 @@ from pytest_impacted.parsing import (
     parse_file_imports,
     parse_pytest_plugins,
 )
-from pytest_impacted.traversal import discover_ancestor_conftests, discover_project_modules
+from pytest_impacted.traversal import LAST_RESORT_PREFIX, _discover_project, import_base, modules_for_files
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,25 @@ logger = logging.getLogger(__name__)
 
 def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
     """Parse imports for all discovered submodules.
+
+    A conftest with no free name is keyed by its last resort (see
+    :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), which is no base
+    for its relative imports, so it is parsed under its
+    :func:`~pytest_impacted.traversal.import_base`. That name may belong to another
+    module, so it is parsed apart.
+    """
+    bases = {import_base(name): name for name in submodules if name.startswith(LAST_RESORT_PREFIX)}
+    if not bases:
+        return _parse_imports(submodules)
+    result = _parse_imports(
+        {name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)}
+    )
+    parsed = _parse_imports({base: submodules[name] for base, name in bases.items()})
+    return result | {bases[base]: imports for base, imports in parsed.items()}
+
+
+def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
+    """Parse the imports of each ``{name: path}``, resolving relative imports from *name*.
 
     Uses the Rust extension (parallel batch via rayon) when available,
     falling back to sequential astroid parsing.
@@ -83,6 +102,16 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
+def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
+    """Resolve changed files (relative to *root_dir*, as git reports them) to the graph's nodes.
+
+    Through the nodes' own ``path``, not a second discovery: every module returned is a
+    node, however the graph was cached. A module the graph lacks would read as a
+    production module outside it, and :func:`resolve_impacted_tests` would select every test.
+    """
+    return modules_for_files(filenames, {path: node for node, path in dep_tree.nodes(data="path") if path}, root_dir)
+
+
 def _pytest_plugin_edges(submodules: dict[str, str], aliases: dict[str, str]) -> dict[str, list[str]]:
     """``{declaring module: [plugin modules]}`` for every ``pytest_plugins`` declaration in scope.
 
@@ -115,20 +144,13 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     Package paths are resolved against *root_dir* (default: the current directory).
 
     Conftests above the packages are included too (see
-    :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), and every
+    :func:`~pytest_impacted.traversal.discover_project_modules`), and every
     discovered node carries its absolute file in the ``path`` attribute. Modules
     named in a ``pytest_plugins`` declaration count as imports (see
     :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are flagged with
     the ``pytest_plugin`` attribute.
     """
-    submodules, aliases = discover_project_modules(package, tests_package, root_dir=root_dir)
-
-    # Skip any the package scan already found: the walk up from a tests
-    # directory inside the package passes through package directories.
-    packages = [package, tests_package] if tests_package else [package]
-    known_paths = set(submodules.values())
-    ancestors = discover_ancestor_conftests(packages, root_dir=root_dir, taken=submodules.keys())
-    submodules = {**{name: path for name, path in ancestors.items() if path not in known_paths}, **submodules}
+    submodules, aliases, contested = _discover_project(package, tests_package, root_dir)
 
     logger.debug("Building dependency tree for %d submodules", len(submodules))
 
@@ -141,10 +163,11 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     for name, file_path in submodules.items():
         digraph.add_node(name, path=file_path)
         for candidate in [*all_imports.get(name, []), *plugin_edges.get(name, [])]:
-            imp = aliases.get(candidate, candidate)
-            if imp in submodules:
-                digraph.add_node(imp)
-                digraph.add_edge(name, imp)
+            # A name conftests above the package contest is an import of each of them too.
+            for imp in (aliases.get(candidate, candidate), *contested.get(candidate, ())):
+                if imp in submodules:
+                    digraph.add_node(imp)
+                    digraph.add_edge(name, imp)
     # pytest registers plugins for the whole session; see PytestImpactStrategy.
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
         digraph.nodes[plugin]["pytest_plugin"] = True

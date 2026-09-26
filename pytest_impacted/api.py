@@ -13,6 +13,7 @@ from typing import Any
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
+from pytest_impacted.graph import resolve_files_to_nodes
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
@@ -22,7 +23,6 @@ from pytest_impacted.strategies import (
 from pytest_impacted.traversal import (
     canonical_root,
     path_to_package_name,
-    resolve_files_to_modules,
     resolve_modules_to_files,
 )
 
@@ -142,21 +142,20 @@ def get_impacted_tests(
         session,
     )
 
-    impacted_modules = resolve_files_to_modules(
-        impacted_files, ns_module=ns_module, tests_package=tests_package, root_dir=root_dir
-    )
+    # Build the dependency graph once and pass it to the strategy pipeline.
+    # The result is LRU-cached and must not be mutated, so we hand each run a
+    # shallow copy. Strategies that implement enrich_dep_tree() mutate the
+    # copy, leaving the cached base graph pristine for subsequent runs.
+    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir)).copy()
+
+    # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
+    impacted_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
     if not impacted_modules:
         notify(
             f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
             "Continuing to strategy pipeline.",
             session,
         )
-
-    # Build the dependency graph once and pass it to the strategy pipeline.
-    # The result is LRU-cached and must not be mutated, so we hand each run a
-    # shallow copy. Strategies that implement enrich_dep_tree() mutate the
-    # copy, leaving the cached base graph pristine for subsequent runs.
-    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir)).copy()
 
     # Enrichment phase — runs before setup so that setup and find_impacted_tests
     # both see the final graph (with any synthetic edges added by extensions).

@@ -1,12 +1,16 @@
 """Unit tests for the graph module."""
 
+import os
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import networkx as nx
 import pytest
 
 from pytest_impacted import graph
-from pytest_impacted.traversal import ProjectModules
+from pytest_impacted.strategies import cached_build_dep_tree
+from pytest_impacted.traversal import _Discovered, resolve_files_to_modules
 
 
 @pytest.fixture
@@ -79,8 +83,7 @@ def test_build_dep_tree():
 
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
-        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
+        patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
     ):
         # Set up mock imports for each module
@@ -108,8 +111,7 @@ def test_changed_init_with_no_dependents_impacts_nothing():
 
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
-        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
+        patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
         # pkg/__init__.py imports nothing, pkg.core imports nothing,
@@ -139,8 +141,7 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
 
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
-        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
+        patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
         mock_parse.side_effect = [
@@ -182,7 +183,8 @@ def test_build_dep_tree_does_not_duplicate_a_conftest_inside_the_package(tmp_pat
     dep_tree = graph.build_dep_tree("src/app", tests_package="src/app/tests", root_dir=tmp_path)
 
     assert "app.conftest" in dep_tree
-    assert "src.app.conftest" not in dep_tree
+    paths = [path for _, path in dep_tree.nodes(data="path")]
+    assert len(paths) == len(set(paths)), sorted(dep_tree.nodes)
 
 
 def test_ancestor_conftest_relative_imports_resolve_in_src_layout(tmp_path):
@@ -298,6 +300,174 @@ def test_a_test_importing_from_the_package_root_sees_what_its_init_imports(tmp_p
     assert dep_tree.has_edge("app", "tests.test_app")
     assert graph.resolve_impacted_tests(["app"], dep_tree) == ["tests.test_app"]
     assert graph.resolve_impacted_tests(["app.core"], dep_tree) == ["tests.test_app"]
+
+
+def test_every_node_resolves_back_to_itself(tmp_path):
+    """The graph and the changed-file resolver name every file alike: a node an edit cannot
+    resolve to is a change that impacts nothing."""
+    files = {
+        "conftest.py": "",
+        "backend/conftest.py": "from backend.app.db import connect\n",
+        "backend/app/__init__.py": "",
+        "backend/app/db.py": "",
+        "backend/app/ns/x.py": "",
+        "backend/app/checks/test_in.py": "",
+        "suite/conftest.py": "from backend.conftest import *\n",
+        "suite/test_a.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+    root = tmp_path.resolve()
+
+    dep_tree = graph.build_dep_tree("backend/app", tests_package="suite", root_dir=tmp_path)
+
+    for node, path in dep_tree.nodes(data="path"):
+        changed = str(Path(path).relative_to(root))
+        assert resolve_files_to_modules([changed], "backend/app", "suite", root_dir=tmp_path) == [node], changed
+
+
+def test_changed_files_resolve_to_the_graph_nodes_with_that_path(tmp_path):
+    """Including a conftest above the package; a file created after the graph was cached is no node."""
+    for rel in ("backend/conftest.py", "backend/app/__init__.py", "backend/app/db.py", "suite/test_a.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    dep_tree = cached_build_dep_tree("backend/app", "suite", root_dir=tmp_path)
+    (tmp_path / "suite/test_new.py").touch()
+
+    changed = ["backend/conftest.py", "backend/app/db.py", "suite/test_new.py", "gone.py", "README.md"]
+
+    assert graph.resolve_files_to_nodes(changed, dep_tree, root_dir=tmp_path) == ["backend.conftest", "app.db"]
+
+
+def test_a_conftest_named_like_one_in_the_package_keeps_its_edges(tmp_path):
+    """Django's ``mysite/conftest.py`` beside ``mysite/mysite/conftest.py``: no importable name is
+    free, so it is named with a leading dot, which no import spells, and keeps its own imports."""
+    files = {
+        "mysite/conftest.py": "from mysite.models import Poll\n",
+        "mysite/mysite/__init__.py": "",
+        "mysite/mysite/conftest.py": "from mysite.views import index\n",
+        "mysite/mysite/models.py": "",
+        "mysite/mysite/views.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("mysite/mysite", root_dir=tmp_path)
+
+    assert dep_tree.nodes[".mysite.conftest"]["path"] == str((tmp_path / "mysite/conftest.py").resolve())
+    assert dep_tree.has_edge("mysite.models", ".mysite.conftest")
+    # Parsed apart, though both are parsed as ``mysite.conftest``: neither takes the other's imports.
+    assert dep_tree.has_edge("mysite.views", "mysite.conftest")
+    assert not dep_tree.has_edge("mysite.views", ".mysite.conftest")
+    assert not dep_tree.has_edge("mysite.models", "mysite.conftest")
+    assert graph.resolve_files_to_nodes(["mysite/conftest.py"], dep_tree, root_dir=tmp_path) == [".mysite.conftest"]
+
+
+def test_a_conftest_with_no_free_name_keeps_its_relative_imports(tmp_path):
+    """``x/conftest.py``'s only name, ``x.conftest``, is an alias of ``x/x/conftest.py``: it gets the last
+    resort, but is still parsed as ``x.conftest``, so ``.x.tests.helpers`` resolves to the helper."""
+    files = {
+        "x/conftest.py": "from .x.tests.helpers import make\n",
+        "x/x/conftest.py": "",
+        "x/x/mod.py": "",
+        "x/x/tests/helpers.py": "",
+        "x/x/tests/test_a.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("x/x", tests_package="x/x/tests", root_dir=tmp_path)
+
+    assert dep_tree.nodes[".x.conftest"]["path"] == str((tmp_path / "x/conftest.py").resolve())
+    assert dep_tree.has_edge("x.x.tests.helpers", ".x.conftest")
+
+
+def test_a_module_in_a_regular_package_reaches_its_conftest_by_relative_import(tmp_path):
+    """``from ..conftest import helper`` in ``x/y/pkg/mod.py`` can only mean ``x/y/conftest.py``."""
+    files = {
+        "x/y/__init__.py": "",
+        "x/y/conftest.py": "def helper(): ...\n",
+        "x/y/pkg/__init__.py": "",
+        "x/y/pkg/mod.py": "from ..conftest import helper\n",
+        "y/conftest.py": "",
+        "y/tests/test_a.py": "from y.pkg import mod\n",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("x/y/pkg", tests_package="y/tests", root_dir=tmp_path)
+
+    conftest = graph.resolve_files_to_nodes(["x/y/conftest.py"], dep_tree, root_dir=tmp_path)
+    assert graph.resolve_impacted_tests(conftest, dep_tree) == ["tests.test_a"]
+
+
+CONTESTED = {
+    "y/conftest.py": "from lib.util import thing\n",
+    "y/lib/__init__.py": "",
+    "y/lib/util.py": "thing = 1\n",
+    "x/y/__init__.py": "",
+    "x/y/conftest.py": "from lib.other import other\n",
+    "y/lib/other.py": "other = 1\n",
+    "x/y/tests/test_a.py": "from y.conftest import thing\n",
+}
+
+
+@pytest.mark.parametrize("symlinked", [False, True], ids=["plain", "x_y_is_a_symlink"])
+@pytest.mark.parametrize("changed", ["lib.util", "lib.other"])
+def test_an_import_of_a_contested_conftest_name_depends_on_every_conftest_it_can_mean(tmp_path, changed, symlinked):
+    """``y.conftest`` is ``y/conftest.py`` with the root on ``sys.path`` and ``x/y/conftest.py`` with ``x/``:
+    analysis cannot know which, so ``test_a`` depends on both, whichever took the name — named by the
+    path it is reached by, also through a symlinked directory."""
+    for rel, source in CONTESTED.items():
+        if symlinked and rel.startswith("x/y/"):
+            rel = "w/" + rel.removeprefix("x/y/")
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+    if symlinked:
+        (tmp_path / "x").mkdir()
+        (tmp_path / "x/y").symlink_to("../w", target_is_directory=True)
+
+    dep_tree = graph.build_dep_tree("y/lib", tests_package="x/y/tests", root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests([changed], dep_tree) == ["tests.test_a"]
+
+
+def test_tests_dir_conftests_sharing_a_name_do_not_select_each_others_tests(tmp_path):
+    """Every service's ``tests/conftest.py`` could be imported as ``tests.conftest``; that must not tie
+    one service's tests to another's conftest — they are not the contested conftests above the package."""
+    for service in ("a", "b"):
+        files = {
+            f"services/{service}/tests/conftest.py": "def helper(): ...\n",
+            f"services/{service}/tests/test_x.py": "from tests.conftest import helper\n",
+        }
+        for rel, source in files.items():
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("services", tests_package="services", root_dir=tmp_path)
+    conftest = graph.resolve_files_to_nodes(["services/a/tests/conftest.py"], dep_tree, root_dir=tmp_path)
+
+    assert not [test for test in graph.resolve_impacted_tests(conftest, dep_tree) if ".b." in test]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_an_unsearchable_directory_with_a_conftest_does_not_crash_the_graph(tmp_path):
+    """Listable but not searchable (mode 644): discovery lists its conftest; nothing may raise on it."""
+    for rel in ("app/__init__.py", "tests/test_a.py", "tests/data/conftest.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    locked = tmp_path / "tests/data"
+    locked.chmod(0o644)
+    try:
+        dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert "tests.test_a" in dep_tree
 
 
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):

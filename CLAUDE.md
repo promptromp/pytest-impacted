@@ -40,11 +40,14 @@ skips them. A directory shadowed by a same-named module (`tests.py` beside `test
 walked anyway: pytest still collects from it, and skipping it hid whole test directories.
 That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
 modules (never raise — it would be an INTERNALERROR), and a symlinked portion is followed
-only while it stays inside the project and does not point back up the tree.
+only while it stays inside the project and does not point back up the tree. Check files with
+`os.path.isfile`/`exists`, never `Path.exists()`/`is_file()`: on Python 3.11–3.13 those raise
+`PermissionError` inside a listable but unsearchable directory, where `os.path` says False.
 
-**One file is one graph node, under one canonical name.** `discover_project_modules` is the
-only place the package and tests-dir walks are merged — `build_dep_tree` and both
-`resolve_*` functions go through it. The package walk's name is canonical (for a file the
+**One file is one graph node, under one canonical name.** `_discover_project` (behind the
+public `discover_project_modules`) is the only place the package walk, the tests-dir walk
+and the ancestor conftests are merged — `build_dep_tree` and both `resolve_*` functions go
+through it. The package walk's name is canonical (for a file the
 walk reaches twice through a symlinked directory, the name not through the link); every
 other name the file imports under is an *alias*: `tests.x` for `app/tests/x.py`, and a name
 rooted at any directory above the module's first regular package (`company.app.x`,
@@ -60,9 +63,12 @@ must resolve to the module name `my_package`, or AST-parsed imports will not mat
 discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
-(`cached_build_dep_tree → .copy() → enrich_dep_tree → setup → find_impacted_tests →
-teardown`). The copy is load-bearing: without it, extension enrichment pollutes the
-LRU-cached base graph and the next run in the same process starts dirty. `teardown`
+(`cached_build_dep_tree → .copy() → resolve_files_to_nodes → enrich_dep_tree → setup →
+find_impacted_tests → teardown`). Changed files resolve through the graph's own node
+`path`s, not a second discovery: a changed module the (cached) graph lacks would read as a
+production module outside it, and `resolve_impacted_tests` would select every test. The
+copy is load-bearing: without it, extension enrichment pollutes the LRU-cached base graph
+and the next run in the same process starts dirty. `teardown`
 runs in a `finally`.
 
 **`get_impacted_tests` contains no strategy-specific dispatch.** `api.py` assembles
@@ -130,11 +136,21 @@ in traversal, graph or strategy code — `canonical_root`'s `None` default is th
 it may appear.
 
 **Conftests above the analysed packages are graph nodes too.** Package discovery never
-sees a root-level `conftest.py`, so `build_dep_tree` adds them via
-`discover_ancestor_conftests`, named the way package discovery names modules (`conftest`,
-`backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
-resolve — unless that name is taken, when the full path name is used instead: a clash
-would silently drop the conftest from the graph. A conftest is recognised by its file
+sees a root-level `conftest.py`, so `discover_project_modules` adds them via
+`_discover_ancestor_conftests` (the public `discover_ancestor_conftests` drops their
+aliases), named the way package discovery names modules (`conftest`, `backend.conftest`,
+and `app.conftest` for `src/app/conftest.py`) so their relative imports resolve. They are
+named around every name already in use, aliases included — taking a package file's alias
+would re-point its imports. Which file takes a contested name (`y.conftest` for
+`y/conftest.py` and `x/y/conftest.py`) only names its node: an import of it is an edge to
+every conftest above the package that wanted it too (`_Discovered.contested`), because which
+file it means depends on `sys.path` and the import mode — every single-winner rule loses
+tests in some layout. Only those conftests contest names: every service's
+`tests/conftest.py` could be `tests.conftest`, and tying them together selects them all. A
+conftest with no free name gets a
+leading dot (`.mysite.conftest`, which no import spells) rather than being dropped: a
+dropped conftest loses every edge from it. It is parsed under `import_base(name)`, without
+the dot, or its relative imports would lose theirs. A conftest is recognised by its file
 name, `conftest.py`, on both the changed-file and the graph path. Every node carries its
 source file in the `path` attribute. Resolve a node to a file with `_module_path`, never by
 rebuilding a path from the dotted name — that silently fails for src-layout, where the

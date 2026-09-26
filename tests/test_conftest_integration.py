@@ -139,6 +139,55 @@ def test_test_code_reaching_a_conftest_selects_its_directory(make_project, files
     assert_selected(run(project, *args), passed=passed, skipped=skipped)
 
 
+USES_HELPER = "from backend.conftest import helper\n\ndef test_other():\n    assert helper()\n"
+LOADS_PLUGIN = 'pytest_plugins = ["suite.plugin_fixtures"]\n\ndef test_db(db):\n    assert db\n'
+BACKEND = {
+    "backend/app/__init__.py": "",
+    "backend/app/db.py": "def connect():\n    return 'conn'\n",
+    "backend/conftest.py": DB_FIXTURE.replace("from app.db", "from backend.app.db") + "\ndef helper():\n    return 1\n",
+    "suite/db/test_db.py": "def test_db(db):\n    assert db\n",
+    "suite/other/test_other.py": "def test_other():\n    assert True\n",
+}
+
+
+@pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])
+@pytest.mark.parametrize(
+    ("files", "passed", "skipped"),
+    [
+        pytest.param(
+            {"suite/db/conftest.py": "from backend.conftest import *  # noqa: F403\n"},
+            ["test_db.py"],
+            ["test_other.py"],
+            id="a_conftest_imports_it",
+        ),
+        pytest.param(
+            {
+                "suite/db/conftest.py": "from backend.conftest import *  # noqa: F403\n",
+                "suite/other/test_other.py": USES_HELPER,
+            },
+            ["test_db.py", "test_other.py"],
+            [],
+            id="a_test_imports_it",
+        ),
+        pytest.param(
+            {
+                "suite/plugin_fixtures.py": "from backend.conftest import *  # noqa: F403\n",
+                "suite/db/test_db.py": LOADS_PLUGIN,
+            },
+            ["test_db.py", "test_other.py"],
+            [],
+            id="a_pytest_plugin_imports_it",
+        ),
+    ],
+)
+def test_an_edited_conftest_above_the_package_reaches_what_imports_it(make_project, files, passed, skipped, args):
+    """``backend/conftest.py`` sits above ``--impacted-module=backend/app``: an edit resolves to its node."""
+    project = make_project({**BACKEND, **files}, INI.replace("impacted_module = app", "impacted_module = backend/app"))
+    edit(project, "backend/conftest.py")
+
+    assert_selected(run(project, "suite", *args), passed=passed, skipped=skipped)
+
+
 @pytest.mark.parametrize(
     ("tests_dir", "passed", "skipped"),
     [
