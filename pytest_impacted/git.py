@@ -352,10 +352,14 @@ def impacted_files_for_branch_mode(
 
     starts = _merge_bases(repo, base_branch, current_ref) if use_merge_base else [base_branch]
     if not starts:
+        cause = (
+            "the clone is shallow — fetch more history, e.g. fetch-depth: 0"
+            if repo.git.rev_parse("--is-shallow-repository").strip() == "true"
+            else "the histories are unrelated"
+        )
         (on_fallback or logger.warning)(
-            f"No merge base between {base_branch} and HEAD (unrelated histories, or a shallow clone — "
-            f"fetch with fetch-depth: 0); diffing against {base_branch}'s tip, which may also select "
-            "tests for its newer commits."
+            f"No merge base between {base_branch} and HEAD: {cause}. Diffing against {base_branch}'s tip "
+            "instead, which may also select tests for its newer commits."
         )
         starts = [base_branch]
     paths = {

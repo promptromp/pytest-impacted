@@ -893,7 +893,7 @@ def test_branch_mode_without_a_fork_point_diffs_against_the_base_tip(real_repo):
     assert result == git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "unrelated", use_merge_base=False)
     assert "pkg/a.py" in result
     assert len(notices) == 1
-    assert "No merge base" in notices[0]
+    assert "the histories are unrelated" in notices[0]
 
 
 def test_branch_mode_in_a_shallow_clone_falls_back(real_repo, tmp_path):
@@ -912,8 +912,11 @@ def test_branch_mode_in_a_shallow_clone_falls_back(real_repo, tmp_path):
 
     result = git.find_impacted_files_in_repo(clone, git.GitMode.BRANCH, f"origin/{base}", on_fallback=notices.append)
 
+    tip_diff = git.find_impacted_files_in_repo(clone, git.GitMode.BRANCH, f"origin/{base}", use_merge_base=False)
+    assert result == tip_diff
     assert "pkg/a.py" in result
-    assert "shallow clone" in notices[0]
+    assert len(notices) == 1
+    assert "the clone is shallow" in notices[0]
 
 
 def test_branch_mode_with_an_unknown_base_is_an_error_not_a_fallback(real_repo):
