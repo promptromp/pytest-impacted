@@ -96,8 +96,12 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
         test_submodules = discover_submodules(tests_package, require_init=False, root_dir=root_dir)
         submodules = {**submodules, **test_submodules}
 
+    # Skip any the package scan already found: the walk up from a tests
+    # directory inside the package passes through package directories.
     packages = [package, tests_package] if tests_package else [package]
-    submodules = {**discover_ancestor_conftests(packages, root_dir=root_dir), **submodules}
+    known_paths = set(submodules.values())
+    ancestors = discover_ancestor_conftests(packages, root_dir=root_dir)
+    submodules = {**{name: path for name, path in ancestors.items() if path not in known_paths}, **submodules}
 
     logger.debug("Building dependency tree for %d submodules", len(submodules))
 

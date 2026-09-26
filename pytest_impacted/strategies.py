@@ -174,6 +174,16 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
     return sorted(matches)
 
 
+def _outermost(directories: set[Path]) -> list[Path]:
+    """Drop every directory nested inside another one: its tests are already covered."""
+    resolved = sorted({directory.resolve() for directory in directories}, key=lambda d: len(d.parts))
+    kept: list[Path] = []
+    for directory in resolved:
+        if not any(directory.is_relative_to(outer) for outer in kept):
+            kept.append(directory)
+    return kept
+
+
 def _reached_conftest_dirs(impacted_modules: list[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
     """Directories of the conftests that depend, directly or transitively, on *impacted_modules*."""
     dirs: set[Path] = set()
@@ -397,14 +407,14 @@ class PytestImpactStrategy(ImpactStrategy):
         conftest_dirs = {
             conftest_dir
             for conftest_file in changed_files
-            if conftest_file.endswith("conftest.py")
+            if PurePosixPath(conftest_file).name == "conftest.py"
             # None: the path could not be normalized
             if (conftest_dir := _resolve_changed_file_dir(conftest_file, root_dir)) is not None
         }
         conftest_dirs.update(_reached_conftest_dirs(impacted_modules, dep_tree, root_dir))
 
         impacted_tests: list[str] = []
-        for conftest_dir in conftest_dirs:
+        for conftest_dir in _outermost(conftest_dirs):
             impacted_tests.extend(find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir))
         return impacted_tests
 

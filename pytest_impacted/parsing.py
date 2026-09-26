@@ -135,6 +135,8 @@ def is_test_module(module_name: str) -> bool:
     - Module name starts with 'test_'
     - Module name ends with '_test'
     - Module path contains 'test' or 'tests' directory
+    - ...except ``conftest``, which pytest loads for fixtures and hooks and
+      which holds no tests
 
     Args:
         module_name: Fully qualified module name (e.g., 'package.tests.test_foo')
@@ -146,7 +148,7 @@ def is_test_module(module_name: str) -> bool:
     last_part = module_parts[-1] if module_parts else ""
 
     # Check naming patterns
-    is_test = (
+    is_test = last_part != "conftest" and (
         last_part.startswith("test_")
         or last_part.endswith("_test")
         or "test" in module_parts

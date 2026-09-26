@@ -337,6 +337,8 @@ class DIBindingStrategy(ImpactStrategy):
 
 **Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order, forwarding all context kwargs unchanged. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
 
+**Node attributes.** Every node the built-in graph discovers carries its absolute source file in a `path` attribute (`dep_tree.nodes["mypkg.core"]["path"]`). Set it on nodes you add — `dep_tree.add_node("mypkg.generated", path="/abs/path/generated.py")` — whenever the node has a file. Built-in strategies use it to place a module on disk (for example, to find the tests under a `conftest.py`). Without it they fall back to rebuilding the path from the dotted name, which cannot see a src-layout `src/` prefix.
+
 !!! tip
     Prefer `enrich_dep_tree` over doing your own DFS inside `find_impacted_tests` when the relationships you're modeling can be expressed as edges. You get the built-in traversal, deduplication, and transitive closure for free, and the edges are visible to every other strategy in the pipeline — not just yours.
 

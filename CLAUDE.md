@@ -144,7 +144,8 @@ sees a root-level `conftest.py`, so `build_dep_tree` adds them via
 `discover_ancestor_conftests` (named by dotted path from the root: `conftest`,
 `backend.conftest`). Every node carries its source file in the `path` attribute. Resolve
 a node to a file with `_module_path`, never by rebuilding a path from the dotted name —
-that silently fails for src-layout, where the name drops `src/`.
+that silently fails for src-layout, where the name drops `src/`. `is_test_module` is
+false for any `conftest`, even under `tests/`: it holds fixtures, never tests.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the

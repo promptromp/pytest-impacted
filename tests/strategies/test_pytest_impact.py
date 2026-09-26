@@ -8,6 +8,7 @@ import networkx as nx
 
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
+    _outermost,
     find_test_modules_under,
 )
 
@@ -102,3 +103,28 @@ class TestPytestImpactStrategy:
         ]
         # ...and a directory holding no tests reaches none.
         assert find_test_modules_under(self.root_dir / "docs", dep_tree, root_dir=self.root_dir) == []
+
+
+def test_only_a_file_named_exactly_conftest_counts(tmp_path):
+    """pytest never loads ``myconftest.py``, so editing it must not select a directory."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_a.py").touch()
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.test_a", path=str(tmp_path / "tests/test_a.py"))
+
+    result = PytestImpactStrategy().find_impacted_tests(
+        changed_files=["tests/myconftest.py"],
+        impacted_modules=[],
+        ns_module="pkg",
+        root_dir=tmp_path,
+        dep_tree=dep_tree,
+    )
+
+    assert result == []
+
+
+def test_nested_conftest_directories_collapse(tmp_path):
+    """A directory inside another selected one adds nothing, so it is not scanned again."""
+    outer, inner, sibling = tmp_path / "tests", tmp_path / "tests/db", tmp_path / "other"
+
+    assert set(_outermost({inner, outer, sibling})) == {outer.resolve(), sibling.resolve()}
