@@ -43,7 +43,7 @@ pytest --impacted \
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
 
-When there is no fork point — unrelated histories, or a shallow CI clone (`actions/checkout` defaults to `fetch-depth: 1`) — pytest-impacted diffs against the base branch's tip instead, which still covers every change on your branch. Fetch enough history (`fetch-depth: 0`) for the precise diff. To always diff against the tip (`git diff <base> HEAD`), pass `--impacted-no-merge-base` (ini: `impacted_no_merge_base = true`).
+When there is no fork point — unrelated histories, or a shallow CI clone (`actions/checkout` defaults to `fetch-depth: 1`) — pytest-impacted diffs against the base branch's tip instead, which still covers every change on your branch, and prints a warning saying so. With several fork points (criss-cross merges) it combines the diffs from each. Fetch enough history (`fetch-depth: 0`) for the precise diff. To always diff against the tip (`git diff <base> HEAD`), pass `--impacted-no-merge-base` (ini: `impacted_no_merge_base = true`).
 
 ## External Tests Directory
 

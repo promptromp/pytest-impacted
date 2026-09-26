@@ -112,6 +112,7 @@ def get_impacted_tests(
         git_mode=git_mode,
         base_branch=base_branch,
         use_merge_base=use_merge_base,
+        on_fallback=lambda reason: warn(reason, session),
     )
     if not impacted_files:
         notify(

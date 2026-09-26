@@ -43,6 +43,9 @@ class DummyRepo:
         self.git = MagicMock()
         self.git.diff = MagicMock(side_effect=self._diff)
         self.git.ls_files = MagicMock(return_value="".join(f"{path}\0" for path in untracked_files))
+        # The base has not moved since the fork, so the fork point *is* the base ref
+        # (merge-base is called as: --all --end-of-options <base> <head>).
+        self.git.merge_base = MagicMock(side_effect=lambda *args: args[-2])
         self.head = MagicMock()
         self.head.reference = current_branch
         self.working_tree_dir = working_tree_dir or str(Path.cwd())
@@ -245,7 +248,7 @@ def test_impacted_files_for_branch_mode_with_deleted_files():
     result = git.impacted_files_for_branch_mode(repo, "main")
 
     # Deletions count too: a removed conftest.py or lockfile still impacts tests.
-    assert result == ["modified.py", "deleted.py", "added.py"]
+    assert result == ["added.py", "deleted.py", "modified.py"]
 
 
 def test_git_status_enum_values():
@@ -389,13 +392,13 @@ def test_impacted_files_for_branch_mode_detached_head():
 
     type(repo.head).reference = property(_raise_type_error)
     repo.head.commit = "abc123"
-    repo.git.merge_base.return_value = "fork456\n"
+    repo.git.merge_base = MagicMock(return_value="fork456\n")
 
     result = git.impacted_files_for_branch_mode(repo, "main")
 
     assert result == ["file1.py"]
     # The commit hash stands in for the detached branch, in the merge base and the diff
-    repo.git.merge_base.assert_called_once_with("--end-of-options", "main", "abc123")
+    repo.git.merge_base.assert_called_once_with("--all", "--end-of-options", "main", "abc123")
     repo.git.diff.assert_called_once_with(
         "--name-status", "-z", "--no-renames", "--end-of-options", "fork456", "abc123"
     )
@@ -872,7 +875,7 @@ def test_branch_mode_can_diff_against_the_base_tip(real_repo):
 
 
 def test_branch_mode_without_a_fork_point_diffs_against_the_base_tip(real_repo):
-    """No merge base (unrelated histories, or a shallow CI clone): fall back rather than fail."""
+    """No merge base (unrelated histories): fall back to the tip diff, and say why."""
     repo, root = real_repo
     original = repo.active_branch.name
     repo.git.checkout("--orphan", "unrelated")
@@ -883,5 +886,61 @@ def test_branch_mode_without_a_fork_point_diffs_against_the_base_tip(real_repo):
     repo.git.checkout("-f", "-b", "feature", original)  # back onto the original history
     (root / "pkg" / "a.py").write_text("x = 2\n")
     commit_all(repo)
+    notices: list[str] = []
 
-    assert "pkg/a.py" in branch(root, "unrelated")
+    result = git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "unrelated", on_fallback=notices.append)
+
+    assert result == git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "unrelated", use_merge_base=False)
+    assert "pkg/a.py" in result
+    assert len(notices) == 1
+    assert "No merge base" in notices[0]
+
+
+def test_branch_mode_in_a_shallow_clone_falls_back(real_repo, tmp_path):
+    """``actions/checkout`` defaults to ``fetch-depth: 1``: the fork point is simply not there."""
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+    repo.git.checkout(base)
+    (root / "pkg" / "b.py").write_text("y = 2\n")
+    commit_all(repo, "base moves on")
+    clone = tmp_path / "shallow"
+    Repo.clone_from(f"file://{root}", clone, depth=1, no_single_branch=True).git.checkout("feature")
+    notices: list[str] = []
+
+    result = git.find_impacted_files_in_repo(clone, git.GitMode.BRANCH, f"origin/{base}", on_fallback=notices.append)
+
+    assert "pkg/a.py" in result
+    assert "shallow clone" in notices[0]
+
+
+def test_branch_mode_with_an_unknown_base_is_an_error_not_a_fallback(real_repo):
+    """Only "no common ancestor" falls back; a bad ref must not be blamed on a shallow clone."""
+    _, root = real_repo
+    notices: list[str] = []
+
+    with pytest.raises(GitCommandError):
+        git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "no-such-branch", on_fallback=notices.append)
+    assert notices == []
+
+
+def test_branch_mode_with_criss_cross_merges_combines_every_fork_point(real_repo):
+    """Two best common ancestors: diffing from only one of them would miss a file."""
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "left")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo, "left")
+    repo.git.checkout("-b", "right", base)
+    (root / "pkg" / "b.py").write_text("y = 2\n")
+    commit_all(repo, "right")
+    left_tip, right_tip = repo.commit("left").hexsha, repo.commit("right").hexsha
+    repo.git.checkout("left")
+    repo.git.merge("-q", "--no-edit", right_tip)
+    repo.git.checkout("right")
+    repo.git.merge("-q", "--no-edit", left_tip)
+    assert len(repo.git.merge_base("--all", "left", "right").split()) == 2  # precondition
+
+    assert branch(root, "left") == ["pkg/a.py", "pkg/b.py"]
