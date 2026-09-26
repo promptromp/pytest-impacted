@@ -187,3 +187,116 @@ def test_plugins_loaded_through_the_environment_are_session_wide(make_project, m
     edit(project, "suite/plugin_fixtures.py")
 
     run(project).assert_outcomes(passed=2)
+
+
+# --- --impacted-narrow-conftests ------------------------------------------------
+
+NARROW_CONFTEST = """\
+import pytest
+from app.db import connect
+
+@pytest.fixture
+def db():
+    return connect()
+
+@pytest.fixture
+def user():
+    return "alice"
+"""
+NARROW_TESTS = {
+    "suite/a/test_db.py": "def test_db(db):\n    assert db\n",
+    "suite/b/test_user.py": "def test_user(user):\n    assert user\n",
+    "suite/c/test_plain.py": "def test_plain():\n    assert True\n",
+}
+
+
+DYNAMIC_CONFTEST = 'import pytest\n\n@pytest.fixture\ndef any_(request):\n    return request.getfixturevalue("db")\n'
+
+
+def narrow(project):
+    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-narrow-conftests")
+
+
+def test_narrowing_keeps_only_tests_using_an_affected_fixture(make_project):
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": NARROW_CONFTEST})
+    edit(project, "app/db.py")
+
+    run(project).assert_outcomes(passed=3)  # the default: every test under the conftest
+    result = narrow(project)
+
+    result.assert_outcomes(passed=1, skipped=2)
+    result.stdout.fnmatch_lines(
+        ["*suite.conftest imports changed code; narrowed to tests using*db*: 1 of 3 test modules*"]
+    )
+
+
+def test_narrowing_follows_the_fixture_closure(make_project):
+    """``client`` requests ``db``: pytest's ``fixturenames`` holds the whole closure."""
+    client = "import pytest\n\n@pytest.fixture\ndef client(db):\n    return db\n"
+    tests = {
+        **NARROW_TESTS,
+        "suite/b/conftest.py": client,
+        "suite/b/test_user.py": "def test_user(client):\n    assert client\n",
+    }
+    project = make_project({**APP, **tests, "suite/conftest.py": NARROW_CONFTEST})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=2, skipped=1)
+
+
+def test_narrowing_counts_autouse_fixtures(make_project):
+    autouse = NARROW_CONFTEST.replace("@pytest.fixture\ndef db", "@pytest.fixture(autouse=True)\ndef db")
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": autouse})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=3)
+
+
+def test_narrowing_keeps_a_module_that_looks_fixtures_up_dynamically(make_project):
+    dynamic = 'def test_dynamic(request):\n    assert request.getfixturevalue("db")\n'
+    project = make_project(
+        {**APP, **NARROW_TESTS, "suite/c/test_plain.py": dynamic, "suite/conftest.py": NARROW_CONFTEST}
+    )
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=2, skipped=1)
+
+
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        pytest.param(
+            {"suite/b/conftest.py": DYNAMIC_CONFTEST},
+            "a conftest looks fixtures up dynamically",
+            id="dynamic_lookup_in_a_conftest",
+        ),
+        pytest.param(
+            {"suite/conftest.py": NARROW_CONFTEST + "\ndef pytest_configure(config):\n    connect()\n"},
+            "an affected hook",
+            id="affected_hook",
+        ),
+    ],
+)
+def test_narrowing_falls_back_to_the_whole_directory(make_project, extra, reason):
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": NARROW_CONFTEST, **extra})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=3)
+
+
+def test_an_edited_conftest_still_selects_its_whole_directory(make_project):
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": NARROW_CONFTEST})
+    edit(project, "suite/conftest.py")
+
+    narrow(project).assert_outcomes(passed=3)
+
+
+def test_narrowing_to_nothing_when_no_fixture_uses_the_change(make_project):
+    """The conftest imports app.db only for a helper no fixture calls."""
+    conftest = (
+        NARROW_CONFTEST.replace("    return connect()", "    return 'conn'") + "\ndef helper():\n    return connect()\n"
+    )
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": conftest})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(skipped=3)

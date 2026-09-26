@@ -123,6 +123,37 @@ Extends the AST analysis with pytest-specific dependency detection:
     Two limitations. Editing the *declaration* in a test module (rather than the root `conftest.py`, where any edit already selects every test) selects only that module, even though pytest registers the plugin session-wide — declare plugins in the root conftest. And the standalone `impacted-tests` CLI has no pytest session, so it knows `PYTEST_PLUGINS` but not `-p` options.
 - Designed to be extended with additional pytest-specific heuristics in the future.
 
+#### Narrowing conftests to their fixtures
+
+A conftest that imports changed code selects every test beneath it — for a top-level `tests/conftest.py` that imports your app factory, that is most changes becoming a full run. With `--impacted-narrow-conftests` (ini `impacted_narrow_conftests = true`), pytest-impacted reads that conftest's source (it never imports it) to find which of its fixtures are built on the changed code — following module-level variables, helper functions and classes — and keeps only the tests whose fixtures request one of them, as pytest resolves them: fixtures requested by other fixtures, `usefixtures` and `autouse` fixtures all count.
+
+```python
+# tests/conftest.py
+from app.db import connect
+
+
+@pytest.fixture
+def db():  # built on app.db
+    return connect()
+
+
+@pytest.fixture
+def user():  # not
+    return "alice"
+```
+
+A change to `app/db.py` then runs the tests that use `db` (directly or through another fixture), not the ones that only use `user`.
+
+It stays on the safe side, keeping **every** test under the conftest, whenever it cannot be sure:
+
+- the conftest was itself edited (only conftests *reached through imports* are narrowed)
+- it does `from … import *` from changed code, runs changed code at import time (a module-level call, an `if` on it, `os.environ[...] = …`), or a `pytest_*` hook uses it
+- a fixture is created without a `def` (`db = pytest.fixture(connect)`)
+- any conftest under it calls `request.getfixturevalue(...)` — a dynamic lookup pytest's fixture list cannot show; a *test module* doing so is kept on its own
+- there are no collected tests to inspect, as with the standalone `impacted-tests` CLI, which therefore does not narrow
+
+One assumption is made: importing a changed module has no side effects that reach tests other than through the fixtures using it. Tests that import changed code themselves are always selected through the import graph. Enable the option when that assumption holds for your project.
+
 ### DependencyFileImpactStrategy
 
 Detects changes in dependency and configuration files. When these files change, any test could potentially be affected — so **all test modules are marked as impacted**.
@@ -251,6 +282,7 @@ impacted_tests_dir = "tests"
 no_impacted_dep_files = false  # set to true to disable dep file detection
 impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 impacted_no_merge_base = false  # true: branch mode diffs against the base tip
+impacted_narrow_conftests = false  # true: narrow conftests importing changed code to their fixtures' users
 impacted_disable_ext = []  # extension names to disable
 ```
 
@@ -281,6 +313,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
+| `--impacted-narrow-conftests` | `false` | When a conftest imports changed code, select only the tests under it that request an affected fixture (see [Narrowing conftests](#narrowing-conftests-to-their-fixtures)) |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |

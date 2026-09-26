@@ -162,6 +162,7 @@ impacted_tests_dir = "tests"
 # no_impacted_dep_files = true  # uncomment to disable dep file detection
 # impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
+# impacted_narrow_conftests = true  # a conftest importing changed code selects only tests using affected fixtures
 ```
 
 CLI flags override these defaults — except that a boolean set to `true` here cannot currently be switched off from the command line.
@@ -175,6 +176,7 @@ CLI flags override these defaults — except that a boolean set to `true` here c
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
+| `--impacted-narrow-conftests` | `false` | When a conftest imports changed code, select only the tests under it that request an affected fixture ([details](https://promptromp.github.io/pytest-impacted/usage/#narrowing-conftests-to-their-fixtures)) |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |

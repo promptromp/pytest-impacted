@@ -123,6 +123,23 @@ def pytest_addoption(parser: Parser):
     )
 
     group.addoption(
+        "--impacted-narrow-conftests",
+        action="store_true",
+        default=None,
+        dest="impacted_narrow_conftests",
+        help=(
+            "When a conftest.py imports changed code (without being edited itself), select only the "
+            + "tests under it that request a fixture built on that code, not every test beneath it."
+        ),
+    )
+    parser.addini(
+        "impacted_narrow_conftests",
+        help="default value for --impacted-narrow-conftests",
+        type="bool",
+        default=False,
+    )
+
+    group.addoption(
         "--no-impacted-dep-files",
         action="store_true",
         default=None,
@@ -213,6 +230,7 @@ def pytest_report_header(config: Config) -> list[str]:
         f"impacted_no_merge_base={get_option('impacted_no_merge_base')}",
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
+        f"impacted_narrow_conftests={get_option('impacted_narrow_conftests')}",
         f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
         f"backend={backend}",
     ]
@@ -252,6 +270,7 @@ def pytest_collection_modifyitems(session, config, items):
     strategy = build_strategy_with_extensions(
         watch_dep_files=not no_dep_files,
         invalidate_all_patterns=invalidate_all,
+        narrow_conftests=bool(get_option("impacted_narrow_conftests")),
         disabled=disabled_ext,
         ext_config=ext_config,
     )

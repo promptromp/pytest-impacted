@@ -28,6 +28,7 @@ CLI_OPTION_DESTS = {
     "impacted_no_merge_base",
     "impacted_tests_dir",
     "no_impacted_dep_files",
+    "impacted_narrow_conftests",
     "impacted_invalidate_all",
     "impacted_disable_ext",
 }
@@ -220,7 +221,9 @@ def test_plugin_imports_without_git_executable(tmp_path):
     assert "git" not in result.stderr.lower(), result.stderr
 
 
-@pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files", "impacted_no_merge_base"])
+@pytest.mark.parametrize(
+    "ini_name", ["impacted", "no_impacted_dep_files", "impacted_no_merge_base", "impacted_narrow_conftests"]
+)
 def test_boolean_ini_values_are_typed(pytester, ini_name):
     """Untyped ini values arrive as strings, and ``"false"`` is truthy — so ``= false`` did the opposite."""
     pytester.makeini(f"[pytest]\n{ini_name} = false\n")

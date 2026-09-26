@@ -54,6 +54,22 @@ def _quiet_parse() -> Iterator[None]:
         yield
 
 
+def parse_source(source: str) -> ast.Module | None:
+    """Parse source with the stdlib ``ast``, warnings silenced; ``None`` when it does not parse."""
+    try:
+        with _quiet_parse():
+            return ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+
+
+def resolve_import_from(module_name: str, is_package: bool, level: int, modname: str | None) -> str:
+    """The absolute module a ``from <level dots><modname> import ...`` in *module_name* names."""
+    if not level:
+        return modname or ""
+    return _resolve_relative_import(_package_of(module_name, is_package), level, modname)
+
+
 def is_conftest_module(module_name: str) -> bool:
     """Whether a dotted module name names a ``conftest`` (by name; callers check the file where it matters)."""
     return module_name.rpartition(".")[2] == "conftest"
@@ -177,11 +193,12 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
     source = read_source(file_path)
     if source is None or "pytest_plugins" not in source:  # cheap pre-filter
         return []
+    tree = parse_source(source)
+    if tree is None:
+        return []
     try:
-        with _quiet_parse():
-            tree = ast.parse(source)
         return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
-    except (SyntaxError, ValueError, RecursionError):  # RecursionError: e.g. a 3000-term `+` chain
+    except RecursionError:  # e.g. a 3000-term `+` chain: parses fine, recurses when walked
         return []
 
 
