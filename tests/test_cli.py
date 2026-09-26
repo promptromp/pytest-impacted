@@ -200,7 +200,7 @@ class TestImpactedTestsCLI:
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_fails_when_git_is_unavailable(self, mock_configure_logging, mock_get_impacted_tests):
         """Unknown changes must not print as "no impacted tests" with exit code 0."""
-        mock_get_impacted_tests.side_effect = GitUnavailableError("git executable is not available")
+        mock_get_impacted_tests.side_effect = GitUnavailableError()
 
         with self.runner.isolated_filesystem():
             Path("test_ns").mkdir()
@@ -211,7 +211,7 @@ class TestImpactedTestsCLI:
             )
 
             assert result.exit_code == 1
-            assert "git executable is not available" in result.output
+            assert "changed files cannot be determined" in result.output
             assert "No impacted tests found." not in result.output
 
     def test_cli_missing_required_arg(self):

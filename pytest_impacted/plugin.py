@@ -247,7 +247,11 @@ def pytest_collection_modifyitems(session, config, items):
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not
         # warnings.warn — `filterwarnings = error` would turn it into a crash.
-        warn(f"pytest-impacted: {err} Running every test.", session)
+        # When git was missing at import, pytest_report_header has already said
+        # so; only a failure discovered now needs reporting here. (Under
+        # pytest-xdist that report is lost with the workers' output.)
+        if GIT_AVAILABLE:
+            warn(f"pytest-impacted: {err} Running every test.", session)
         return
     if not impacted_tests:
         # skip all tests

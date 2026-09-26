@@ -201,12 +201,12 @@ def test_plugin_imports_without_git_executable(tmp_path):
     """The pytest11 entry point loads on every pytest run, so a missing git binary must not break pytest.
 
     GitPython raises ImportError when the git executable is absent (slim
-    containers), which is why ``pytest_impacted.git`` guards its import. ``-W error``
-    pins that the guard stays silent: it runs even without ``--impacted``.
+    containers), which is why ``pytest_impacted.git`` guards its import. The guard
+    must also stay silent, since it runs even without ``--impacted``.
     """
     script = "import pytest_impacted.plugin as p; print(p.GIT_AVAILABLE)"
     result = subprocess.run(
-        [sys.executable, "-W", "error", "-c", script],
+        [sys.executable, "-c", script],
         cwd=tmp_path,
         env=_env_without_git(tmp_path),
         capture_output=True,
@@ -216,6 +216,7 @@ def test_plugin_imports_without_git_executable(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "False"
+    assert "git" not in result.stderr.lower(), result.stderr
 
 
 @pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files"])
@@ -267,7 +268,7 @@ def test_runs_every_test_when_git_is_unavailable(pytester, pytest_ini):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "2 passed" in result.stdout
-    assert "Running every test" in result.stdout
+    assert result.stdout.count("Running every test") == 1, result.stdout  # once, not per hook
 
 
 def test_fails_open_when_git_disappears_after_import(pytester):
@@ -296,7 +297,7 @@ def test_fails_open_when_git_disappears_after_import(pytester):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 passed" in result.stdout
-    assert "Running every test" in result.stdout
+    assert result.stdout.count("Running every test") == 1, result.stdout  # once, not per hook
 
 
 def test_report_header_warns_when_git_is_unavailable(pytestconfig, monkeypatch):

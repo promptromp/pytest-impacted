@@ -42,12 +42,12 @@ class GitUnavailableError(RuntimeError):
     selection. Without git those cannot be checked, so they fail open too.
     """
 
-    def __init__(self, detail: str | None = None):
-        message = (
-            "GitPython or the git executable is not available, so changed files cannot be determined. "
-            "Install GitPython and ensure the git CLI is on PATH."
-        )
-        super().__init__(f"{message} ({detail})" if detail else message)
+    # The text is built in __str__ so ``args`` holds only the optional detail:
+    # copy and pickle rebuild an exception from its args, and would otherwise
+    # wrap the full message a second time.
+    def __str__(self) -> str:
+        message = "git could not be run, so changed files cannot be determined"
+        return f"{message}: {self.args[0]}." if self.args else f"{message} (is GitPython installed and git on PATH?)."
 
 
 def validate_rev(rev: str) -> str:
@@ -223,8 +223,9 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         return _find_impacted_files(repo_dir, git_mode, base_branch)
     except GitCommandNotFound as err:
         # The import succeeded (e.g. GIT_PYTHON_REFRESH=quiet) but git could not be
-        # launched. GitPython uses this for any launch failure, so keep its reason.
-        raise GitUnavailableError(str(err)) from err
+        # launched. GitPython uses this for any launch failure, so keep its reason —
+        # the first line; the rest is the full command line.
+        raise GitUnavailableError(str(err).strip().splitlines()[0]) from err
 
 
 def _find_impacted_files(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:

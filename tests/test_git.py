@@ -740,19 +740,32 @@ def test_git_that_cannot_launch_keeps_its_reason(monkeypatch):
     from git import GitCommandNotFound  # noqa: PLC0415
 
     def launch_fails(*_):
-        raise GitCommandNotFound("git", "WinError 206")
+        raise GitCommandNotFound("git diff --cached", "WinError 206")
 
     monkeypatch.setattr(git, "_find_impacted_files", launch_fails)
 
-    with pytest.raises(git.GitUnavailableError, match="WinError 206"):
+    with pytest.raises(git.GitUnavailableError) as excinfo:
         git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+
+    assert "WinError 206" in str(excinfo.value)
+    assert "cmdline" not in str(excinfo.value)  # only the reason, not GitPython's full command line
+
+
+def test_git_unavailable_error_survives_copy():
+    """copy and pickle rebuild from ``args``; the message must not wrap itself again."""
+    import copy  # noqa: PLC0415
+    import pickle  # noqa: PLC0415
+
+    err = git.GitUnavailableError("reason")
+
+    assert str(copy.copy(err)) == str(pickle.loads(pickle.dumps(err))) == str(err)
 
 
 def test_find_impacted_files_raises_without_git(monkeypatch):
     """Unknown changes are an error, never ``None`` — which callers read as "nothing changed"."""
     monkeypatch.setattr(git, "GIT_AVAILABLE", False)
 
-    with pytest.raises(git.GitUnavailableError, match="git executable is not available"):
+    with pytest.raises(git.GitUnavailableError, match="changed files cannot be determined"):
         git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
 
 
