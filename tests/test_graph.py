@@ -280,6 +280,26 @@ def test_namespace_subpackage_modules_are_linked_by_absolute_and_relative_import
     assert graph.resolve_impacted_tests(["app.processors.util"], dep_tree) == ["tests.test_ocr"]
 
 
+def test_a_test_importing_from_the_package_root_sees_what_its_init_imports(tmp_path):
+    """``from app import Thing`` runs ``app/__init__.py``, which imports ``app.core``: both edges count."""
+    files = {
+        "app/__init__.py": "from app.core import Thing\n",
+        "app/core.py": "class Thing: ...\n",
+        "tests/test_app.py": "from app import Thing\n",
+        "tests/test_other.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("app.core", "app")
+    assert dep_tree.has_edge("app", "tests.test_app")
+    assert graph.resolve_impacted_tests(["app"], dep_tree) == ["tests.test_app"]
+    assert graph.resolve_impacted_tests(["app.core"], dep_tree) == ["tests.test_app"]
+
+
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):
     """A tests dir inside the package is walked by both discoveries; its files must not be doubled."""
     files = {

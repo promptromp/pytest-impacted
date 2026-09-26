@@ -111,10 +111,12 @@ The plugin uses a modular, strategy-based architecture to determine which tests 
 
 The core strategy. It uses static analysis to:
 
-1. Discover all submodules via filesystem scanning (no imports executed)
+1. Discover the package and all its submodules via filesystem scanning (no imports executed)
 2. Parse each source file's AST to extract import relationships
 3. Build a dependency graph with [NetworkX](https://networkx.org/)
 4. Trace transitive dependencies from changed modules to test modules
+
+The package's own `__init__.py` is a module too. A test that imports from the package root (`import my_package` or `from my_package import name`), itself or through a module that does (including `from . import name` in a top-level module), depends on the `__init__.py` and on everything it imports, directly or not. Editing the `__init__.py`, or any module it imports, selects that test. As for any package's `__init__.py`, a test importing only a submodule (`from my_package.core import name`) is not linked to it, although Python runs it for that import too.
 
 ### PytestImpactStrategy
 

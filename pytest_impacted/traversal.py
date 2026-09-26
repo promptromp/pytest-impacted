@@ -80,7 +80,7 @@ def iter_namespace(ns_package: str, *, scan_path: str) -> list[pkgutil.ModuleInf
 
 
 def _discover_via_pkgutil(package: str, root: Path) -> dict[str, str]:
-    """Discover the modules importable under *package*, the way the import system names them.
+    """Discover *package* and the modules importable under it, the way the import system names them.
 
     ``pkgutil`` lists modules and regular packages; :func:`_namespace_portions` adds
     the sub-directories without ``__init__.py`` it skips. Handles src-layout
@@ -98,6 +98,10 @@ def _discover_pkgutil_impl(
 ) -> dict[str, str]:
     """Recursive implementation of pkgutil-based submodule discovery.
 
+    Each call names the package it walks, from its own ``__init__.py``, before its
+    children: ``pkgutil`` lists only children, and the analysed package — run by
+    every ``import pkg`` — has no parent walk to list it.
+
     Args:
         module_name: Dotted importable module name used as prefix (e.g. ``"predicated"``).
         scan_path: Path to scan, relative to *root* (e.g. ``"src/predicated"``).
@@ -112,26 +116,29 @@ def _discover_pkgutil_impl(
     if real_path in ancestors:
         return {}
     ancestors |= {real_path}
-    results: dict[str, str] = {}
+    # os.path, not Path.is_file(): an unsearchable directory has no __init__.py, rather than raising.
+    init = root / scan_path / "__init__.py"
+    results = {module_name: str(init.resolve())} if os.path.isfile(init) else {}
     for module_info in iter_namespace(module_name, scan_path=str(root / scan_path)):
         name = module_info.name
-        if name not in results:
-            # Construct file path: prepend the non-package prefix to module parts
-            module_parts = name.split(".")
-            file_parts = list(Path(non_pkg_prefix).parts) + module_parts if non_pkg_prefix else module_parts
+        if name in results:
+            continue
+        module_parts = name.split(".")
+        if module_info.ispkg:
+            sub_scan_path = os.path.join(scan_path, module_parts[-1])
+            results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root, ancestors=ancestors))
+            continue
 
-            base = root.joinpath(*file_parts)
-            # Not with_suffix(): it would truncate at a dot in the final component.
-            file_path = base / "__init__.py" if module_info.ispkg else base.parent / f"{base.name}.py"
+        # Construct file path: prepend the non-package prefix to module parts
+        file_parts = list(Path(non_pkg_prefix).parts) + module_parts if non_pkg_prefix else module_parts
+        base = root.joinpath(*file_parts)
+        # Not with_suffix(): it would truncate at a dot in the final component.
+        file_path = base.parent / f"{base.name}.py"
 
-            if file_path.exists():
-                results[name] = str(file_path.resolve())
-            else:
-                logger.warning("Module %s not found at expected path %s", name, file_path)
-
-            if module_info.ispkg:
-                sub_scan_path = os.path.join(scan_path, module_parts[-1])
-                results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root, ancestors=ancestors))
+        if file_path.exists():
+            results[name] = str(file_path.resolve())
+        else:
+            logger.warning("Module %s not found at expected path %s", name, file_path)
 
     for portion in _namespace_portions(root / scan_path, root):
         sub_scan_path = os.path.join(scan_path, portion)
@@ -226,7 +233,7 @@ def _discover_submodules(package: str, require_init: bool, root: Path) -> dict[s
 
 
 def discover_submodules(package: str, require_init: bool = True, root_dir: str | Path | None = None) -> dict[str, str]:
-    """Discover all submodules by filesystem scanning, without importing them.
+    """Discover a package and all its submodules by filesystem scanning, without importing them.
 
     This avoids executing module-level code (e.g. gevent monkey patching,
     application factory calls, global connections) that can corrupt the test
@@ -236,9 +243,10 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
         package: Dotted package name (or path-style name like ``"src.predicated"``)
             to scan.  For src-layout projects, non-package prefix directories
             are automatically detected and stripped from module names.
-        require_init: If True, discover an importable package: module names follow
-            the import system, so a non-package prefix such as ``src/`` is dropped,
-            and sub-directories without __init__.py count as namespace packages.
+        require_init: If True, discover an importable package — the package itself,
+            when it has an ``__init__.py``, and every module under it: module names
+            follow the import system, so a non-package prefix such as ``src/`` is
+            dropped, and sub-directories without __init__.py count as namespace packages.
             If False, use filesystem walking which finds all .py files
             regardless of __init__.py (matching pytest's discovery behavior).
         root_dir: Project root *package* is relative to. Defaults to the current

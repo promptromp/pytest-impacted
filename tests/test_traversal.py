@@ -358,8 +358,7 @@ def test_discover_submodules_flat_layout_backward_compat(tmp_path, monkeypatch):
 
     modules = discover_submodules("flatpkg_a", require_init=True)
 
-    # pkgutil.iter_modules yields children, not the package itself
-    assert "flatpkg_a.module" in modules
+    assert set(modules) == {"flatpkg_a", "flatpkg_a.module"}
 
 
 def test_iter_namespace_with_scan_path(tmp_path, monkeypatch):
@@ -402,7 +401,7 @@ def test_discover_submodules_uses_root_dir_not_cwd(two_projects, monkeypatch):
 
     modules = discover_submodules("mypkg", root_dir=first)
 
-    assert set(modules) == {"mypkg.alpha"}
+    assert set(modules) == {"mypkg", "mypkg.alpha"}
     assert modules["mypkg.alpha"] == str(first / "mypkg" / "alpha.py")
 
 
@@ -410,8 +409,8 @@ def test_discover_submodules_cache_is_keyed_by_root_dir(two_projects):
     """Two projects with the same package name must not share a cache entry."""
     first, second = two_projects
 
-    assert set(discover_submodules("mypkg", root_dir=first)) == {"mypkg.alpha"}
-    assert set(discover_submodules("mypkg", root_dir=second)) == {"mypkg.beta"}
+    assert set(discover_submodules("mypkg", root_dir=first)) == {"mypkg", "mypkg.alpha"}
+    assert set(discover_submodules("mypkg", root_dir=second)) == {"mypkg", "mypkg.beta"}
 
 
 def test_discover_submodules_resolves_symlinked_root(two_projects, tmp_path):
@@ -520,7 +519,35 @@ def test_namespace_subpackages_are_discovered(tmp_path, prefix, files, expected)
     """A directory without ``__init__.py`` inside a package still imports, so its modules are found."""
     make_package(tmp_path, prefix, *files)
 
-    assert set(discover_submodules(f"{prefix}pkg", root_dir=tmp_path)) == expected
+    assert set(discover_submodules(f"{prefix}pkg", root_dir=tmp_path)) == {"pkg", *expected}
+
+
+@pytest.mark.parametrize(
+    ("files", "package", "name"),
+    [
+        pytest.param(["pkg/__init__.py"], "pkg", "pkg", id="flat"),
+        pytest.param(["src/pkg/__init__.py"], "src/pkg", "pkg", id="src_layout"),
+        pytest.param(["pkg/__init__.py", "pkg/sub/__init__.py"], "pkg/sub", "pkg.sub", id="a_subpackage"),
+        pytest.param(["src/company/pkg/__init__.py"], "src/company/pkg", "pkg", id="below_a_namespace_package"),
+    ],
+)
+def test_the_analysed_package_itself_is_a_module(tmp_path, files, package, name):
+    """``pkgutil`` lists only a package's children, but its ``__init__.py`` runs on every ``import pkg``."""
+    for rel in [*files, f"{package}/core.py"]:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    init = f"{package}/__init__.py"
+
+    assert discover_submodules(package, root_dir=tmp_path)[name] == str((tmp_path / init).resolve())
+    assert resolve_files_to_modules([init], package, root_dir=tmp_path) == [name]
+
+
+def test_a_namespace_package_has_no_init_to_discover(tmp_path):
+    """Without ``__init__.py`` there is no file for the package itself: only its modules are found."""
+    (tmp_path / "ns").mkdir()
+    (tmp_path / "ns/core.py").touch()
+
+    assert set(discover_submodules("ns", root_dir=tmp_path)) == {"ns.core"}
 
 
 def test_a_module_in_a_namespace_subpackage_resolves(tmp_path, prefix):
@@ -543,7 +570,21 @@ def test_an_unreadable_directory_has_no_modules(tmp_path, prefix):
     finally:
         locked.chmod(0o755)
 
-    assert set(found) == {"pkg.core"}
+    assert set(found) == {"pkg", "pkg.core"}
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_an_unsearchable_package_directory_has_no_modules(tmp_path):
+    """Checking the analysed package's own ``__init__.py`` must not raise where listing it did not."""
+    make_package(tmp_path, "", "pkg/sub/__init__.py", "pkg/sub/core.py")
+    locked = tmp_path / "pkg/sub"
+    locked.chmod(0)
+    try:
+        found = discover_submodules("pkg/sub", root_dir=tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert found == {}
 
 
 @pytest.mark.parametrize(
@@ -569,7 +610,7 @@ def test_symlinked_namespace_portions(tmp_path, links, expected):
 
     found = set(discover_submodules("pkg", root_dir=root))
 
-    assert found - {"pkg.ns.mod", "pkg.a.mod_a", "pkg.b.mod_b"} == expected
+    assert found - {"pkg", "pkg.ns.mod", "pkg.a.mod_a", "pkg.b.mod_b"} == expected
 
 
 @pytest.mark.parametrize(
@@ -618,6 +659,15 @@ def test_symlinked_namespace_portions(tmp_path, links, expected):
             set(),
             id="a_regular_package_is_never_a_sys_path_root",
         ),
+        pytest.param(["src/app/__init__.py"], "src/app", None, "app", {"src.app"}, id="src_layout_package_itself"),
+        pytest.param(
+            ["src/company/app/__init__.py"],
+            "src/company/app",
+            None,
+            "app",
+            {"company.app", "src.company.app"},
+            id="package_itself_below_a_namespace_package",
+        ),
     ],
 )
 def test_each_file_has_one_canonical_name_and_its_other_names_as_aliases(
@@ -660,10 +710,10 @@ def test_an_alias_resolves_to_its_file(tmp_path):
 @pytest.mark.parametrize(
     ("tests_package", "application"),
     [
-        pytest.param(None, {"app/db.py", "app/checks/test_db.py"}, id="no_tests_dir"),
-        pytest.param("suite", {"app/db.py", "app/checks/test_db.py"}, id="tests_dir_beside"),
-        pytest.param("app/checks", {"app/db.py"}, id="tests_dir_inside"),
-        pytest.param("app", {"app/db.py", "app/checks/test_db.py"}, id="tests_dir_is_the_package"),
+        pytest.param(None, {"app/__init__.py", "app/db.py", "app/checks/test_db.py"}, id="no_tests_dir"),
+        pytest.param("suite", {"app/__init__.py", "app/db.py", "app/checks/test_db.py"}, id="tests_dir_beside"),
+        pytest.param("app/checks", {"app/__init__.py", "app/db.py"}, id="tests_dir_inside"),
+        pytest.param("app", {"app/__init__.py", "app/db.py", "app/checks/test_db.py"}, id="tests_dir_is_the_package"),
     ],
 )
 def test_discover_application_files(tmp_path, tests_package, application):
