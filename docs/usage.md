@@ -77,6 +77,10 @@ pytest --impacted \
 
 The plugin automatically detects that `src/` is not a Python package (no `__init__.py`) and uses the correct importable module name (`my_package`) for dependency analysis. This means AST-parsed imports like `from my_package import ...` will correctly match discovered modules.
 
+Sub-directories of the package do not need an `__init__.py` either: Python imports them as [namespace packages](https://peps.python.org/pep-0420/), so `my_package/processors/ocr.py` is analysed as `my_package.processors.ocr` whether or not `processors/` has one — and test files kept in such a directory inside the package are found without `--impacted-tests-dir`.
+
+The package directory itself may sit inside a namespace package too (`src/company/my_package`, with no `__init__.py` in `company/`). Imports such as `from company.my_package import ...` and `from my_package import ...` both match, whichever of the two you pass to `--impacted-module`, because the plugin cannot know which directory is on `sys.path` and accepts every candidate.
+
 !!! tip
     If you accidentally pass just `--impacted-module=my_package` in a src-layout project, the plugin will detect that `src/my_package` exists and suggest the correct flag.
 

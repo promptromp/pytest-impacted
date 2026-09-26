@@ -25,10 +25,29 @@ in particular, which imports every parent package to answer.
 **`parsing.py` imports node classes from `astroid.nodes`**, not `astroid` — required
 since astroid v4.
 
-**`discover_submodules(..., require_init=)` has two distinct modes.** `True` uses
-`pkgutil.iter_modules` for real packages; `False` uses `Path.rglob` for test
-directories, which frequently lack `__init__.py`. Picking the wrong one silently
-finds nothing.
+**`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an
+importable package — `pkgutil.iter_modules`, with a non-package prefix like `src/`
+dropped from names; `False` uses `Path.rglob` for test directories, which frequently lack
+`__init__.py`, naming modules by path. Picking the wrong one silently finds nothing.
+Despite the name, `True` also walks sub-directories *without* `__init__.py`
+(`_namespace_portions`): since PEP 420 they import as namespace packages, and `pkgutil`
+skips them. A directory shadowed by a same-named module (`tests.py` beside `tests/`) is
+walked anyway: pytest still collects from it, and skipping it hid whole test directories.
+That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
+modules (never raise — it would be an INTERNALERROR), and a symlinked portion is followed
+only while it stays inside the project and does not point back up the tree.
+
+**One file is one graph node, under one canonical name.** `discover_project_modules` is the
+only place the package and tests-dir walks are merged — `build_dep_tree` and both
+`resolve_*` functions go through it. The package walk's name is canonical (for a file the
+walk reaches twice through a symlinked directory, the name not through the link); every
+other name the file imports under is an *alias*: `tests.x` for `app/tests/x.py`, and a name
+rooted at any directory above the module's first regular package (`company.app.x`,
+`src.company.app.x` for `src/company/app/x.py`) — never inside a regular package, which would
+invent `types` for `pkg/ns/types.py`. Import candidates and `pytest_plugins` entries are
+mapped through the aliases before edges are added; names from outside the source (`-p`)
+through `dep_tree.graph["aliases"]`. Two nodes for one file would double every count and
+hand each consumer the same test twice.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`
@@ -150,7 +169,7 @@ don't re-implement either.
 
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`
 emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg`, so
-`build_dep_tree` filters candidates against `discover_submodules` instead. The apparent
+`build_dep_tree` filters candidates against the discovered modules (and their aliases) instead. The apparent
 over-emission is the design, not a bug.
 
 **The Python and Rust backends must agree exactly.** `parsing.py` (astroid) and

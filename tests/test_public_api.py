@@ -16,7 +16,9 @@ EXPECTED_PUBLIC_API = frozenset(
     {
         "ConfigOption",
         "ImpactStrategy",
+        "ProjectModules",
         "StrategyProtocol",
+        "discover_project_modules",
         "discover_submodules",
         "parse_file_imports",
         "resolve_impacted_tests",

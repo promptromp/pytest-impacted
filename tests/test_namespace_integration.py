@@ -1,0 +1,91 @@
+"""End-to-end tests for implicit namespace sub-packages, via pytester and a real git repo.
+
+A directory without ``__init__.py`` inside a package still imports (PEP 420), so a
+change under one must select the tests that depend on it — and tests kept in one
+inside the package must be found at all.
+"""
+
+import pytest
+
+from .git_helpers import edit_file
+
+
+FILES = {
+    "app/__init__.py": "",
+    "app/processors/ocr.py": "def scan():\n    return 'text'\n",
+    "app/core.py": "def add(a, b):\n    return a + b\n",
+    # In-package tests, in a directory without __init__.py, with no --impacted-tests-dir.
+    "app/checks/test_ocr.py": "from app.processors.ocr import scan\n\ndef test_scan():\n    assert scan()\n",
+    "app/checks/test_core.py": "from app.core import add\n\ndef test_add():\n    assert add(1, 1) == 2\n",
+}
+INI = "[pytest]\npythonpath = .\nimpacted_module = app\n"
+
+
+@pytest.mark.parametrize(
+    ("edited", "runs"),
+    [
+        pytest.param("app/processors/ocr.py", "*test_ocr.py::test_scan PASSED*", id="source_in_a_namespace_subpackage"),
+        pytest.param("app/checks/test_core.py", "*test_core.py::test_add PASSED*", id="test_in_a_namespace_subpackage"),
+    ],
+)
+def test_a_change_in_a_namespace_subpackage_selects_its_tests(make_git_project, edited, runs):
+    project = make_git_project(FILES, INI)
+    edit_file(project, edited)
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
+
+    result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines([runs])
+
+
+def test_a_helper_imported_by_its_package_name_from_a_tests_dir_inside_the_package(make_git_project):
+    """``--impacted-tests-dir=app/checks`` names the helper ``checks.helpers`` too; the test's
+    ``from app.checks.helpers import …`` must still see the change."""
+    files = {
+        **FILES,
+        "app/checks/helpers.py": "def value():\n    return 1\n",
+        "app/checks/test_helpers.py": "from app.checks.helpers import value\n\ndef test_value():\n    assert value()\n",
+    }
+    project = make_git_project(files, INI + "impacted_tests_dir = app/checks\n")
+    edit_file(project, "app/checks/helpers.py")
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
+
+    result.stdout.fnmatch_lines(["*test_helpers.py::test_value PASSED*"])
+
+
+@pytest.mark.parametrize("module", ["src/company", "src/company/app"])
+@pytest.mark.parametrize("imported", ["company.app.core", "app.core"])
+def test_a_package_inside_a_top_level_namespace_package(make_git_project, module, imported):
+    """``company/`` has no ``__init__.py``: either import style matches, whichever directory is analysed."""
+    files = {
+        "src/company/app/__init__.py": "",
+        "src/company/app/core.py": "def add(a, b):\n    return a + b\n",
+        "suite/test_core.py": f"from {imported} import add\n\ndef test_add():\n    assert add(1, 1) == 2\n",
+        "suite/test_other.py": "def test_other():\n    assert True\n",
+    }
+    ini = f"[pytest]\npythonpath = src src/company\nimpacted_module = {module}\nimpacted_tests_dir = suite\n"
+    project = make_git_project(files, ini)
+    edit_file(project, "src/company/app/core.py")
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
+
+    result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines(["*test_core.py::test_add PASSED*"])
+
+
+def test_a_dash_p_plugin_named_by_its_tests_dir_name(make_git_project):
+    """``-p checks.plugin`` names ``app/checks/plugin.py`` by its alias; editing it is still session-wide."""
+    files = {
+        "app/__init__.py": "",
+        "app/checks/plugin.py": "import pytest\n\n@pytest.fixture\ndef answer():\n    return 42\n",
+        "app/checks/test_x.py": "def test_x(answer):\n    assert answer == 42\n",
+    }
+    ini = "[pytest]\npythonpath = . app\naddopts = -p checks.plugin\n"
+    ini += "impacted_module = app\nimpacted_tests_dir = app/checks\n"
+    project = make_git_project(files, ini)
+    edit_file(project, "app/checks/plugin.py")
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
+
+    result.stdout.fnmatch_lines(["*test_x.py::test_x PASSED*"])

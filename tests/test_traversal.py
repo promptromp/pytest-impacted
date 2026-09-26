@@ -3,6 +3,7 @@
 import importlib
 import os
 import pkgutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from pytest_impacted import traversal
 from pytest_impacted.traversal import (
     clear_discovery_cache,
     discover_ancestor_conftests,
+    discover_project_modules,
     discover_submodules,
     find_non_package_prefix,
     iter_namespace,
@@ -249,29 +251,10 @@ def test_discover_submodules_without_init_in_ancestor_directory(tmp_path, monkey
     assert "tests.app.unit.test_core" in modules
 
 
-def test_discover_submodules_require_init_skips_no_init_dirs(tmp_path, monkeypatch):
-    """With require_init=True, directories without __init__.py should be skipped."""
-    (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "__init__.py").touch()
-    (tmp_path / "pkg" / "visible.py").write_text("x = 1\n")
-    (tmp_path / "pkg" / "no_init_dir").mkdir()
-    (tmp_path / "pkg" / "no_init_dir" / "hidden.py").write_text("y = 2\n")
-
-    monkeypatch.chdir(tmp_path)
-    clear_discovery_cache()
-
-    modules = discover_submodules("pkg", require_init=True)
-    assert "pkg.visible" in modules
-    assert "pkg.no_init_dir.hidden" not in modules
-
-
-def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
-    """Filesystem discovery should return empty dict for a nonexistent directory."""
-    monkeypatch.chdir(tmp_path)
-    clear_discovery_cache()
-
-    modules = discover_submodules("nonexistent_pkg", require_init=False)
-    assert modules == {}
+@pytest.mark.parametrize("require_init", [True, False])
+def test_discover_submodules_nonexistent_dir(tmp_path, require_init):
+    """Either mode returns an empty dict for a package that does not exist, rather than raising."""
+    assert discover_submodules("nonexistent_pkg", require_init=require_init, root_dir=tmp_path) == {}
 
 
 # --- Tests for find_non_package_prefix (src-layout support) ---
@@ -493,21 +476,181 @@ def test_discover_ancestor_conftests_without_any(tmp_path):
     assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Implicit namespace sub-packages (a directory without __init__.py) are never walked, so a "
-        "change there resolves to no module and selects no tests (ROADMAP P0). Remove with the fix."
-    ),
+# --- implicit namespace sub-packages (PEP 420) -----------------------------------------
+
+
+@pytest.fixture(params=["flat", "src"])
+def prefix(request):
+    """The package at the root, or under a non-package ``src/``: module names must not differ."""
+    return "src/" if request.param == "src" else ""
+
+
+def make_package(root: Path, prefix: str, *rels: str) -> None:
+    for rel in ("pkg/__init__.py", *rels):
+        (root / prefix / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / prefix / rel).touch()
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(["pkg/processors/ocr.py"], {"pkg.processors.ocr"}, id="module_in_a_namespace_subpackage"),
+        pytest.param(["pkg/a/b/deep.py"], {"pkg.a.b.deep"}, id="namespace_inside_a_namespace"),
+        pytest.param(
+            ["pkg/ns/regular/__init__.py", "pkg/ns/regular/mod.py"],
+            {"pkg.ns.regular", "pkg.ns.regular.mod"},
+            id="regular_package_inside_a_namespace",
+        ),
+        pytest.param(
+            ["pkg/regular/__init__.py", "pkg/regular/ns/mod.py"],
+            {"pkg.regular", "pkg.regular.ns.mod"},
+            id="namespace_inside_a_regular_subpackage",
+        ),
+        pytest.param(["pkg/my-data/x.py", "pkg/.cache/y.py"], set(), id="non_identifier_directories_cannot_import"),
+        pytest.param(["pkg/node_modules/lodash/fp.py", "pkg/__pycache__/x.py"], set(), id="never_package_directories"),
+        pytest.param(
+            ["pkg/tests.py", "pkg/tests/test_x.py"],
+            {"pkg.tests", "pkg.tests.test_x"},
+            id="shadowed_by_a_module_still_walked",
+        ),
+    ],
 )
-@pytest.mark.parametrize("layout", ["flat", "src"])
-def test_a_module_in_a_namespace_subpackage_resolves(tmp_path, layout):
-    prefix = "src/" if layout == "src" else ""
-    for rel in ("pkg/__init__.py", "pkg/processors/ocr.py"):
-        (tmp_path / prefix / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / prefix / rel).touch()
+def test_namespace_subpackages_are_discovered(tmp_path, prefix, files, expected):
+    """A directory without ``__init__.py`` inside a package still imports, so its modules are found."""
+    make_package(tmp_path, prefix, *files)
+
+    assert set(discover_submodules(f"{prefix}pkg", root_dir=tmp_path)) == expected
+
+
+def test_a_module_in_a_namespace_subpackage_resolves(tmp_path, prefix):
+    """The changed-file path resolves to the name imports use, so the change reaches its dependents."""
+    make_package(tmp_path, prefix, "pkg/processors/ocr.py")
 
     modules = resolve_files_to_modules([f"{prefix}pkg/processors/ocr.py"], f"{prefix}pkg", root_dir=tmp_path)
 
     assert modules == ["pkg.processors.ocr"]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_an_unreadable_directory_has_no_modules(tmp_path, prefix):
+    """A container's bind-mounted data dir (mode 000 to us) must not crash discovery, as it never did."""
+    make_package(tmp_path, prefix, "pkg/core.py", "pkg/pgdata/base/x.py")
+    locked = tmp_path / prefix / "pkg/pgdata/base"
+    locked.chmod(0)
+    try:
+        found = discover_submodules(f"{prefix}pkg", root_dir=tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert set(found) == {"pkg.core"}
+
+
+@pytest.mark.parametrize(
+    ("links", "expected"),
+    [
+        pytest.param({"pkg/ns/loop": "."}, set(), id="to_itself"),
+        pytest.param({"pkg/ns/up": "../.."}, set(), id="up_to_the_project_root"),
+        pytest.param({"pkg/media": "../../external"}, set(), id="out_of_the_project"),
+        pytest.param({"pkg/a/x": "../b", "pkg/b/y": "../a"}, {"pkg.a.x.mod_b", "pkg.b.y.mod_a"}, id="crossed"),
+        pytest.param({"pkg/alias": "../shared"}, {"pkg.alias.mod_shared"}, id="within_the_project_is_followed"),
+    ],
+)
+def test_symlinked_namespace_portions(tmp_path, links, expected):
+    """A link is followed like the import system follows it, but never out of the project or back up it."""
+    root = tmp_path / "project"
+    for rel in ("pkg/__init__.py", "pkg/ns/mod.py", "pkg/a/mod_a.py", "pkg/b/mod_b.py", "shared/mod_shared.py"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).touch()
+    (tmp_path / "external").mkdir()
+    (tmp_path / "external/mod_ext.py").touch()
+    for link, target in links.items():
+        (root / link).symlink_to(target, target_is_directory=True)
+
+    found = set(discover_submodules("pkg", root_dir=root))
+
+    assert found - {"pkg.ns.mod", "pkg.a.mod_a", "pkg.b.mod_b"} == expected
+
+
+@pytest.mark.parametrize(
+    ("files", "package", "tests_package", "canonical", "aliases"),
+    [
+        pytest.param(
+            ["app/__init__.py", "app/tests/factories.py"],
+            "app",
+            "app/tests",
+            "app.tests.factories",
+            {"tests.factories"},
+            id="tests_dir_inside_the_package",
+        ),
+        pytest.param(
+            ["src/app/__init__.py", "src/app/core.py"], "src/app", None, "app.core", {"src.app.core"}, id="src_layout"
+        ),
+        pytest.param(
+            ["src/company/app/__init__.py", "src/company/app/core.py"],
+            "src/company/app",
+            None,
+            "app.core",
+            {"company.app.core", "src.company.app.core"},
+            id="package_below_a_namespace_package",
+        ),
+        pytest.param(
+            ["src/company/app/__init__.py", "src/company/app/core.py"],
+            "src/company",
+            None,
+            "src.company.app.core",
+            {"company.app.core", "app.core"},
+            id="top_level_namespace_package",
+        ),
+        pytest.param(
+            ["src/company/core.py"],
+            "src/company",
+            None,
+            "src.company.core",
+            {"company.core"},
+            id="namespace_package_with_no_regular_package_at_all",
+        ),
+        pytest.param(
+            ["app/__init__.py", "app/sub/__init__.py", "app/sub/x.py"],
+            "app/sub",
+            None,
+            "app.sub.x",
+            set(),
+            id="a_regular_package_is_never_a_sys_path_root",
+        ),
+    ],
+)
+def test_each_file_has_one_canonical_name_and_its_other_names_as_aliases(
+    tmp_path, files, package, tests_package, canonical, aliases
+):
+    """A file is one module, however many names reach it: two nodes would double every count."""
+    for rel in files:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    path = str((tmp_path / files[-1]).resolve())
+
+    project = discover_project_modules(package, tests_package, root_dir=tmp_path)
+
+    assert [name for name, p in project.modules.items() if p == path] == [canonical]
+    assert {alias for alias, name in project.aliases.items() if name == canonical} == aliases
+    assert resolve_files_to_modules([files[-1]], package, tests_package, root_dir=tmp_path) == [canonical]
+
+
+def test_a_symlinked_directory_inside_the_package_is_an_alias_not_a_second_module(tmp_path):
+    """The walk finds ``pkg/real/core.py`` twice; the name not reached through the link is canonical."""
+    make_package(tmp_path, "", "pkg/real/core.py")
+    (tmp_path / "pkg/link").symlink_to("real", target_is_directory=True)
+
+    project = discover_project_modules("pkg", root_dir=tmp_path)
+
+    assert [name for name in project.modules if name.endswith("core")] == ["pkg.real.core"]
+    assert project.aliases["pkg.link.core"] == "pkg.real.core"
+    assert resolve_files_to_modules(["pkg/real/core.py"], "pkg", root_dir=tmp_path) == ["pkg.real.core"]
+
+
+def test_an_alias_resolves_to_its_file(tmp_path):
+    """Extensions may name a test by its tests-dir name; it must still resolve to the file."""
+    make_package(tmp_path, "", "pkg/tests/test_x.py")
+
+    files = resolve_modules_to_files(["tests.test_x", "pkg.tests.test_x"], "pkg", "pkg/tests", root_dir=tmp_path)
+
+    assert files == [str((tmp_path / "pkg/tests/test_x.py").resolve())] * 2

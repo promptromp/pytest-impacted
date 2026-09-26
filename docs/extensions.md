@@ -202,9 +202,11 @@ The dependency graph uses inverted edge direction: edges point from imported mod
 
 Beyond `resolve_impacted_tests`, two additional helpers are exported from the package root for extensions that need to do their own file or import analysis:
 
-- **`discover_submodules(package, require_init=True, root_dir=None)`** — walks a Python package and returns a `{module_name: file_path}` dict of absolute paths. Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout, namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files, and pass the `root_dir` your hook received so the scan does not depend on the working directory. This is the right primitive for any extension that needs to scan the full source tree.
+- **`discover_submodules(package, require_init=True, root_dir=None)`** — walks a Python package and returns a `{module_name: file_path}` dict of absolute paths. Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout and sub-directories without `__init__.py`, which import as namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files at all, so module names follow the directory path, and pass the `root_dir` your hook received so the scan does not depend on the working directory. Prefer `discover_project_modules` below when you need the package and the tests dir together.
 
-- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so filter the list against `discover_submodules()` the way `build_dep_tree()` does before treating an entry as a module. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`. Pass `is_package=True` for an `__init__.py` — relative imports in a package resolve against the package itself, not its parent, and `discover_submodules` hands you `__init__.py` paths for every package.
+- **`discover_project_modules(package, tests_package=None, root_dir=None)`** — the package and tests dir together, as the core graph sees them, returned as a `ProjectModules(modules, aliases)` named tuple. `modules` maps each file's one canonical name to its path; `aliases` maps every other name the same file can be imported under to that canonical name — a tests dir inside the package is walked as both `app.tests.x` and `tests.x`, and `src/company/app` may be imported as `app.x` or `company.app.x`. Graph nodes carry canonical names only, so map an import through `aliases.get(name, name)` before adding an edge; the same mapping is on the graph as `dep_tree.graph["aliases"]`. This also means a test module in a tests dir inside the package is named `app.tests.test_x` in `impacted_modules` and in the graph, not `tests.test_x`. This is the right primitive for any extension that needs to scan the full source tree.
+
+- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so filter the list against `discover_submodules()` the way `build_dep_tree()` does before treating an entry as a module. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`. Pass `is_package=True` for an `__init__.py` — relative imports in a package resolve against the package itself, not its parent, and `discover_submodules` hands you `__init__.py` paths for every regular package (a namespace package has no file, so it is not listed; its modules are).
 
 Example: a strategy that enumerates all source files and scans them for a custom pattern:
 
@@ -267,14 +269,14 @@ class IndexingStrategy(ImpactStrategy):
 
 Some dependency relationships are invisible to static import analysis: runtime DI bindings, codegen outputs, plugin discovery, config-driven wiring. The `enrich_dep_tree` hook lets an extension add those relationships as explicit edges in the shared dependency graph **before** any strategy runs its impact analysis. The built-in AST strategy then traverses those synthetic edges exactly as if they had been real imports.
 
-Most real extensions need to look at the actual source code to decide which edges to add. `enrich_dep_tree` receives the same context kwargs as `setup` (`ns_module`, `tests_package`, `root_dir`, `session`) so you can walk the tree with [`discover_submodules`](#extension-utilities) and [`parse_file_imports`](#extension-utilities) from inside the hook — a scan-then-enrich pattern that keeps all the logic in one place.
+Most real extensions need to look at the actual source code to decide which edges to add. `enrich_dep_tree` receives the same context kwargs as `setup` (`ns_module`, `tests_package`, `root_dir`, `session`) so you can walk the tree with [`discover_project_modules`](#extension-utilities) and [`parse_file_imports`](#extension-utilities) from inside the hook — a scan-then-enrich pattern that keeps all the logic in one place.
 
 ```python
 import re
 from pathlib import Path
 
 import networkx as nx
-from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+from pytest_impacted import ImpactStrategy, discover_project_modules, parse_file_imports
 
 # Finds @binding("key") decorators used by microcosm-style DI frameworks.
 _BINDING_RE = re.compile(r'@binding\(["\']([^"\']+)["\']\)')
@@ -299,9 +301,7 @@ class DIBindingStrategy(ImpactStrategy):
         session=None,
     ) -> None:
         # 1. Enumerate every source file the core knows about.
-        modules = dict(discover_submodules(ns_module, root_dir=root_dir))
-        if tests_package:
-            modules.update(discover_submodules(tests_package, require_init=False, root_dir=root_dir))
+        modules = discover_project_modules(ns_module, tests_package, root_dir=root_dir).modules
 
         # 2. Scan each file for producers and consumers.
         producers: dict[str, str] = {}  # binding_key -> producer module
