@@ -116,7 +116,7 @@ The core strategy. It uses static analysis to:
 3. Build a dependency graph with [NetworkX](https://networkx.org/)
 4. Trace transitive dependencies from changed modules to test modules
 
-The package's own `__init__.py` is a module like any other: `import my_package` and `from my_package import name` run it, so a test importing from the package depends on it and on everything it imports. Editing the `__init__.py`, or a module it re-exports, selects that test.
+The package's own `__init__.py` is a module too. A test that imports from the package root (`import my_package`, `from my_package import name`) depends on it and on everything it imports, so editing the `__init__.py`, or a module it re-exports, selects that test. As for any package's `__init__.py`, a test importing only a submodule (`from my_package.core import name`) is not linked to it, although Python runs it for that import too.
 
 ### PytestImpactStrategy
 

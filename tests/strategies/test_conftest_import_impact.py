@@ -45,7 +45,7 @@ def make(root: Path, files: dict[str, str]) -> Path:
 def find(strategy, root: Path, changed: str, *, tests_package: str | None = "suite", ns_module: str = "app"):
     return strategy.find_impacted_tests(
         changed_files=[changed],
-        impacted_modules=[changed.removesuffix(".py").replace("/", ".")],
+        impacted_modules=[changed.removesuffix(".py").removesuffix("/__init__").replace("/", ".")],
         ns_module=ns_module,
         tests_package=tests_package,
         root_dir=root,
@@ -180,18 +180,37 @@ def test_code_under_a_symlinked_subpackage_is_still_application_code(tmp_path):
     assert find(PytestImpactStrategy(), root, "app/shared/x.py") == []
 
 
-def test_a_tests_dir_holding_the_whole_package_does_not_make_the_application_test_code(tmp_path):
-    """``--impacted-tests-dir=app`` cannot tell tests from application code, so it is ignored for this."""
+@pytest.mark.parametrize(
+    ("init", "conftest", "changed"),
+    [
+        pytest.param("", FIXTURE, "app/db.py", id="a_module"),
+        pytest.param(
+            "from app.helpers import make\n",
+            FIXTURE.replace("from app.helpers import", "from app import"),
+            "app/__init__.py",
+            id="the_package_init",
+        ),
+    ],
+)
+def test_a_tests_dir_holding_the_whole_package_does_not_make_the_application_test_code(
+    tmp_path, init, conftest, changed
+):
+    """``--impacted-tests-dir=app`` cannot tell tests from application code, so it is ignored for this.
+
+    The package's ``__init__.py`` is application code like the rest: a conftest importing it is left to the opt-in.
+    """
     root = make(
         tmp_path,
         {
             **APP,
-            "app/conftest.py": FIXTURE,
+            "app/__init__.py": init,
+            "app/conftest.py": conftest,
             "app/test_db.py": "def test_db(db):\n    assert db\n",
         },
     )
 
-    assert find(PytestImpactStrategy(), root, "app/db.py", tests_package="app") == []
+    assert find(PytestImpactStrategy(), root, changed, tests_package="app") == []
+    assert find(ConftestImportImpactStrategy(), root, changed, tests_package="app") == ["app.test_db"]
 
 
 def test_a_subclass_need_not_call_the_base_initialiser(project):
