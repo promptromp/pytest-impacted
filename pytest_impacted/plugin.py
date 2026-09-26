@@ -160,9 +160,10 @@ def pytest_addoption(parser: Parser):
         default=None,
         dest="impacted_conftest_imports",
         help=(
-            "Also treat a conftest.py that imports changed code (directly or through other modules) "
-            + "as impacting every test in its directory and below, as an edited conftest does. Safer, "
-            + "but a top-level conftest importing the application selects almost every test."
+            "Also treat a conftest.py that imports changed application code (--impacted-module; directly "
+            + "or through other modules) as impacting every test in its directory and below, as it does for "
+            + "changed test code. Safer, but a top-level conftest importing the application selects almost "
+            + "every test."
         ),
     )
     parser.addini(

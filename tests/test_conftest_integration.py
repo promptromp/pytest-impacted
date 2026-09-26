@@ -36,7 +36,15 @@ def make_project(make_git_project):
 
 
 def run(pytester, *args):
-    return pytester.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", *args)
+    return pytester.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
+
+
+def assert_selected(result, *, passed=(), skipped=()):
+    """Which test files ran and which were skipped, not just how many."""
+    result.assert_outcomes(passed=len(passed), skipped=len(skipped))
+    result.stdout.fnmatch_lines_random(
+        [f"*{name}::* PASSED*" for name in passed] + [f"*{name}::* SKIPPED*" for name in skipped]
+    )
 
 
 # Every way of turning the opt-in rule on: (extra ini lines, extra command-line args).
@@ -44,40 +52,46 @@ OPT_IN = [
     pytest.param("", ["--impacted-conftest-imports"], id="flag"),
     pytest.param("impacted_conftest_imports = true\n", [], id="ini"),
 ]
-REACHED_CONFTESTS = [
-    pytest.param({"suite/db/conftest.py": DB_FIXTURE}, {"passed": 1, "skipped": 1}, id="conftest_of_one_directory"),
-    pytest.param({"conftest.py": DB_FIXTURE}, {"passed": 2}, id="root_conftest"),
+# Conftests that import the changed application module, and the test files each then selects.
+APP_REACHES_A_CONFTEST = [
+    pytest.param({"suite/db/conftest.py": DB_FIXTURE}, ["test_db.py"], ["test_other.py"], id="one_directory"),
+    pytest.param({"conftest.py": DB_FIXTURE}, ["test_db.py", "test_other.py"], [], id="root_conftest"),
     pytest.param(
         {"suite/db/helpers.py": HELPER, "suite/db/conftest.py": HELPER_FIXTURE},
-        {"passed": 1, "skipped": 1},
+        ["test_db.py"],
+        ["test_other.py"],
         id="through_a_helper_module",
     ),
 ]
 
 
-@pytest.mark.parametrize(("conftest", "outcomes"), REACHED_CONFTESTS)
+@pytest.mark.parametrize(("conftest", "passed", "skipped"), APP_REACHES_A_CONFTEST)
 @pytest.mark.parametrize(("ini", "args"), OPT_IN)
-def test_opted_in_a_change_reaching_a_conftest_selects_its_directory(make_project, conftest, outcomes, ini, args):
+def test_opted_in_application_code_reaching_a_conftest_selects_its_directory(
+    make_project, conftest, passed, skipped, ini, args
+):
     """A root conftest is above the analysed packages, invisible to package discovery, and still counts."""
     project = make_project({**APP, **TESTS, **conftest}, ini=INI + ini)
     edit(project, "app/db.py")
 
     result = run(project, *args)
 
-    result.assert_outcomes(**outcomes)
+    assert_selected(result, passed=passed, skipped=skipped)
     result.stdout.fnmatch_lines(["*impacted_conftest_imports=True*"])
 
 
-@pytest.mark.parametrize(("conftest", "outcomes"), REACHED_CONFTESTS)
-def test_by_default_a_change_reaching_only_a_conftest_selects_nothing(make_project, conftest, outcomes):
-    """No test imports ``app.db``: only the conftest does, and by default that is not followed."""
+@pytest.mark.parametrize(
+    "conftest", [p.values[0] for p in APP_REACHES_A_CONFTEST], ids=[p.id for p in APP_REACHES_A_CONFTEST]
+)
+def test_by_default_application_code_reaching_only_a_conftest_selects_nothing(make_project, conftest):
+    """No test imports ``app.db``: only a conftest does. The notice says so, and names the option."""
     project = make_project({**APP, **TESTS, **conftest})
     edit(project, "app/db.py")
 
     result = run(project)
 
-    result.assert_outcomes(skipped=2)
-    result.stdout.fnmatch_lines(["*impacted_conftest_imports=False*"])
+    assert_selected(result, skipped=["test_db.py", "test_other.py"])
+    result.stdout.fnmatch_lines(["*impacted_conftest_imports=False*", "*conftest.py*--impacted-conftest-imports*"])
 
 
 def test_an_explicit_false_in_the_ini_keeps_the_rule_off(make_project):
@@ -86,7 +100,42 @@ def test_an_explicit_false_in_the_ini_keeps_the_rule_off(make_project):
     project = make_project({**APP, **TESTS, "suite/db/conftest.py": DB_FIXTURE}, ini=ini)
     edit(project, "app/db.py")
 
-    run(project).assert_outcomes(skipped=2)
+    assert_selected(run(project), skipped=["test_db.py", "test_other.py"])
+
+
+STAR_IMPORTED_FIXTURES = {
+    "suite/fixtures.py": DB_FIXTURE,
+    "suite/db/conftest.py": "from suite.fixtures import *  # noqa: F403\n",
+}
+CONFTEST_IMPORTING_A_CONFTEST = {
+    "suite/db/conftest.py": DB_FIXTURE,
+    "suite/other/conftest.py": "from suite.db.conftest import db  # noqa: F401\n",
+    "suite/other/test_other.py": "def test_other(db):\n    assert db\n",
+}
+
+
+@pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])
+@pytest.mark.parametrize(
+    ("files", "edited", "passed", "skipped"),
+    [
+        pytest.param(
+            STAR_IMPORTED_FIXTURES, "suite/fixtures.py", ["test_db.py"], ["test_other.py"], id="fixture_module"
+        ),
+        pytest.param(
+            CONFTEST_IMPORTING_A_CONFTEST,
+            "suite/db/conftest.py",
+            ["test_db.py", "test_other.py"],
+            [],
+            id="conftest_importing_the_edited_conftest",
+        ),
+    ],
+)
+def test_test_code_reaching_a_conftest_selects_its_directory(make_project, files, edited, passed, skipped, args):
+    """Fixture modules and conftests are test code, not the application: they never needed the option."""
+    project = make_project({**APP, **TESTS, **files})
+    edit(project, edited)
+
+    assert_selected(run(project, *args), passed=passed, skipped=skipped)
 
 
 @pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])
@@ -95,10 +144,7 @@ def test_an_edited_conftest_selects_its_directory(make_project, args):
     project = make_project({**APP, **TESTS, "suite/db/conftest.py": DB_FIXTURE})
     edit(project, "suite/db/conftest.py")
 
-    result = run(project, *args)
-
-    result.assert_outcomes(passed=1, skipped=1)
-    result.stdout.fnmatch_lines(["*test_db.py*"])
+    assert_selected(run(project, *args), passed=["test_db.py"], skipped=["test_other.py"])
 
 
 @pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])
@@ -106,10 +152,7 @@ def test_change_not_reaching_the_conftest_does_not_select_its_directory(make_pro
     project = make_project({**APP, **TESTS, "suite/db/conftest.py": DB_FIXTURE})
     edit(project, "app/utils.py")
 
-    result = run(project, *args)
-
-    result.assert_outcomes(passed=1, skipped=1)
-    result.stdout.fnmatch_lines(["*test_other.py*"])
+    assert_selected(run(project, *args), passed=["test_other.py"], skipped=["test_db.py"])
 
 
 def test_src_layout_conftest_inside_the_package(make_project):

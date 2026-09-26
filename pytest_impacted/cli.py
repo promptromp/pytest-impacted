@@ -84,7 +84,7 @@ def configure_logging(verbose: bool) -> None:
     "--conftest-imports",
     is_flag=True,
     default=False,
-    help="Also treat a conftest.py that imports changed code as impacting every test beneath it.",
+    help="Also treat a conftest.py that imports changed application code as impacting every test beneath it.",
 )
 @click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
 @click.pass_context

@@ -121,7 +121,8 @@ The core strategy. It uses static analysis to:
 Extends the AST analysis with pytest-specific dependency detection:
 
 - **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and **are not captured through static import analysis**.
-- **Code a conftest depends on** is *not* followed by default — see [ConftestImportImpactStrategy](#conftestimportimpactstrategy-opt-in).
+- **Test code a conftest imports**: The same applies when a conftest imports changed *test code*, directly or through other modules: a fixture module it star-imports, another conftest, a helper in `--impacted-tests-dir` or outside `--impacted-module`. Conftests above your package and tests directory, up to the pytest rootdir (usually the repository root), count too.
+- **Application code a conftest imports** — anything in `--impacted-module` that is not a conftest or in `--impacted-tests-dir` — is *not* followed into the conftest's directory by default; a notice names the conftests concerned. See [ConftestImportImpactStrategy](#conftestimportimpactstrategy-opt-in).
 - **`pytest_plugins` modules**: A module named in a `pytest_plugins` declaration is loaded by pytest, not imported by your tests, and pytest registers it for the whole session — its fixtures and hooks reach every test, wherever it was declared. So a change to a plugin module, or to anything it imports, impacts **every test** — as does a change to a plugin loaded with `-p` (on the command line or in `addopts`) or through `PYTEST_PLUGINS`. Declarations are read from conftests, test modules and (transitively) the plugins themselves, in any form pytest accepts: a comma-separated string or a list/tuple, assigned, `+=`, `.append`/`.extend`, concatenated, including inside module-level `if`/`try`/`match`/loop blocks. Only literal strings are followed; names computed at runtime, and plugins outside the analysed package and tests directory, are not.
 
     Two limitations. Editing the *declaration* in a test module (rather than the root `conftest.py`, where any edit already selects every test) selects only that module, even though pytest registers the plugin session-wide — declare plugins in the root conftest. And the standalone `impacted-tests` CLI has no pytest session, so it knows `PYTEST_PLUGINS` but not `-p` options.
@@ -129,12 +130,14 @@ Extends the AST analysis with pytest-specific dependency detection:
 
 ### ConftestImportImpactStrategy (opt-in)
 
-Enabled with `--impacted-conftest-imports` (ini: `impacted_conftest_imports = true`). A conftest that *imports* a changed module, directly or through other modules, then impacts every test in its directory and below, exactly as an edited conftest does. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. Conftests above your package and tests directory, up to the pytest rootdir (usually the repository root), count too. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir` are followed; a helper package outside both is invisible.
+Enabled with `--impacted-conftest-imports` (ini: `impacted_conftest_imports = true`; `impacted-tests` CLI: `--conftest-imports`). A conftest that imports changed *application* code, directly or through other modules, then impacts every test in its directory and below, exactly as an edited conftest does. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir` are followed; a helper package outside both is invisible.
+
+If your tests live inside the package and you do not pass `--impacted-tests-dir`, their fixture modules count as application code: pass `--impacted-tests-dir` (e.g. `my_package/tests`) so they are followed by default.
 
 !!! warning "The trade-off"
-    Tests never import their conftest — pytest injects its fixtures by name — so **without this option, a test that uses changed code only through a conftest fixture is not selected**. That is the one place the default deliberately leans towards running fewer tests. The option closes the gap, but coarsely: a top-level `tests/conftest.py` that imports your application (an app factory, a database session) makes almost every change select almost every test. It was the default in 0.31.0 and turned typical edits into full runs, which is why it is now opt-in.
+    Tests never import their conftest — pytest injects its fixtures by name — so **without this option, a test that uses changed application code only through a conftest fixture is not selected**. This is a deliberate exception to erring on the side of caution, like the `pytest_plugins` limitations above. The option closes the gap, but coarsely: a top-level `tests/conftest.py` that imports your application (an app factory, a database session) makes almost every change select almost every test. It was the default in 0.31.0 and turned typical edits into full runs, which is why it is now opt-in.
 
-    Turn it on where missing a fixture-only dependency costs more than a longer run — for example in a pre-merge CI job, while keeping it off for local runs.
+    Turn it on where missing a fixture-only dependency costs more than a longer run — for example in a pre-merge CI job. Pass it on that job's command line (`--impacted-conftest-imports`, or `--conftest-imports` for the `impacted-tests` CLI, which does not read the ini) rather than in the ini: an ini `true` cannot be switched off from the command line except with `-o impacted_conftest_imports=false`.
 
 ```bash
 pytest --impacted --impacted-module=my_package --impacted-conftest-imports
@@ -257,7 +260,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--verbose` | `false` | Verbose output (written to stderr, so it will not pollute the piped test list) |
 | `--no-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
-| `--conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed code as impacted |
+| `--conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
 ## Configuration via `pyproject.toml`
@@ -308,7 +311,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
-| `--impacted-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed code as impacted ([details](#conftestimportimpactstrategy-opt-in)) |
+| `--impacted-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted ([details](#conftestimportimpactstrategy-opt-in)) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension. Installed extensions register their own flags — run `pytest --help` to list them, or see the [Extensions guide](extensions.md#extension-with-configuration) |
 
@@ -333,12 +336,12 @@ graph LR
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **pytest-aware rules** — a `conftest.py` that changed selects every test in its directory and below (with `--impacted-conftest-imports`, so does one that imports changed code); a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects every test
+5. **pytest-aware rules** — a `conftest.py` that changed, or imports changed test code, selects every test in its directory and below — and with `--impacted-conftest-imports`, so does one importing changed application code; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects every test
 6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
 7. **Invalidation patterns** — user-declared globs for non-Python files that static analysis cannot see (see [InvalidationFileImpactStrategy](#invalidationfileimpactstrategy))
 8. **Test filtering** skips tests whose modules are not in the impact set — a test counts as belonging both to the file it was collected from and to the file it is defined in, so inherited test methods and pytest-bdd scenarios are covered; doctests and tests collected from non-Python files (e.g. `--doctest-glob`) always run
 
-The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run).
+The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run). The few deliberate exceptions are documented where they apply — most notably [application code used only through a conftest fixture](#conftestimportimpactstrategy-opt-in).
 
 ## Performance: Rust Acceleration
 
