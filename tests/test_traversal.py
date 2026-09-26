@@ -676,6 +676,30 @@ def test_an_unsearchable_package_directory_has_no_modules(tmp_path):
     assert found == {}
 
 
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+@pytest.mark.parametrize(
+    "probe",
+    [
+        pytest.param(lambda root: discover_submodules("pkg", root_dir=root), id="discovery_under_it"),
+        pytest.param(lambda root: find_non_package_prefix("ns/data", root), id="its_package_prefix"),
+        pytest.param(
+            lambda root: resolve_files_to_modules(["pkg/data/gone.py"], "pkg", root_dir=root), id="a_file_in_it"
+        ),
+    ],
+)
+def test_a_listable_but_unsearchable_directory_raises_nothing(tmp_path, probe):
+    """Mode 644, as a badly permissioned or bind-mounted data dir can be: listing works, stat raises on 3.11–3.13."""
+    make_package(tmp_path, "", "pkg/data/__init__.py", "pkg/data/x.py", "ns/data/__init__.py")
+    locked = [tmp_path / "pkg/data", tmp_path / "ns/data"]
+    for directory in locked:
+        directory.chmod(0o644)
+    try:
+        probe(tmp_path)
+    finally:
+        for directory in locked:
+            directory.chmod(0o755)
+
+
 @pytest.mark.parametrize(
     ("links", "expected"),
     [

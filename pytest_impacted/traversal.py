@@ -136,7 +136,8 @@ def _discover_pkgutil_impl(
         # Not with_suffix(): it would truncate at a dot in the final component.
         file_path = base.parent / f"{base.name}.py"
 
-        if file_path.exists():
+        # os.path, not Path.exists(): a file in an unsearchable directory is missing, rather than raising.
+        if os.path.isfile(file_path):
             results[name] = str(file_path.resolve())
         else:
             logger.warning("Module %s not found at expected path %s", name, file_path)
@@ -588,7 +589,7 @@ def modules_for_files(
         abs_path = str((root / file).resolve())
         if abs_path in path_to_module:
             resolved_modules.append(path_to_module[abs_path])
-        elif not Path(abs_path).exists():
+        elif not os.path.exists(abs_path):
             logger.debug("File %s no longer exists; nothing to resolve", file)
         else:
             logger.warning(
