@@ -122,13 +122,13 @@ Extends the AST analysis with pytest-specific dependency detection:
 
 Detects changes in dependency and configuration files. When these files change, any test could potentially be affected — so **all test modules are marked as impacted**.
 
-Monitored files, matched by name at any depth:
+Monitored files — each matched by file name, in any directory:
 
-- `uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile`, `Pipfile.lock`
-- `pyproject.toml`, `setup.py`, `setup.cfg`
-- `pytest.ini`, `tox.ini` — pytest settings such as `addopts`, `markers` and `filterwarnings` apply to every test
-- `requirements*.txt` and `requirements*.in` (`requirements-dev.txt`, pip-tools inputs, …), `constraints*.txt`
-- `requirements/*.txt` (nested requirements files)
+- Lockfiles and metadata: `uv.lock`, `poetry.lock`, `pdm.lock`, `pixi.lock`, `Pipfile`, `Pipfile.lock`, `pylock*.toml` (PEP 751), `requirements*.lock` (rye), `pyproject.toml`, `setup.py`, `setup.cfg`
+- pytest configuration: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini` — settings such as `addopts`, `markers` and `filterwarnings` apply to every test
+- Requirements: any `*requirements*.txt` or `*requirements*.in` (`requirements-dev.txt`, `test-requirements.txt`, pip-tools inputs, …) and `constraints*.txt`
+
+Plus files inside a `requirements/` directory, one or two levels deep: `requirements/*.txt`, `requirements/*/*.txt`, and the same for `.in`. And whichever config file the running pytest actually loaded — including one passed with `-c` under any name.
 
 This strategy is enabled by default. To disable it, use:
 
@@ -226,7 +226,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--root-dir` | `.` | Root directory of the project repository; `--module` and `--tests-dir` are relative to it |
 | `--tests-dir` | `None` | Directory containing test files outside the namespace module |
 | `--verbose` | `false` | Verbose output (written to stderr, so it will not pollute the piped test list) |
-| `--no-dep-files` | `false` | Disable dependency file change detection |
+| `--no-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
@@ -272,7 +272,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
-| `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
+| `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension. Installed extensions register their own flags — run `pytest --help` to list them, or see the [Extensions guide](extensions.md#extension-with-configuration) |
@@ -287,7 +287,7 @@ graph LR
     D --> E[Dependency graph]
     E --> G[Impacted tests]
     B --> F[Dep file detection]
-    F -->|uv.lock, requirements.txt, etc.| G
+    F -->|uv.lock, requirements*.txt, pytest.ini, etc.| G
     B --> H[Invalidation patterns]
     H -->|--impacted-invalidate-all| G
 ```
@@ -296,7 +296,7 @@ graph LR
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
+5. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
 6. **Invalidation patterns** — user-declared globs for non-Python files that static analysis cannot see (see [InvalidationFileImpactStrategy](#invalidationfileimpactstrategy))
 7. **Test filtering** skips tests whose modules are not in the impact set
 

@@ -171,7 +171,7 @@ CLI flags override these defaults.
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
-| `--no-impacted-dep-files` | `false` | Disable dependency file change detection |
+| `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 
@@ -189,7 +189,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Dependency file detection** — if files like `uv.lock`, `requirements.txt`, or `pyproject.toml` changed, all tests are marked as impacted regardless of import analysis
+5. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
 6. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`
 7. **Test filtering** skips tests whose modules are not in the impact set
 

@@ -1,5 +1,7 @@
 """Unit-tests for the dependency file impact strategy module."""
 
+from unittest.mock import MagicMock
+
 import networkx as nx
 import pytest
 
@@ -41,7 +43,18 @@ class TestMatchesDependencyFile:
             pytest.param("pytest.ini.bak", False, id="pytest_ini_backup"),
             pytest.param("docs/requirements-guide.md", False, id="requirements_named_doc"),
             pytest.param("src/module.py", False, id="regular_py_file"),
-            pytest.param("my_requirements.txt", False, id="similar_name_no_match"),
+            # Over-selecting is the safe direction: any *requirements*.txt counts
+            pytest.param("my_requirements.txt", True, id="prefixed_requirements"),
+            pytest.param("test-requirements.txt", True, id="openstack_style_requirements"),
+            pytest.param("requirements/dev.in", True, id="nested_pip_tools_in"),
+            pytest.param("requirements-dev.lock", True, id="rye_lock"),
+            pytest.param("pylock.toml", True, id="pep751_lock"),
+            pytest.param("pylock.dev.toml", True, id="pep751_named_lock"),
+            pytest.param("pixi.lock", True, id="pixi_lock"),
+            pytest.param(".pytest.ini", True, id="hidden_pytest_ini"),
+            pytest.param("pytest.toml", True, id="pytest_toml"),
+            pytest.param(".pytest.toml", True, id="hidden_pytest_toml"),
+            pytest.param("docs/requirements.md", False, id="requirements_doc"),
             pytest.param("requirements/README.md", False, id="non_txt_in_requirements_dir"),
         ],
     )
@@ -187,3 +200,45 @@ class TestDependencyFileImpactStrategy:
         )
 
         assert result == ["tests.test_a", "tests.test_m", "tests.test_z"]
+
+
+class TestLoadedConfigFile:
+    """The config file pytest actually loaded counts whatever it is called (``-c ci.ini``)."""
+
+    @staticmethod
+    def session_with_inipath(inipath):
+        session = MagicMock()
+        session.config.inipath = inipath
+        return session
+
+    def test_loaded_config_is_a_dependency_file(self, tmp_path):
+        (tmp_path / "ci").mkdir()
+        (tmp_path / "ci/pytest-ci.ini").touch()
+        dep_tree = nx.DiGraph()
+        dep_tree.add_node("tests.test_a")
+
+        result = DependencyFileImpactStrategy().find_impacted_tests(
+            changed_files=["ci/pytest-ci.ini"],
+            impacted_modules=[],
+            ns_module="pkg",
+            root_dir=tmp_path,
+            session=self.session_with_inipath(tmp_path / "ci/pytest-ci.ini"),
+            dep_tree=dep_tree,
+        )
+
+        assert result == ["tests.test_a"]
+
+    def test_other_ini_files_do_not_count(self, tmp_path):
+        dep_tree = nx.DiGraph()
+        dep_tree.add_node("tests.test_a")
+
+        result = DependencyFileImpactStrategy().find_impacted_tests(
+            changed_files=["ci/other.ini"],
+            impacted_modules=[],
+            ns_module="pkg",
+            root_dir=tmp_path,
+            session=self.session_with_inipath(tmp_path / "ci/pytest-ci.ini"),
+            dep_tree=dep_tree,
+        )
+
+        assert result == []

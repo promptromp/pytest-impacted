@@ -184,3 +184,15 @@ def test_config_and_requirements_variants_run_every_test(git_project, rel):
 
     run(git_project).assert_outcomes(passed=2)
     run(git_project, "--no-impacted-dep-files").assert_outcomes(skipped=2)
+
+
+def test_editing_the_config_file_passed_with_c_runs_every_test(git_project):
+    """``-c`` can load a config under any name; the file pytest loaded counts regardless."""
+    ini = git_project.path / "ci" / "pytest-ci.ini"
+    ini.parent.mkdir()
+    ini.write_text(INI.replace("pythonpath = .", "pythonpath = .."))  # relative to the ini file
+    git_project.git("add", "ci")
+    git_project.git("commit", "-q", "-m", "add ci config")
+    git_project.touch("ci/pytest-ci.ini")
+
+    run(git_project, "-c", "ci/pytest-ci.ini", f"--rootdir={git_project.path}").assert_outcomes(passed=2)

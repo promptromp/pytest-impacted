@@ -21,30 +21,40 @@ logger = logging.getLogger(__name__)
 
 
 # Default dependency and configuration file basenames that trigger all tests when changed.
-# pytest.ini and tox.ini hold pytest settings (addopts, markers, filterwarnings) that
-# apply to every test, as pyproject.toml and setup.cfg can.
+# Every file pytest reads its settings from is here too: addopts, markers and
+# filterwarnings apply to every test. (The file pytest actually loaded — including one
+# passed with ``-c`` — is matched as well; see DependencyFileImpactStrategy.)
 DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
+    # Lockfiles and project metadata
     "uv.lock",
-    "requirements.txt",
-    "pyproject.toml",
-    "Pipfile",
-    "Pipfile.lock",
     "poetry.lock",
     "pdm.lock",
+    "pixi.lock",
+    "Pipfile",
+    "Pipfile.lock",
+    "pyproject.toml",
     "setup.py",
     "setup.cfg",
+    # pytest configuration (pytest.toml and .pytest.toml since pytest 9)
     "pytest.ini",
+    ".pytest.ini",
+    "pytest.toml",
+    ".pytest.toml",
     "tox.ini",
 )
 
 # Glob-style patterns (see matches_any_glob: right-anchored, so a bare-name glob matches
-# at any depth) for dependency files named by convention rather than exactly.
+# at any depth, while ``**`` is *not* recursive) for files named by convention.
 DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
+    "*requirements*.txt",  # requirements.txt, requirements-dev.txt, test-requirements.txt, ...
+    "*requirements*.in",  # pip-tools inputs
+    "requirements*.lock",  # rye
+    "constraints*.txt",
+    "pylock*.toml",  # PEP 751
     "requirements/*.txt",
     "requirements/**/*.txt",
-    "requirements*.txt",  # requirements-dev.txt, requirements_test.txt, ...
-    "requirements*.in",  # pip-tools inputs
-    "constraints*.txt",
+    "requirements/*.in",
+    "requirements/**/*.in",
 )
 
 
@@ -126,6 +136,22 @@ def clear_dep_tree_cache() -> None:
     """
     _cached_build_dep_tree.cache_clear()
     clear_discovery_cache()
+
+
+def _loaded_config_file(session: Any) -> Path | None:
+    """The config file this pytest run loaded (``config.inipath``), or ``None``."""
+    inipath = getattr(getattr(session, "config", None), "inipath", None)
+    return Path(inipath).resolve() if inipath else None
+
+
+def _resolve_changed_file(changed_file: str, root_dir: Path | None) -> Path | None:
+    """Absolute, resolved path of a changed file; ``None`` if it is relative and there is no root."""
+    path = Path(changed_file)
+    if not path.is_absolute():
+        if root_dir is None:
+            return None
+        path = Path(root_dir) / path
+    return path.resolve()
 
 
 def _resolve_changed_file_dir(changed_file: str, root_dir: Path) -> Path | None:
@@ -435,11 +461,13 @@ class PytestImpactStrategy(ImpactStrategy):
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):
-    """Strategy that triggers all tests when dependency files change.
+    """Strategy that triggers all tests when dependency or test-config files change.
 
-    When files like uv.lock, requirements.txt, pyproject.toml etc. are
-    modified, any test could potentially be affected. This strategy
-    conservatively marks all discovered test modules as impacted.
+    When files like uv.lock, requirements*.txt, pyproject.toml or pytest.ini
+    are modified, any test could potentially be affected. This strategy
+    conservatively marks all discovered test modules as impacted. Besides
+    the name patterns, the config file the running pytest actually loaded
+    (``config.inipath``, e.g. from ``-c ci.ini``) always counts.
     """
 
     def __init__(
@@ -462,11 +490,16 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Return all test modules if dependency files have changed."""
-        if not has_dependency_file_changes(changed_files, self.patterns, self.glob_patterns):
+        loaded_config = _loaded_config_file(session)
+        dep_files = [
+            f
+            for f in changed_files
+            if matches_dependency_file(f, self.patterns, self.glob_patterns)
+            or (loaded_config is not None and _resolve_changed_file(f, root_dir) == loaded_config)
+        ]
+        if not dep_files:
             return []
         all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
-
-        dep_files = [f for f in changed_files if matches_dependency_file(f, self.patterns, self.glob_patterns)]
         notify(
             f"Dependency file changes detected: {dep_files}. "
             f"Marking all {len(all_test_modules)} test modules as impacted.",

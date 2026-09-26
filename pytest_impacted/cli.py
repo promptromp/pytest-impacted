@@ -59,7 +59,9 @@ def configure_logging(verbose: bool) -> None:
     ),
 )
 @click.option("--verbose", is_flag=True, help="Verbose output.")
-@click.option("--no-dep-files", is_flag=True, default=False, help="Disable dependency file change detection.")
+@click.option(
+    "--no-dep-files", is_flag=True, default=False, help="Disable dependency and test-config file change detection."
+)
 @click.option(
     "--invalidate-all",
     multiple=True,
