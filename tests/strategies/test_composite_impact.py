@@ -8,6 +8,7 @@ import networkx as nx
 from pytest_impacted.strategies import (
     ASTImpactStrategy,
     CompositeImpactStrategy,
+    ConftestImportImpactStrategy,
     DependencyFileImpactStrategy,
     ImpactStrategy,
     PytestImpactStrategy,
@@ -75,20 +76,20 @@ class TestCompositeImpactStrategy:
 class TestGetDefaultStrategies:
     """Test the get_default_strategies factory function."""
 
-    def test_default_includes_all_three_strategies(self):
-        """Default composition includes AST, Pytest, and DependencyFile strategies."""
+    def test_default_includes_the_built_in_strategies(self):
+        """Default composition: AST, Pytest, ConftestImport (reporting only), DependencyFile."""
         strategies = get_default_strategies()
-        assert len(strategies) == 3
-        assert isinstance(strategies[0], ASTImpactStrategy)
-        assert isinstance(strategies[1], PytestImpactStrategy)
-        assert isinstance(strategies[2], DependencyFileImpactStrategy)
+        assert [type(s) for s in strategies] == [
+            ASTImpactStrategy,
+            PytestImpactStrategy,
+            ConftestImportImpactStrategy,
+            DependencyFileImpactStrategy,
+        ]
 
     def test_watch_dep_files_false_excludes_dependency_strategy(self):
         """When watch_dep_files=False, DependencyFileImpactStrategy is excluded."""
         strategies = get_default_strategies(watch_dep_files=False)
-        assert len(strategies) == 2
-        assert isinstance(strategies[0], ASTImpactStrategy)
-        assert isinstance(strategies[1], PytestImpactStrategy)
+        assert [type(s) for s in strategies] == [ASTImpactStrategy, PytestImpactStrategy, ConftestImportImpactStrategy]
         assert not any(isinstance(s, DependencyFileImpactStrategy) for s in strategies)
 
     def test_returns_new_instances_each_call(self):

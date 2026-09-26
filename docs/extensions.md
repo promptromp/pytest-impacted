@@ -38,7 +38,7 @@ impacted = get_impacted_tests(
 
 `get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run".
 
-The strategy you pass **replaces** the default pipeline — the AST, conftest and dependency-file strategies included, and `watch_dep_files` / `invalidate_all_patterns` then have no effect. To add to the defaults instead, pass `CompositeImpactStrategy([*get_default_strategies(), MyCustomStrategy()])` (both from `pytest_impacted.strategies`).
+The strategy you pass **replaces** the default pipeline — the AST, conftest and dependency-file strategies included, and `watch_dep_files` / `invalidate_all_patterns` / `conftest_imports` then have no effect. To add to the defaults instead, pass `CompositeImpactStrategy([*get_default_strategies(), MyCustomStrategy()])` (both from `pytest_impacted.strategies`).
 
 This is the right entry point for one-off integrations or for driving impact analysis from your own test runner. For reusable, auto-discovered strategies that ship as their own package, see the packaged extension system below.
 

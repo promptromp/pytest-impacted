@@ -121,10 +121,27 @@ class TestImpactedTestsCLI:
             mock_build_strategy.assert_called_once_with(
                 watch_dep_files=True,
                 invalidate_all_patterns=("*.json", "config/*.yaml"),
+                conftest_imports=False,
                 disabled=(),
                 ext_config={},
             )
             assert "invalidate-all: *.json, config/*.yaml" in result.output
+
+    @patch("pytest_impacted.cli.build_strategy_with_extensions")
+    @patch("pytest_impacted.cli.get_impacted_tests")
+    @patch("pytest_impacted.cli.configure_logging")
+    def test_cli_conftest_imports(self, mock_configure_logging, mock_get_impacted_tests, mock_build_strategy):
+        """--conftest-imports opts in to the conftest-import rule, and says so."""
+        mock_get_impacted_tests.return_value = []
+
+        with self.runner.isolated_filesystem():
+            Path("test_ns").mkdir()
+
+            result = self.runner.invoke(impacted_tests_cli, ["--module", "test_ns", "--conftest-imports"])
+
+            assert result.exit_code == 0, result.output
+            assert mock_build_strategy.call_args.kwargs["conftest_imports"] is True
+            assert "conftest-imports: True" in result.output
 
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")

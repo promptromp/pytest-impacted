@@ -299,6 +299,45 @@ def test_get_impacted_tests_invalidate_all_patterns(
     assert result == ["tests/test_core.py", "tests/test_other.py"]
 
 
+@pytest.mark.parametrize(("conftest_imports", "expected"), [(False, None), (True, ["tests/test_db.py"])])
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+@patch("pytest_impacted.api.resolve_files_to_modules")
+@patch("pytest_impacted.api.resolve_modules_to_files")
+@patch("pytest_impacted.api.cached_build_dep_tree")
+def test_get_impacted_tests_conftest_imports(
+    mock_cached_build_dep_tree,
+    mock_resolve_modules_to_files,
+    mock_resolve_files_to_modules,
+    mock_find_impacted_files,
+    tmp_path,
+    conftest_imports,
+    expected,
+):
+    """The default pipeline follows a conftest's imports into its directory only when asked to."""
+    for rel in ("project_ns/db.py", "tests/conftest.py", "tests/test_db.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    dep_tree = nx.DiGraph()
+    for rel in ("project_ns/db.py", "tests/conftest.py", "tests/test_db.py"):
+        dep_tree.add_node(rel.removesuffix(".py").replace("/", "."), path=str(tmp_path / rel))
+    dep_tree.add_edge("project_ns.db", "tests.conftest")
+    mock_cached_build_dep_tree.return_value = dep_tree
+    mock_find_impacted_files.return_value = ["project_ns/db.py"]
+    mock_resolve_files_to_modules.return_value = ["project_ns.db"]
+    mock_resolve_modules_to_files.side_effect = lambda modules, **_: [m.replace(".", "/") + ".py" for m in modules]
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=tmp_path,
+        ns_module="project_ns",
+        tests_dir="tests",
+        conftest_imports=conftest_imports,
+    )
+
+    assert result == expected
+
+
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_modules")
 @patch("pytest_impacted.api.resolve_modules_to_files")

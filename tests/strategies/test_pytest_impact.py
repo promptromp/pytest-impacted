@@ -106,25 +106,3 @@ def test_nested_conftest_directories_collapse(tmp_path):
     outer, inner, sibling = tmp_path / "tests", tmp_path / "tests/db", tmp_path / "other"
 
     assert set(_outermost({inner, outer, sibling})) == {outer.resolve(), sibling.resolve()}
-
-
-def test_a_package_named_conftest_is_not_a_conftest(tmp_path):
-    """pytest loads only files named ``conftest.py``; ``app/conftest/__init__.py`` is an ordinary package."""
-    (tmp_path / "app/conftest").mkdir(parents=True)
-    (tmp_path / "app/conftest/__init__.py").touch()
-    (tmp_path / "app/conftest/test_inner.py").touch()
-    dep_tree = nx.DiGraph()
-    dep_tree.add_node("app.db", path=str(tmp_path / "app/db.py"))
-    dep_tree.add_node("app.conftest", path=str(tmp_path / "app/conftest/__init__.py"))
-    dep_tree.add_node("app.conftest.test_inner", path=str(tmp_path / "app/conftest/test_inner.py"))
-    dep_tree.add_edge("app.db", "app.conftest")
-
-    result = PytestImpactStrategy().find_impacted_tests(
-        changed_files=["app/db.py"],
-        impacted_modules=["app.db"],
-        ns_module="app",
-        root_dir=tmp_path,
-        dep_tree=dep_tree,
-    )
-
-    assert result == []

@@ -12,7 +12,9 @@ Separately, changes to dependency and test-config files (`uv.lock`, `requirement
 `pytest.ini`, …) mark all tests impacted.
 
 The philosophy is to **err on the side of caution**: false positives (running a test
-that did not need to run) are always preferred over false negatives.
+that did not need to run) are preferred over false negatives. Exceptions are deliberate,
+documented and opt-back-in-able — chiefly `--impacted-conftest-imports` (below); never
+add a new one silently.
 
 ## Gotchas
 
@@ -209,9 +211,16 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 ## Strategies
 
 `strategies.py` defines `ImpactStrategy` (ABC) plus `ASTImpactStrategy`,
-`PytestImpactStrategy` (a conftest that changed *or imports something that changed*
-impacts every test in its directory and below — tests never import their conftest, so
-this is invisible to test-side import analysis), `DependencyFileImpactStrategy`
+`PytestImpactStrategy` (a conftest that was edited or imports changed *test* code — a
+fixture module, another conftest — impacts every test in its directory and below; tests
+never import their conftest, so this is invisible to test-side import analysis),
+`ConftestImportImpactStrategy` (the same for a conftest importing changed *application*
+code — `traversal.discover_application_files`: the `--impacted-module` walk's files less
+the `--impacted-tests-dir` walk's, conftests excluded; by discovery, never by path, which a
+symlinked subpackage resolves elsewhere. Always in the default pipeline, but `report_only` — naming those
+conftests — unless `--impacted-conftest-imports`: a root conftest importing the app turned
+0.31.0's every edit into a full run, so keep it selecting only on request until narrowing
+can make it selective), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config
 file pytest actually loaded, `session.config.inipath`; disable with
 `--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from

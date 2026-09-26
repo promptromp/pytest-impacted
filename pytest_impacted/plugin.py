@@ -154,6 +154,25 @@ def pytest_addoption(parser: Parser):
         default=[],
     )
 
+    group.addoption(
+        "--impacted-conftest-imports",
+        action="store_true",
+        default=None,
+        dest="impacted_conftest_imports",
+        help=(
+            "Also treat a conftest.py that imports changed application code (--impacted-module; directly "
+            + "or through other modules) as impacting every test in its directory and below, as it does for "
+            + "changed test code. Safer, but a top-level conftest importing the application selects almost "
+            + "every test."
+        ),
+    )
+    parser.addini(
+        "impacted_conftest_imports",
+        help="default value for --impacted-conftest-imports",
+        type="bool",
+        default=False,
+    )
+
     # Extension management
     group.addoption(
         "--impacted-disable-ext",
@@ -214,6 +233,7 @@ def pytest_report_header(config: Config) -> list[str]:
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
         f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
+        f"impacted_conftest_imports={get_option('impacted_conftest_imports')}",
         f"backend={backend}",
     ]
     if ext_names:
@@ -245,6 +265,7 @@ def pytest_collection_modifyitems(session, config, items):
     impacted_tests_dir = get_option("impacted_tests_dir")
     no_dep_files = get_option("no_impacted_dep_files")
     invalidate_all = get_option("impacted_invalidate_all") or []
+    conftest_imports = get_option("impacted_conftest_imports")
     root_dir = config.rootpath
 
     disabled_ext = get_option("impacted_disable_ext") or []
@@ -252,6 +273,7 @@ def pytest_collection_modifyitems(session, config, items):
     strategy = build_strategy_with_extensions(
         watch_dep_files=not no_dep_files,
         invalidate_all_patterns=invalidate_all,
+        conftest_imports=conftest_imports,
         disabled=disabled_ext,
         ext_config=ext_config,
     )
