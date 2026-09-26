@@ -1,5 +1,6 @@
 """Python code parsing (AST) utilities."""
 
+import ast
 import logging
 import os
 from pathlib import Path
@@ -126,6 +127,41 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         imports.update(_extract_imports_from_node(node, package))
 
     return sorted(imports)
+
+
+def parse_pytest_plugins(file_path: str) -> list[str]:
+    """Module names a file loads through a module-level ``pytest_plugins`` assignment.
+
+    ``pytest_plugins = ["pkg.fixtures"]`` makes pytest import ``pkg.fixtures`` and
+    register its fixtures and hooks, so it is a dependency exactly like an import —
+    but as strings, which import parsing never sees. Accepts a string, or a list or
+    tuple of strings; anything computed is ignored. Parsed with the stdlib ``ast``
+    and independent of the parsing backend, so both backends see the same edges.
+    """
+    try:
+        source = Path(file_path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return []
+    if "pytest_plugins" not in source:  # cheap pre-filter: most files never declare it
+        return []
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return []
+
+    plugins: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets):
+            continue
+        items = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+        plugins.extend(item.value for item in items if isinstance(item, ast.Constant) and isinstance(item.value, str))
+    return plugins
 
 
 def is_test_module(module_name: str) -> bool:

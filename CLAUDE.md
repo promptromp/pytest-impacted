@@ -90,6 +90,11 @@ absolutizes *and* resolves symlinks, and both caches canonicalize before their l
 `None` default cannot collapse two projects onto one entry. Never reach for `Path.cwd()`
 in traversal, graph or strategy code.
 
+**`pytest_plugins` declarations are edges.** `build_dep_tree` adds an edge from a conftest or
+test module to each module its `pytest_plugins` names (`parse_pytest_plugins`, stdlib `ast`,
+literal strings only). It runs outside the backend on purpose, so it cannot break Rust/Python
+parity; a text pre-filter keeps it to the files that mention `pytest_plugins`.
+
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`
 emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg`, so
 `build_dep_tree` filters candidates against `discover_submodules` instead. The apparent

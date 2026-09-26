@@ -116,3 +116,39 @@ def test_src_layout_conftest_inside_the_package(make_project):
     edit(project, "src/app/tests/conftest.py")
 
     run(project).assert_outcomes(passed=1, skipped=1)
+
+
+PLUGIN_FIXTURES = "import pytest\nfrom app.db import connect\n\n@pytest.fixture\ndef db():\n    return connect()\n"
+
+
+@pytest.mark.parametrize("edited", ["suite/plugin_fixtures.py", "app/db.py"])
+def test_fixtures_loaded_through_pytest_plugins(make_project, edited):
+    """``pytest_plugins`` is only allowed in the root conftest, so its plugins reach every test."""
+    project = make_project(
+        {
+            **APP,
+            **TESTS,
+            "suite/plugin_fixtures.py": PLUGIN_FIXTURES,
+            "conftest.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n',
+        }
+    )
+    edit(project, edited)
+
+    run(project).assert_outcomes(passed=2)
+
+
+def test_pytest_plugins_declared_in_a_test_module(make_project):
+    project = make_project(
+        {
+            **APP,
+            **TESTS,
+            "suite/plugin_fixtures.py": PLUGIN_FIXTURES,
+            "suite/db/test_db.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n\ndef test_db(db):\n    assert db\n',
+        }
+    )
+    edit(project, "suite/plugin_fixtures.py")
+
+    result = run(project)
+
+    result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines(["*test_db.py*"])

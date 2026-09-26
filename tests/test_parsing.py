@@ -362,3 +362,22 @@ def test_parse_file_imports_matches_rust_backend_with_bom(tmp_path):
     assert parsing.parse_file_imports(str(path), "my_package.sub.mod") == rust.parse_file_imports(
         str(path), "my_package.sub.mod", False
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param('pytest_plugins = ["a.fixtures", "b"]\n', ["a.fixtures", "b"], id="list"),
+        pytest.param('pytest_plugins = ("a.fixtures",)\n', ["a.fixtures"], id="tuple"),
+        pytest.param('pytest_plugins = "a.fixtures"\n', ["a.fixtures"], id="single_string"),
+        pytest.param('pytest_plugins: list[str] = ["a.fixtures"]\n', ["a.fixtures"], id="annotated"),
+        pytest.param('pytest_plugins = ["a", NAME, f"{x}"]\n', ["a"], id="computed_entries_ignored"),
+        pytest.param('def f():\n    pytest_plugins = ["a"]\n', [], id="not_module_level"),
+        pytest.param("import pytest\n", [], id="none_declared"),
+        pytest.param("pytest_plugins = [\n", [], id="syntax_error"),
+    ],
+)
+def test_parse_pytest_plugins(tmp_path, source, expected):
+    path = tmp_path / "conftest.py"
+    path.write_text(source)
+    assert parsing.parse_pytest_plugins(str(path)) == expected

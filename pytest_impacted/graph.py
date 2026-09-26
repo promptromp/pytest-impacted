@@ -6,7 +6,7 @@ from pathlib import Path
 import networkx as nx
 
 from pytest_impacted._rust import RUST_AVAILABLE, rust_parse_all_imports
-from pytest_impacted.parsing import is_test_module, parse_file_imports
+from pytest_impacted.parsing import is_test_module, parse_file_imports, parse_pytest_plugins
 from pytest_impacted.traversal import discover_ancestor_conftests, discover_submodules
 
 
@@ -78,6 +78,13 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
+def _declared_pytest_plugins(module_name: str, file_path: str) -> list[str]:
+    """``pytest_plugins`` entries of a conftest or test module — the only places pytest reads them."""
+    if module_name.rpartition(".")[2] != "conftest" and not is_test_module(module_name):
+        return []
+    return parse_pytest_plugins(file_path)
+
+
 def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str | Path | None = None) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
@@ -87,7 +94,9 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
 
     Conftests above the packages are included too (see
     :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), and every
-    discovered node carries its absolute file in the ``path`` attribute.
+    discovered node carries its absolute file in the ``path`` attribute. Modules
+    named in a ``pytest_plugins`` declaration count as imports (see
+    :func:`~pytest_impacted.parsing.parse_pytest_plugins`).
     """
     submodules = discover_submodules(package, require_init=True, root_dir=root_dir)
 
@@ -111,7 +120,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     digraph = nx.DiGraph()
     for name, file_path in submodules.items():
         digraph.add_node(name, path=file_path)
-        for imp in all_imports.get(name, []):
+        for imp in [*all_imports.get(name, []), *_declared_pytest_plugins(name, file_path)]:
             if imp in submodules:
                 digraph.add_node(imp)
                 digraph.add_edge(name, imp)
