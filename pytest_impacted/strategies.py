@@ -260,9 +260,9 @@ def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any)
     - a ``pytest_plugins`` target (flagged in the graph) — reached when it, or anything it imports, changed
     - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
     """
-    return sorted(
-        {node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (_session_plugins(session) & reached)
-    )
+    aliases = dep_tree.graph.get("aliases", {})
+    session_plugins = {aliases.get(name, name) for name in _session_plugins(session)}
+    return sorted({node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (session_plugins & reached))
 
 
 def _session_plugins(session: Any) -> set[str]:

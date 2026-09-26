@@ -55,20 +55,37 @@ def test_a_helper_imported_by_its_package_name_from_a_tests_dir_inside_the_packa
 
 
 @pytest.mark.parametrize("module", ["src/company", "src/company/app"])
-def test_a_package_inside_a_top_level_namespace_package(make_git_project, module):
-    """``company/`` has no ``__init__.py``; tests import ``company.app.core`` whichever directory is analysed."""
+@pytest.mark.parametrize("imported", ["company.app.core", "app.core"])
+def test_a_package_inside_a_top_level_namespace_package(make_git_project, module, imported):
+    """``company/`` has no ``__init__.py``: either import style matches, whichever directory is analysed."""
     files = {
         "src/company/app/__init__.py": "",
         "src/company/app/core.py": "def add(a, b):\n    return a + b\n",
-        "suite/test_core.py": "from company.app.core import add\n\ndef test_add():\n    assert add(1, 1) == 2\n",
+        "suite/test_core.py": f"from {imported} import add\n\ndef test_add():\n    assert add(1, 1) == 2\n",
         "suite/test_other.py": "def test_other():\n    assert True\n",
     }
-    project = make_git_project(
-        files, f"[pytest]\npythonpath = src\nimpacted_module = {module}\nimpacted_tests_dir = suite\n"
-    )
+    ini = f"[pytest]\npythonpath = src src/company\nimpacted_module = {module}\nimpacted_tests_dir = suite\n"
+    project = make_git_project(files, ini)
     edit_file(project, "src/company/app/core.py")
 
     result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
 
     result.assert_outcomes(passed=1, skipped=1)
     result.stdout.fnmatch_lines(["*test_core.py::test_add PASSED*"])
+
+
+def test_a_dash_p_plugin_named_by_its_tests_dir_name(make_git_project):
+    """``-p checks.plugin`` names ``app/checks/plugin.py`` by its alias; editing it is still session-wide."""
+    files = {
+        "app/__init__.py": "",
+        "app/checks/plugin.py": "import pytest\n\n@pytest.fixture\ndef answer():\n    return 42\n",
+        "app/checks/test_x.py": "def test_x(answer):\n    assert answer == 42\n",
+    }
+    ini = "[pytest]\npythonpath = . app\naddopts = -p checks.plugin\n"
+    ini += "impacted_module = app\nimpacted_tests_dir = app/checks\n"
+    project = make_git_project(files, ini)
+    edit_file(project, "app/checks/plugin.py")
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
+
+    result.stdout.fnmatch_lines(["*test_x.py::test_x PASSED*"])

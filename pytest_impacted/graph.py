@@ -149,5 +149,9 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
         digraph.nodes[plugin]["pytest_plugin"] = True
 
+    # Other names each module imports under (see discover_project_modules), for names
+    # that come from outside the source, such as ``-p`` plugins.
+    digraph.graph["aliases"] = aliases
+
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     return digraph.reverse()

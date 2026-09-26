@@ -508,7 +508,11 @@ def make_package(root: Path, prefix: str, *rels: str) -> None:
         ),
         pytest.param(["pkg/my-data/x.py", "pkg/.cache/y.py"], set(), id="non_identifier_directories_cannot_import"),
         pytest.param(["pkg/node_modules/lodash/fp.py", "pkg/__pycache__/x.py"], set(), id="never_package_directories"),
-        pytest.param(["pkg/foo.py", "pkg/foo/bar.py"], {"pkg.foo"}, id="a_same_named_module_shadows_the_directory"),
+        pytest.param(
+            ["pkg/tests.py", "pkg/tests/test_x.py"],
+            {"pkg.tests", "pkg.tests.test_x"},
+            id="shadowed_by_a_module_still_walked",
+        ),
     ],
 )
 def test_namespace_subpackages_are_discovered(tmp_path, prefix, files, expected):
@@ -594,8 +598,16 @@ def test_symlinked_namespace_portions(tmp_path, links, expected):
             "src/company",
             None,
             "src.company.app.core",
-            {"company.app.core"},
+            {"company.app.core", "app.core"},
             id="top_level_namespace_package",
+        ),
+        pytest.param(
+            ["src/company/core.py"],
+            "src/company",
+            None,
+            "src.company.core",
+            {"company.core"},
+            id="namespace_package_with_no_regular_package_at_all",
         ),
         pytest.param(
             ["app/__init__.py", "app/sub/__init__.py", "app/sub/x.py"],
@@ -621,3 +633,24 @@ def test_each_file_has_one_canonical_name_and_its_other_names_as_aliases(
     assert [name for name, p in project.modules.items() if p == path] == [canonical]
     assert {alias for alias, name in project.aliases.items() if name == canonical} == aliases
     assert resolve_files_to_modules([files[-1]], package, tests_package, root_dir=tmp_path) == [canonical]
+
+
+def test_a_symlinked_directory_inside_the_package_is_an_alias_not_a_second_module(tmp_path):
+    """The walk finds ``pkg/real/core.py`` twice; the name not reached through the link is canonical."""
+    make_package(tmp_path, "", "pkg/real/core.py")
+    (tmp_path / "pkg/link").symlink_to("real", target_is_directory=True)
+
+    project = discover_project_modules("pkg", root_dir=tmp_path)
+
+    assert [name for name in project.modules if name.endswith("core")] == ["pkg.real.core"]
+    assert project.aliases["pkg.link.core"] == "pkg.real.core"
+    assert resolve_files_to_modules(["pkg/real/core.py"], "pkg", root_dir=tmp_path) == ["pkg.real.core"]
+
+
+def test_an_alias_resolves_to_its_file(tmp_path):
+    """Extensions may name a test by its tests-dir name; it must still resolve to the file."""
+    make_package(tmp_path, "", "pkg/tests/test_x.py")
+
+    files = resolve_modules_to_files(["tests.test_x", "pkg.tests.test_x"], "pkg", "pkg/tests", root_dir=tmp_path)
+
+    assert files == [str((tmp_path / "pkg/tests/test_x.py").resolve())] * 2
