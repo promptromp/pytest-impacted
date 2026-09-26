@@ -62,9 +62,10 @@ discovered modules.
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
 (`cached_build_dep_tree → .copy() → resolve_files_to_nodes → enrich_dep_tree → setup →
 find_impacted_tests → teardown`). Changed files resolve through the graph's own node
-`path`s, never a second discovery: a module the (cached) graph lacks would read as a
-production module outside it, and `resolve_impacted_tests` would select every test. The copy is load-bearing: without it, extension enrichment pollutes the
-LRU-cached base graph and the next run in the same process starts dirty. `teardown`
+`path`s, not a second discovery: a changed module the (cached) graph lacks would read as a
+production module outside it, and `resolve_impacted_tests` would select every test. The
+copy is load-bearing: without it, extension enrichment pollutes the LRU-cached base graph
+and the next run in the same process starts dirty. `teardown`
 runs in a `finally`.
 
 **`get_impacted_tests` contains no strategy-specific dispatch.** `api.py` assembles
@@ -133,16 +134,12 @@ it may appear.
 
 **Conftests above the analysed packages are graph nodes too.** Package discovery never
 sees a root-level `conftest.py`, so `discover_project_modules` adds them via
-`discover_ancestor_conftests` — in the graph *and* the resolvers: when only the graph had
-them, an edit to `backend/conftest.py` resolved to nothing and reached no conftest
-importing it. They are named the way package discovery names modules (`conftest`,
+`discover_ancestor_conftests`, named the way package discovery names modules (`conftest`,
 `backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
-resolve; the names rooted at the other directories that could be on `sys.path`
-(`src.app.conftest`, `company.conftest` — `_rooted_names`, as for a package's modules) are
-the next choices, and aliases when free. They are named around every name in use, aliases included — taking an alias would
-re-point imports of a package file — and with no name free a conftest is named with a
-leading dot (`.mysite.conftest`, which no import spells) rather than dropped: a dropped
-conftest loses every edge from it. A conftest is recognised by its file
+resolve. They are named around every name already in use, aliases included — taking a
+package file's alias would re-point its imports — and a conftest with no free name gets a
+leading dot (`.mysite.conftest`, which no import spells) rather than being dropped: a
+dropped conftest loses every edge from it. A conftest is recognised by its file
 name, `conftest.py`, on both the changed-file and the graph path. Every node carries its
 source file in the `path` attribute. Resolve a node to a file with `_module_path`, never by
 rebuilding a path from the dotted name — that silently fails for src-layout, where the

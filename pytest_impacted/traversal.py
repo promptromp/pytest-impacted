@@ -309,10 +309,8 @@ def discover_ancestor_conftests(
     provides fixtures to their tests. Package discovery never sees it, so
     without this its imports would be invisible to the dependency graph.
 
-    Each conftest is named by the first of :func:`_conftest_names` not in *taken*,
-    and its other free names are its aliases. With none free, it is named with a
-    leading dot (``.mysite.conftest``): no absolute import is spelled that way, so none
-    reaches it by mistake, but it stays a node — dropping it would lose every edge from it.
+    Each conftest is named from :func:`_conftest_names` around every name in *taken*
+    (see :func:`_name_conftests`).
 
     Args:
         taken: Names already in use, aliases included: a conftest never takes one.
@@ -323,23 +321,44 @@ def discover_ancestor_conftests(
         as ``src/`` is dropped, as package discovery does) and their aliases.
     """
     root = canonical_root(root_dir)
-    used, seen = set(taken), set(known_paths)
-    modules: dict[str, str] = {}
-    aliases: dict[str, str] = {}
+    seen = set(known_paths)
+    candidates: dict[str, tuple[list[str], str]] = {}
     for package in packages:
         directory = (root / package_name_to_path(package)).parent
         while directory.is_relative_to(root):
             conftest = directory / "conftest.py"
             if os.path.isfile(conftest) and (path := str(conftest.resolve())) not in seen:
                 seen.add(path)
-                names = _conftest_names(directory, root)
-                name, *others = [free for free in names if free not in used] or [f".{names[-1]}"]
-                modules[name] = path
-                aliases.update(dict.fromkeys(others, name))
-                used.update((name, *others))
+                # The full path is unique among conftests; the leading dot keeps it from every import.
+                last_resort = "." + ".".join((*directory.relative_to(root).parts, "conftest"))
+                candidates[path] = (_conftest_names(directory, root), last_resort)
             if directory == root:
                 break
             directory = directory.parent
+    return _name_conftests(candidates, used=set(taken))
+
+
+def _name_conftests(candidates: dict[str, tuple[list[str], str]], *, used: set[str]) -> ProjectModules:
+    """Name each conftest path from its ``(names, last_resort)`` candidates, never one in *used*.
+
+    Names are handed out by rank across all conftests, so one conftest's second choice
+    never takes another's first; the free names left are aliases, once every conftest
+    has its own. A conftest with no free name gets its *last_resort*, which no import
+    spells, rather than being dropped: that would lose every edge from it.
+    """
+    chosen: dict[str, str] = {}
+    for rank in range(max((len(names) for names, _ in candidates.values()), default=0)):
+        for path, (names, _) in candidates.items():
+            if path not in chosen and rank < len(names) and names[rank] not in used:
+                chosen[path] = names[rank]
+                used.add(names[rank])
+    modules = {chosen.get(path, last_resort): path for path, (_, last_resort) in candidates.items()}
+    aliases: dict[str, str] = {}
+    for name, path in modules.items():
+        for alias in candidates[path][0]:
+            if alias not in used:
+                aliases[alias] = name
+                used.add(alias)
     return ProjectModules(modules, aliases)
 
 

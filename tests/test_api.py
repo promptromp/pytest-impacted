@@ -617,3 +617,26 @@ def test_changed_files_resolve_through_the_graph_the_run_uses(mock_find_impacted
     mock_find_impacted_files.return_value = ["backend/conftest.py"]
 
     assert get_impacted_tests(**run) is None
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo")
+def test_changed_files_resolve_against_the_run_graph_before_enrichment(mock_find_impacted_files):
+    """The run's own copy of the graph, as the strategies receive it, before any extension enriched it."""
+    mock_find_impacted_files.return_value = ["file1.py"]
+    calls = []
+    strategy = MagicMock(spec=ImpactStrategy)
+    strategy.enrich_dep_tree.side_effect = lambda dep_tree, **_: calls.append(("enrich", dep_tree))
+    strategy.find_impacted_tests.return_value = []
+
+    with patch("pytest_impacted.api.resolve_files_to_nodes") as resolve:
+        resolve.side_effect = lambda files, dep_tree, **_: calls.append(("resolve", dep_tree)) or []
+        get_impacted_tests(
+            impacted_git_mode=GitMode.UNSTAGED,
+            impacted_base_branch="main",
+            root_dir=Path("."),
+            ns_module="project_ns",
+            strategy=strategy,
+        )
+
+    assert [step for step, _ in calls] == ["resolve", "enrich"]
+    assert calls[0][1] is calls[1][1] is strategy.find_impacted_tests.call_args.kwargs["dep_tree"]

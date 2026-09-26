@@ -522,6 +522,19 @@ def test_every_conftest_is_one_module_under_its_own_name(tmp_path, files, packag
     assert {alias: project.aliases[alias] for alias in aliases} == aliases
 
 
+def test_a_conftest_keeps_its_own_name_before_another_takes_it_as_an_alias(tmp_path):
+    """``x/y/conftest.py`` can be imported as ``y.conftest`` too, but that is ``y/conftest.py``'s own name."""
+    for rel in ("x/y/pkg/__init__.py", "x/y/conftest.py", "y/conftest.py", "y/tests/test_a.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    project = discover_project_modules("x/y/pkg", "y/tests", root_dir=tmp_path)
+
+    assert project.modules["y.conftest"] == str((tmp_path / "y/conftest.py").resolve())
+    assert project.modules["x.y.conftest"] == str((tmp_path / "x/y/conftest.py").resolve())
+    assert "y.conftest" not in project.aliases
+
+
 def test_conftests_above_the_packages_are_project_modules_and_resolve(tmp_path, caplog):
     """The graph has them as nodes, so an edit to one must resolve to its node like any module."""
     for rel in ("conftest.py", "backend/conftest.py", "backend/app/__init__.py", "suite/test_x.py"):
