@@ -42,6 +42,12 @@ def affected_fixtures(source: str, module_name: str, reached: Collection[str]) -
     try:
         statements = list(_simple_statements(tree.body))
         tainted = _import_bindings(statements, module_name, reached)
+        tainted |= {
+            stmt.name
+            for stmt in statements
+            if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+            and _imports_changed_code(stmt, module_name, reached)
+        }
         _propagate(statements, tainted)
         return frozenset(_fixture_names(statements, tainted))
     except (_Undecidable, RecursionError):
@@ -81,25 +87,33 @@ def _headers(stmt: ast.stmt) -> list[ast.expr]:
 
 
 def _import_bindings(statements: list[ast.stmt], module_name: str, reached: Collection[str]) -> set[str]:
-    """Local names bound to a module in *reached*, or to something imported from one."""
-    tainted: set[str] = set()
-    for stmt in statements:
-        if isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                parts = alias.name.split(".")
-                prefixes = {".".join(parts[: i + 1]) for i in range(len(parts))}
-                if prefixes & set(reached):
-                    tainted.add(alias.asname or parts[0])
-        elif isinstance(stmt, ast.ImportFrom):
-            source = resolve_import_from(module_name, False, stmt.level, stmt.module)
-            for alias in stmt.names:
-                if alias.name == "*":
-                    if source in reached:
-                        raise _Undecidable  # which names came from it is unknowable
-                    continue
-                if {source, f"{source}.{alias.name}"} & set(reached):
-                    tainted.add(alias.asname or alias.name)
-    return tainted
+    """Local names the module-level imports bind to a module in *reached*, or to something from one."""
+    return {name for stmt in statements for name in _affected_bindings(stmt, module_name, reached)}
+
+
+def _affected_bindings(node: ast.AST, module_name: str, reached: Collection[str]) -> set[str]:
+    """Names one ``import`` statement binds to changed code (empty for any other node)."""
+    bound: set[str] = set()
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            parts = alias.name.split(".")
+            if {".".join(parts[: i + 1]) for i in range(len(parts))} & set(reached):
+                bound.add(alias.asname or parts[0])
+    elif isinstance(node, ast.ImportFrom):
+        source = resolve_import_from(module_name, False, node.level, node.module)
+        for alias in node.names:
+            if alias.name == "*":
+                if source in reached:
+                    raise _Undecidable  # which names came from it is unknowable
+                continue
+            if {source, f"{source}.{alias.name}"} & set(reached):
+                bound.add(alias.asname or alias.name)
+    return bound
+
+
+def _imports_changed_code(definition: ast.AST, module_name: str, reached: Collection[str]) -> bool:
+    """Whether a function or class body imports changed code itself (``def db(): from app.db import …``)."""
+    return any(_affected_bindings(node, module_name, reached) for node in ast.walk(definition))
 
 
 def _names(node: ast.AST) -> set[str]:

@@ -144,6 +144,38 @@ def analyse(source: str, reached=REACHED, module_name: str = "tests.conftest"):
         pytest.param(
             """
             import pytest
+
+            @pytest.fixture
+            def db():
+                from app.db import connect
+                return connect()
+
+            @pytest.fixture
+            def other():
+                import app.db
+                return app.db
+            """,
+            {"db", "other"},
+            id="import_inside_the_fixture",
+        ),
+        pytest.param(
+            """
+            import pytest
+
+            def _make():
+                from app import db
+                return db.connect()
+
+            @pytest.fixture
+            def conn():
+                return _make()
+            """,
+            {"conn"},
+            id="import_inside_a_helper",
+        ),
+        pytest.param(
+            """
+            import pytest
             from .helpers import make
 
             @pytest.fixture
