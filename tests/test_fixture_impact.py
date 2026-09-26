@@ -188,8 +188,16 @@ def analyse(source: str, reached=REACHED, module_name: str = "tests.conftest"):
     ],
 )
 def test_affected_fixtures(source, expected):
+    """Every affected fixture is a candidate; no unaffected fixture is.
+
+    Candidates may also hold helper names (``connect``, ``ENGINE``): a name that is not
+    a fixture matches no test's fixtures, so only the fixture names are asserted.
+    """
     reached = {*REACHED, "tests.helpers"}
-    assert analyse(source, reached) == expected
+    result = analyse(source, reached)
+    assert result is not None
+    assert expected <= result
+    assert not ({"user", "total"} - expected) & result
 
 
 @pytest.mark.parametrize(
@@ -209,12 +217,89 @@ def test_affected_fixtures(source, expected):
             "from app.db import FLAG\n\nif FLAG:\n    pass\n",
             id="conditional_on_changed_code",
         ),
-        pytest.param(
-            "import pytest\nfrom app.db import connect\n\ndb = pytest.fixture(connect)\n",
-            id="fixture_without_a_def",
-        ),
         pytest.param("def broken(:\n", id="syntax_error"),
     ],
 )
 def test_undecidable_means_whole_directory(source):
+    assert analyse(source) is None
+
+
+# --- review of PR #82: every one of these skipped tests that should have run ---
+
+
+@pytest.mark.parametrize(
+    ("source", "must_include"),
+    [
+        pytest.param(
+            "from app.db import db_session, user_factory  # noqa: F401\n",
+            {"db_session", "user_factory"},
+            id="fixtures_re_exported_by_import",
+        ),
+        pytest.param(
+            """
+            import pytest
+            from app.db import connect
+
+            def make(url):
+                @pytest.fixture
+                def _f():
+                    return connect(url)
+                return _f
+
+            db = make("sqlite://")
+            """,
+            {"db"},
+            id="fixture_made_by_a_factory",
+        ),
+        pytest.param(
+            "import pytest\nfrom app.db import connect\n\ndb = pytest.fixture(connect)\n",
+            {"db"},
+            id="fixture_without_a_def",
+        ),
+        pytest.param(
+            """
+            import app.db.models
+            from app import db
+            import pytest
+
+            @pytest.fixture
+            def thing():
+                return db.models.Thing()
+            """,
+            {"thing"},
+            id="changed_submodule_reached_through_an_attribute",
+        ),
+    ],
+)
+def test_affected_names_include_every_way_a_fixture_can_be_bound(source, must_include):
+    # app.db.models changed, and app.db's __init__ does not import it: only the ancestor rule links `db`.
+    reached = {"app.db.models"} if "models" in source else {"app.db"}
+    result = analyse(source, reached)
+    assert result is not None and must_include <= result
+
+
+def test_an_aliased_fixture_decorator_still_counts():
+    """``@fx`` may be pytest.fixture under another name: the function's name must be a candidate."""
+    source = "from pytest import fixture as fx\nfrom app.db import connect\n\n@fx\ndef db():\n    return connect()\n"
+    result = analyse(source)
+    assert result is None or "db" in result
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "import pytest\nfrom app.db import connect\n\n"
+            "@pytest.hookimpl(specname='pytest_collection_modifyitems')\ndef reorder(items):\n    connect()\n",
+            id="hook_registered_under_another_name",
+        ),
+        pytest.param(
+            "import pytest\nfrom app.db import connect\nNAME = 'database'\n\n"
+            "@pytest.fixture(name=NAME)\ndef db():\n    return connect()\n",
+            id="computed_fixture_name",
+        ),
+    ],
+)
+def test_affected_code_whose_role_is_unknowable_is_undecidable(source):
+    """A hook under another name affects any test; a computed ``name=`` hides the fixture's real name."""
     assert analyse(source) is None

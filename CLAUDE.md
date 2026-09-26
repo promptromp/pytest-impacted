@@ -190,20 +190,25 @@ file pytest actually loaded, `session.config.inipath`; disable with
 configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
 which unions results. `get_default_strategies()` builds the default composition.
 Duck-typed strategies need only `find_impacted_tests`: the composite skips the lifecycle
-hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for the same reason.
+hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for the same
+reason.
 
 **`NarrowConftestImpactStrategy` (`--impacted-narrow-conftests`) narrows only conftests
 reached through imports**, never an edited one, by overriding
 `PytestImpactStrategy._tests_under_reached_conftest`. `fixture_impact.affected_fixtures`
-taints names from the conftest's AST (imports of reached modules → module-level variables,
-functions, classes, to a fixed point) and returns the affected fixture names, or `None` for
-"undecidable". Every doubt must become `None` (whole directory), never an empty set: an
-empty set means "no test under this conftest is affected". Items come from `session.items`
-— the same list pytest hands to `pytest_collection_modifyitems`, already filled — and their
-public `fixturenames` (the full closure, autouse included). `getfixturevalue` is invisible
-to that closure, which is why any mention of it forces the fallback. The whole mode rests
-on one stated assumption — importing a changed module has no side effects reaching tests
-except through fixtures using it — so it stays opt-in.
+taints names from the conftest's AST (imports of reached modules or their ancestors, and
+imports inside function bodies → module-level variables, functions, classes, to a fixed
+point) and returns **every tainted name** as a candidate fixture name, or `None` for
+"undecidable". Reporting only decorated `def`s missed re-exported, factory-made and
+alias-decorated fixtures: a candidate that is not a fixture just matches no test, so err
+towards more names. Every doubt must become `None` (whole directory), never a smaller set.
+Items come from `session.items` — the same list pytest hands to
+`pytest_collection_modifyitems`, already filled — and their public `fixturenames` (the
+full closure, autouse included). `getfixturevalue` is invisible to that closure, which is
+why any mention of it outside test modules forces the fallback (`_CollectedTests.of` scans
+the graph once per run — never walk the filesystem for it). The whole mode rests on one
+stated assumption — importing a changed module has no side effects reaching tests except
+through fixtures using it — so it stays opt-in.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the

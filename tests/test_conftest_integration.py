@@ -226,7 +226,7 @@ def test_narrowing_keeps_only_tests_using_an_affected_fixture(make_project):
 
     result.assert_outcomes(passed=1, skipped=2)
     result.stdout.fnmatch_lines(
-        ["*suite.conftest imports changed code; narrowed to tests using*db*: 1 of 3 test modules*"]
+        ["*suite.conftest imports changed code; narrowed to the tests requesting*: 1 of 3 test modules*"]
     )
 
 
@@ -308,6 +308,54 @@ def test_narrowing_sees_an_import_inside_a_fixture(make_project):
         "    return connect()", "    from app.db import connect\n\n    return connect()"
     )
     project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": nested})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=1, skipped=2)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        pytest.param(
+            {"conftest.py": 'def later(request):\n    return request.getfixturevalue("db")\n'},
+            id="getfixturevalue_in_a_parent_conftest",
+        ),
+        pytest.param(
+            {"suite/lookups.py": 'def db_of(request):\n    return request.getfixturevalue("db")\n'},
+            id="getfixturevalue_in_a_helper_module",
+        ),
+    ],
+)
+def test_a_dynamic_lookup_anywhere_outside_tests_prevents_narrowing(make_project, extra):
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": NARROW_CONFTEST, **extra})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=3)
+
+
+def test_a_test_module_importing_from_a_conftest_is_kept(make_project):
+    """``from conftest import …`` (rootdir-relative, pytest's default import mode) is no graph edge.
+
+    The test calls the conftest's affected helper directly, requesting no fixture at all.
+    """
+    conftest = NARROW_CONFTEST + "\ndef make_conn():\n    return connect()\n"
+    importer = "from conftest import make_conn\n\ndef test_top():\n    assert make_conn()\n"
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": conftest, "suite/test_top.py": importer})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=2, skipped=2)
+
+
+def test_fixtures_re_exported_by_a_conftest_are_narrowed_to_their_users(make_project):
+    fixtures = "import pytest\nfrom app.db import connect\n\n@pytest.fixture\ndef db():\n    return connect()\n"
+    project = make_project(
+        {
+            **APP,
+            **NARROW_TESTS,
+            "suite/fixtures_db.py": fixtures,
+            "suite/conftest.py": "from suite.fixtures_db import db  # noqa: F401\n",
+        }
+    )
     edit(project, "app/db.py")
 
     narrow(project).assert_outcomes(passed=1, skipped=2)

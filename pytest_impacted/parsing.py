@@ -197,23 +197,47 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
     if tree is None:
         return []
     try:
-        return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
+        return [name for stmt in module_level_statements(tree.body) for name in _declared_plugins(stmt)]
     except RecursionError:  # e.g. a 3000-term `+` chain: parses fine, recurses when walked
         return []
 
 
-_BLOCK_FIELDS = ("body", "cases", "handlers", "orelse", "finalbody")  # source order
-_BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.ExceptHandler, ast.Match, ast.match_case, ast.For, ast.While)
+_COMPOUND = (ast.If, ast.Try, ast.TryStar, ast.With, ast.For, ast.While, ast.Match)
 
 
-def _module_level_statements(body: list) -> Iterator[ast.stmt]:
-    """Statements that run at import, including nested blocks — but not functions or classes."""
+def module_level_statements(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """The statements that run at import, flattened through compound blocks.
+
+    Functions and classes are yielded whole, not entered. A block's own header —
+    an ``if`` test, a ``with`` item, a ``for`` iterable, a ``match`` subject — runs
+    at import too, so it is yielded as an expression statement.
+    """
     for stmt in body:
-        if isinstance(stmt, ast.stmt):
+        if not isinstance(stmt, _COMPOUND):
             yield stmt
-        if isinstance(stmt, _BLOCKS):
-            for field in _BLOCK_FIELDS:
-                yield from _module_level_statements(getattr(stmt, field, []))
+            continue
+        for header in _block_headers(stmt):
+            yield ast.Expr(value=header)
+        # Source order: body, except handlers, else, finally; or the cases of a match.
+        yield from module_level_statements(getattr(stmt, "body", []))
+        for block in [handler.body for handler in getattr(stmt, "handlers", [])]:
+            yield from module_level_statements(block)
+        for block in [case.body for case in getattr(stmt, "cases", [])]:
+            yield from module_level_statements(block)
+        for field in ("orelse", "finalbody"):
+            yield from module_level_statements(getattr(stmt, field, []))
+
+
+def _block_headers(stmt: ast.stmt) -> list[ast.expr]:
+    if isinstance(stmt, ast.If | ast.While):
+        return [stmt.test]
+    if isinstance(stmt, ast.For):
+        return [stmt.iter]
+    if isinstance(stmt, ast.With):
+        return [item.context_expr for item in stmt.items]
+    if isinstance(stmt, ast.Match):
+        return [stmt.subject]
+    return []
 
 
 def _declared_plugins(stmt: ast.stmt) -> list[str]:

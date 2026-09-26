@@ -3,8 +3,10 @@
 from __future__ import annotations
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -530,14 +532,23 @@ class NarrowConftestImpactStrategy(PytestImpactStrategy):
     A conftest that imports changed code — often a root ``tests/conftest.py``
     importing the app factory — would otherwise select every test beneath it.
     Here only the tests whose fixture closure (``item.fixturenames``) requests
-    a fixture built on the change are kept; which fixtures those are comes from
-    :func:`~pytest_impacted.fixture_impact.affected_fixtures`.
+    a fixture built on the change are kept; which fixtures those may be comes
+    from :func:`~pytest_impacted.fixture_impact.affected_fixtures`.
 
-    Anything uncertain falls back to the whole directory: an undecidable conftest,
-    a ``getfixturevalue`` lookup under it (invisible to ``fixturenames``), or no
-    collected items to inspect (the ``impacted-tests`` CLI). An *edited* conftest
-    always selects its whole directory. Enabled with ``--impacted-narrow-conftests``.
+    Anything uncertain keeps the whole directory: an undecidable conftest, a
+    ``getfixturevalue`` lookup in any non-test module (invisible to
+    ``fixturenames``), or no collected items to inspect (the ``impacted-tests``
+    CLI). An *edited* conftest always selects its whole directory. Enabled with
+    ``--impacted-narrow-conftests``.
     """
+
+    def _find_conftest_impacted_tests(self, *args: Any, **kwargs: Any) -> list[str]:
+        # The collected tests are the same for every conftest in this call: look once.
+        self._collected: _CollectedTests | None | object = _NOT_YET
+        try:
+            return super()._find_conftest_impacted_tests(*args, **kwargs)
+        finally:
+            self._collected = _NOT_YET
 
     def _tests_under_reached_conftest(
         self,
@@ -549,40 +560,80 @@ class NarrowConftestImpactStrategy(PytestImpactStrategy):
         session: Any,
     ) -> list[str]:
         whole = super()._tests_under_reached_conftest(conftest, path, reached, dep_tree, root_dir, session)
-        items = getattr(session, "items", None)
+        if getattr(self, "_collected", _NOT_YET) is _NOT_YET:
+            self._collected = _CollectedTests.of(session, dep_tree)
+        collected = self._collected
         source = read_source(str(path))
-        if not isinstance(items, list) or source is None or _dynamic_fixture_lookup_under(path.parent):
+        if not isinstance(collected, _CollectedTests) or source is None:
             return whole
         fixtures = affected_fixtures(source, conftest, reached)
         if fixtures is None:
             return whole
 
-        requested = _fixtures_requested_by_module(items, dep_tree)
-        selected = [
-            module
-            for module in whole
-            # Kept when not collected this run (nothing to inspect; it will not run anyway),
-            # when it cannot be inspected, or when it may look fixtures up dynamically.
-            if module not in requested
-            or (names := requested[module]) is None
-            or names & fixtures
-            or _mentions_dynamic_lookup(module, dep_tree)
-        ]
-        collected = [module for module in whole if module in requested]
+        selected = [module for module in whole if collected.may_need(module, fixtures)]
         notify(
-            f"{conftest} imports changed code; narrowed to tests using {sorted(fixtures) or 'none of its fixtures'}: "
-            f"{sum(module in requested for module in selected)} of {len(collected)} test modules under it.",
+            f"{conftest} imports changed code; narrowed to the tests requesting an affected fixture: "
+            f"{sum(module in collected.requested for module in selected)} of "
+            f"{sum(module in collected.requested for module in whole)} test modules under it.",
             session,
         )
         return selected
 
 
-def _fixtures_requested_by_module(items: list[Any], dep_tree: nx.DiGraph) -> dict[str, set[str] | None]:
-    """``{test module: fixture names its collected tests request}``, from each item's closure.
+_NOT_YET = object()
 
-    ``None`` for a module holding an item without ``fixturenames`` (a doctest, a
-    custom item type): it cannot be inspected, so it must be assumed to need everything.
-    """
+#: A test module importing from a conftest (``from conftest import make_user``) calls its
+#: helpers directly; with rootdir-relative names that edge can be missing from the graph.
+_IMPORTS_A_CONFTEST = re.compile(r"^\s*(?:from\s+[\w.]*conftest\s+import|import\s+[\w.]*conftest\b)", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class _CollectedTests:
+    """What this run's collected tests request, and which test modules must be kept regardless."""
+
+    #: ``{test module: fixture names its tests request}``; ``None`` when an item cannot
+    #: be inspected (a doctest, a custom item type) and must be assumed to need everything.
+    requested: dict[str, set[str] | None]
+    #: Test modules that look fixtures up dynamically or import from a conftest.
+    always_kept: frozenset[str]
+
+    @classmethod
+    def of(cls, session: Any, dep_tree: nx.DiGraph) -> _CollectedTests | None:
+        """``None`` when narrowing is impossible this run.
+
+        That is when there are no collected items (no pytest session), or when any
+        non-test module — a conftest anywhere, a helper, a plugin — calls
+        ``getfixturevalue``: a lookup that ``fixturenames`` cannot show.
+        """
+        items = getattr(session, "items", None)
+        if not isinstance(items, list):
+            return None
+        always_kept = set()
+        for node, path in dep_tree.nodes(data="path"):
+            text = read_source(path) if path else None
+            if text is None:
+                continue
+            if not is_test_module(node):
+                if "getfixturevalue" in text:
+                    return None
+            elif "getfixturevalue" in text or _IMPORTS_A_CONFTEST.search(text):
+                always_kept.add(node)
+        return cls(requested=_fixtures_requested_by_module(items, dep_tree), always_kept=frozenset(always_kept))
+
+    def may_need(self, module: str, fixtures: frozenset[str]) -> bool:
+        """Whether *module* may request one of *fixtures*.
+
+        True when it was not collected this run (nothing to inspect; it will not
+        run anyway), when it cannot be inspected, or when it is always kept.
+        """
+        if module not in self.requested or module in self.always_kept:
+            return True
+        names = self.requested[module]
+        return names is None or bool(names & fixtures)
+
+
+def _fixtures_requested_by_module(items: list[Any], dep_tree: nx.DiGraph) -> dict[str, set[str] | None]:
+    """``{test module: fixture names its collected tests request}``, from each item's closure."""
     module_by_path = {Path(path).resolve(): node for node, path in dep_tree.nodes(data="path") if path}
     requested: dict[str, set[str] | None] = {}
     for item in items:
@@ -595,16 +646,6 @@ def _fixtures_requested_by_module(items: list[Any], dep_tree: nx.DiGraph) -> dic
         elif (known := requested.setdefault(module, set())) is not None:
             known.update(names)
     return requested
-
-
-def _dynamic_fixture_lookup_under(directory: Path) -> bool:
-    """Whether any conftest under *directory* uses ``getfixturevalue`` — a lookup ``fixturenames`` cannot see."""
-    return any("getfixturevalue" in (read_source(str(c)) or "") for c in directory.rglob("conftest.py"))
-
-
-def _mentions_dynamic_lookup(module: str, dep_tree: nx.DiGraph) -> bool:
-    path = dep_tree.nodes[module].get("path")
-    return path is not None and "getfixturevalue" in (read_source(path) or "")
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):
