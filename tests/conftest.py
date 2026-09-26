@@ -8,6 +8,35 @@ import pytest
 pytest_plugins = "pytester"
 
 
+#: Variables that tell git which repository to use (``git rev-parse --local-env-vars``).
+#: Git exports them to hooks, and the pre-commit hook runs this suite from inside a
+#: commit, so every throwaway repository the tests create would otherwise resolve to
+#: the repository being committed — overwriting its index, or re-initialising it as bare.
+_GIT_REPO_LOCATING_VARS = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+)
+
+
+def pytest_configure(config):
+    """Scrub repo-locating git variables before any fixture — session-scoped ones included — runs."""
+    for name in _GIT_REPO_LOCATING_VARS:
+        os.environ.pop(name, None)
+
+
 def isolated_git_env(home) -> dict[str, str]:
     """Environment that shields git from the developer's global/system config.
 
