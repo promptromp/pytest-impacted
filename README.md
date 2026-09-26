@@ -199,7 +199,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 5. **pytest wiring** — a `conftest.py` that changed or imports changed code selects every test in its directory and below; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects all tests
 6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
 7. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`
-8. **Test filtering** skips tests whose modules are not in the impact set — judged by the file each test was collected from, so inherited test methods and pytest-bdd scenarios are selected with their test module
+8. **Test filtering** skips tests whose modules are not in the impact set — a test counts as belonging both to the file it was collected from and to the file it is defined in, so inherited test methods and pytest-bdd scenarios are covered; tests collected from non-Python files (e.g. `--doctest-glob`) always run
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
 

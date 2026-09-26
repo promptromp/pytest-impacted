@@ -6,9 +6,55 @@ from unittest.mock import ANY, MagicMock, patch
 import networkx as nx
 import pytest
 
-from pytest_impacted.api import get_impacted_tests
+from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 from pytest_impacted.strategies import ImpactStrategy
+
+
+@pytest.mark.parametrize(
+    ("item_path", "impacted_tests", "expected"),
+    [
+        pytest.param(
+            "tests/test_example.py",
+            ["project/module/tests/test_example.py", "project/another_module/tests/test_other.py"],
+            True,
+            id="suffix_match",
+        ),
+        pytest.param(
+            "tests/test_another.py",
+            ["project/module/tests/test_example.py", "project/another_module/tests/test_other.py"],
+            False,
+            id="no_match",
+        ),
+        pytest.param("tests/test_example.py", [], False, id="empty_impacted_list"),
+        pytest.param(
+            "project/module/tests/test_example.py",
+            ["project/module/tests/test_example.py"],
+            True,
+            id="exact_match",
+        ),
+        pytest.param(
+            "test_example.py",
+            ["project/module/tests/test_example.pyc"],
+            False,
+            id="substring_not_suffix",
+        ),
+        pytest.param(
+            "longer/path/to/tests/test_example.py",
+            ["tests/test_example.py"],
+            False,
+            id="item_path_longer_than_impacted",
+        ),
+        pytest.param(
+            "test_example.py",
+            ["project/module/tests/foo_test_example.py"],
+            False,
+            id="false_suffix_no_boundary",
+        ),
+    ],
+)
+def test_matches_impacted_tests(item_path, impacted_tests, expected):
+    assert matches_impacted_tests(item_path, impacted_tests=impacted_tests) is expected
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")

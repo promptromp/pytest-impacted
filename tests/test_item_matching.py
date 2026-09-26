@@ -1,67 +1,156 @@
-"""End-to-end: tests are selected by the file they were collected from, not their source location.
+"""Which collected items an impacted test file selects.
 
-pytest reports ``item.location`` as where the test *function* lives. For an inherited
-test method that is the base class's module, and for a pytest-bdd scenario it is inside
-the ``pytest_bdd`` package. Matching on it skipped those tests whenever their own file was
-impacted — silently, since skipped is not failed.
+pytest gives every item two files: ``item.path``, the file it was collected from, and
+``item.location``, the file its test function is defined in. They differ for an
+inherited test (the base class's module) and a pytest-bdd scenario (inside the
+``pytest_bdd`` package). Either being impacted must select the item: matching only
+the location skipped every pytest-bdd scenario, and matching only the path skipped
+inherited tests whose base changed without a graph edge to the child.
 """
 
-import os
-import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
-from pytest_impacted.strategies import clear_dep_tree_cache
+from pytest_impacted.plugin import _impacted_items
 
-from .conftest import isolated_git_env
+from .conftest import edit_file
 
 
-FILES = {
+# --- end to end ------------------------------------------------------------------
+
+# Not "tests": pytester runs in-process and shares sys.modules with this repo's own package.
+PACKAGED = {
     "app/__init__.py": "",
     "app/calc.py": "def add(a, b):\n    return a + b\n",
-    # Not "tests": pytester runs in-process and shares sys.modules with this repo's own package.
-    "suite/checks.py": (
-        "from app.calc import add\n\n\nclass Checks:\n    def test_add(self):\n        assert add(1, 1) == 2\n"
-    ),
+    "suite/checks.py": """\
+        from app.calc import add
+
+
+        class Checks:
+            def test_add(self):
+                assert add(1, 1) == 2
+        """,
     "suite/test_child.py": "from suite.checks import Checks\n\n\nclass TestChild(Checks):\n    pass\n",
     "suite/test_other.py": "def test_other():\n    assert True\n",
+}
+
+# A rootless tests dir (no __init__.py): `from checks import Checks` resolves through
+# sys.path at run time, so the import graph has no edge from the child to its base.
+ROOTLESS = {
+    "app/__init__.py": "",
+    "app/calc.py": "def add(a, b):\n    return a + b\n",
+    "suite/tests/checks.py": "class Checks:\n    def test_base(self):\n        assert True\n",
+    "suite/tests/test_child.py": "from checks import Checks\n\n\nclass TestChild(Checks):\n    pass\n",
+    "suite/tests/test_other.py": "def test_other():\n    assert True\n",
 }
 INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 
 
-@pytest.fixture
-def project(pytester):
-    clear_dep_tree_cache()
-    env = {**os.environ, **isolated_git_env(pytester.path / "git-home")}
-    for rel, source in {**FILES, ".gitignore": "__pycache__/\n"}.items():
-        path = pytester.path / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source)
-    pytester.makeini(INI)
-    for args in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]):
-        subprocess.run(["git", *args], cwd=pytester.path, env=env, check=True, capture_output=True)
-    yield pytester
-    clear_dep_tree_cache()
+def run(project, *args):
+    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
-def run(pytester):
-    return pytester.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-rs")
-
-
-def test_an_inherited_test_runs_when_its_collecting_module_is_impacted(project):
-    """``TestChild.test_add`` is defined in suite/checks.py but collected from suite/test_child.py."""
-    path = project.path / "suite/test_child.py"
-    path.write_text(path.read_text() + "# edited\n")
+@pytest.mark.parametrize(
+    ("files", "edited", "runs"),
+    [
+        pytest.param(
+            PACKAGED,
+            "suite/test_child.py",
+            "*test_child.py::TestChild::test_add PASSED*",
+            id="inherited_test_collected_from_the_edited_file",
+        ),
+        pytest.param(
+            PACKAGED,
+            "suite/test_other.py",
+            "*test_other.py::test_other PASSED*",
+            id="control_an_unrelated_edit",
+        ),
+        pytest.param(
+            ROOTLESS,
+            "suite/tests/checks.py",
+            "*test_child.py::TestChild::test_base PASSED*",
+            id="inherited_test_whose_base_changed_without_a_graph_edge",
+        ),
+    ],
+)
+def test_one_test_runs_and_the_other_is_skipped(make_git_project, files, edited, runs):
+    project = make_git_project(files, INI)
+    edit_file(project, edited)
 
     result = run(project)
 
     result.assert_outcomes(passed=1, skipped=1)
-    result.stdout.fnmatch_lines(["*test_child.py*"])
+    result.stdout.fnmatch_lines([runs])
 
 
-def test_an_inherited_test_is_skipped_when_only_its_base_module_is_unaffected(project):
-    """The control: an unrelated change leaves the inherited test out."""
-    path = project.path / "suite/test_other.py"
-    path.write_text(path.read_text() + "# edited\n")
+def test_items_from_non_python_files_always_run(make_git_project):
+    """A ``--doctest-glob`` text file cannot be judged by import analysis: it runs, never silently skipped."""
+    project = make_git_project({**PACKAGED, "suite/guide.txt": ">>> 1 + 1\n2\n"}, INI)
+    edit_file(project, "suite/test_other.py")
 
-    run(project).assert_outcomes(passed=1, skipped=1)
+    result = run(project, "--doctest-glob=*.txt")
+
+    result.stdout.fnmatch_lines(["*guide.txt::guide.txt PASSED*"])
+    result.assert_outcomes(passed=2, skipped=1)
+
+
+# --- the selection rule ------------------------------------------------------------
+
+
+@pytest.fixture
+def root(tmp_path):
+    for rel in ("tests/test_a.py", "tests/base.py", "tests/test_b.py", "notes/guide.txt"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    return tmp_path
+
+
+@dataclass(frozen=True)
+class FakeItem:
+    """Just the two attributes the rule reads: ``path`` (absolute) and ``location`` (root-relative)."""
+
+    path: Path
+    location: tuple[str, int, str]
+
+
+def fake_item(root: Path, path: str, location: str) -> FakeItem:
+    return FakeItem(path=root / path, location=(location, 1, "test_x"))
+
+
+@pytest.mark.parametrize(
+    ("path", "location", "impacted", "selected"),
+    [
+        pytest.param("tests/test_a.py", "tests/test_a.py", ["tests/test_a.py"], True, id="plain_test_impacted"),
+        pytest.param("tests/test_b.py", "tests/test_b.py", ["tests/test_a.py"], False, id="plain_test_elsewhere"),
+        pytest.param("tests/test_a.py", "tests/base.py", ["tests/test_a.py"], True, id="collected_from_impacted"),
+        pytest.param("tests/test_a.py", "tests/base.py", ["tests/base.py"], True, id="defined_in_impacted"),
+        pytest.param("tests/test_a.py", "tests/base.py", ["tests/test_b.py"], False, id="neither_impacted"),
+        pytest.param("notes/guide.txt", "notes/guide.txt", [], True, id="non_python_file_always_runs"),
+    ],
+)
+def test_impacted_items(root, path, location, impacted, selected):
+    item = fake_item(root, path, location)
+
+    assert (item in _impacted_items([item], [str(root / f) for f in impacted], root)) is selected
+
+
+def test_relative_impacted_entries_are_anchored_at_the_root_not_the_cwd(root, monkeypatch):
+    """Running pytest from a subdirectory must not change what a relative entry names."""
+    monkeypatch.chdir(root / "tests")
+    item = fake_item(root, "tests/test_a.py", "tests/test_a.py")
+
+    assert item in _impacted_items([item], ["tests/test_a.py"], root)
+
+
+def test_each_file_is_resolved_once(root, monkeypatch):
+    """Parametrized suites put thousands of items in a few files; resolving walks the filesystem."""
+    items = [fake_item(root, "tests/test_a.py", "tests/test_a.py") for _ in range(50)]
+    calls: list[Path] = []
+    real_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: calls.append(self) or real_resolve(self, *a, **k))
+
+    _impacted_items(items, [str(root / "tests/test_a.py")], root)
+
+    assert len(calls) <= 3  # the impacted entry, the shared path, the shared location

@@ -7,8 +7,6 @@ import textwrap
 
 import pytest
 
-from pytest_impacted.strategies import clear_dep_tree_cache
-
 from .conftest import isolated_git_env
 
 
@@ -18,9 +16,8 @@ def git_project(pytester):
 
     Returns a helper that modifies a file in the working tree (unstaged) so that
     ``unstaged`` git mode sees exactly that change. pytester runs in-process, so
-    the module-name-keyed dependency-tree cache is cleared to keep runs isolated.
+    the dependency-tree cache is cleared around every test (``_fresh_analysis_caches``).
     """
-    clear_dep_tree_cache()
     pytester.mkpydir("pkg")
     pytester.makepyfile(**{"pkg/core": "def add(a, b):\n    return a + b\n"})
     pytester.mkdir("tests")
@@ -58,7 +55,6 @@ def git_project(pytester):
     pytester.touch = touch
     pytester.git = git
     yield pytester
-    clear_dep_tree_cache()
 
 
 INI = textwrap.dedent(

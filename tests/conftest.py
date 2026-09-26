@@ -2,8 +2,11 @@
 
 import os
 import subprocess
+import textwrap
 
 import pytest
+
+from pytest_impacted.strategies import clear_dep_tree_cache
 
 
 pytest_plugins = "pytester"
@@ -94,3 +97,43 @@ def isolated_git_config(monkeypatch, tmp_path):
     """Apply :func:`isolated_git_env` to the current process."""
     for key, value in isolated_git_env(tmp_path).items():
         monkeypatch.setenv(key, value)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_analysis_caches():
+    """Start and end every test with empty dependency-graph and discovery caches.
+
+    Both are process-wide LRU caches keyed on the project root, and pytester runs
+    in-process: a graph cached by one test must never answer for another.
+    """
+    clear_dep_tree_cache()
+    yield
+    clear_dep_tree_cache()
+
+
+@pytest.fixture
+def make_git_project(pytester):
+    """Factory: write ``{path: source}`` and an ini into pytester's directory, and commit it.
+
+    Returns the pytester, ready for ``edit_file`` and ``runpytest``. Git runs with
+    :func:`isolated_git_env`, so the developer's configuration cannot leak in.
+    """
+    env = {**os.environ, **isolated_git_env(pytester.path / "git-home")}
+
+    def make(files: dict[str, str], ini: str):
+        for rel, source in {**files, ".gitignore": "__pycache__/\n"}.items():
+            path = pytester.path / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(textwrap.dedent(source))
+        pytester.makeini(ini)
+        for args in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]):
+            subprocess.run(["git", *args], cwd=pytester.path, env=env, check=True, capture_output=True)
+        return pytester
+
+    return make
+
+
+def edit_file(pytester, rel: str) -> None:
+    """Make an uncommitted change to *rel*, as unstaged git mode sees it."""
+    path = pytester.path / rel
+    path.write_text(path.read_text() + "\n# edited\n")

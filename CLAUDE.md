@@ -117,9 +117,12 @@ rebuilding a path from the dotted name — that silently fails for src-layout, w
 name drops `src/`. `is_test_module` is false for any `conftest`, even under `tests/`: it
 holds fixtures, never tests.
 
-**Collected items are matched to impacted files by `item.path`**, never `item.location`:
-location is where the test *function* lives — a base class's module for an inherited test,
-inside `pytest_bdd` for a scenario — and matching on it silently skipped those tests.
+**A collected item is selected if `item.path` *or* `item.location` is an impacted file**
+(`plugin._impacted_items`). They differ for an inherited test (location: the base class's
+module) and a pytest-bdd scenario (location: inside `pytest_bdd`). Matching location alone
+skipped scenarios; path alone skipped inherited tests whose base changed with no graph edge
+(`from checks import Checks` in a rootless dir). Keep the union — each half only adds tests.
+Items from non-Python files (`--doctest-glob`, YAML collectors) always run.
 
 **Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
 every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes

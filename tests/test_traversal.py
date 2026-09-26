@@ -491,3 +491,23 @@ def test_discover_ancestor_conftests(tmp_path):
 def test_discover_ancestor_conftests_without_any(tmp_path):
     (tmp_path / "pkg").mkdir()
     assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Implicit namespace sub-packages (a directory without __init__.py) are never walked, so a "
+        "change there resolves to no module and selects no tests. ROADMAP P0; seen in real projects "
+        "(pdfalive 7/37 package files, glo-ai 223/1658). Remove this mark with the fix."
+    ),
+)
+@pytest.mark.parametrize("layout", ["flat", "src"])
+def test_a_module_in_a_namespace_subpackage_resolves(tmp_path, layout):
+    prefix = "src/" if layout == "src" else ""
+    for rel in ("pkg/__init__.py", "pkg/processors/ocr.py"):
+        (tmp_path / prefix / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / prefix / rel).touch()
+
+    modules = resolve_files_to_modules([f"{prefix}pkg/processors/ocr.py"], f"{prefix}pkg", root_dir=tmp_path)
+
+    assert modules == ["pkg.processors.ocr"]

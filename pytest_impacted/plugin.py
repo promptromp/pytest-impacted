@@ -282,15 +282,37 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(pytest.mark.skip)
         return
 
-    # Match the file each test was collected from (item.path), not item.location: that is
-    # where the test *function* lives — the base class's module for an inherited test, and
-    # inside the pytest_bdd package for a pytest-bdd scenario — so those were always skipped.
-    impacted_paths = {Path(test).resolve() for test in impacted_tests}
+    impacted_items = _impacted_items(items, impacted_tests, root_dir)
     for item in items:
-        if Path(item.path).resolve() in impacted_paths:
+        if item in impacted_items:
             item.add_marker(pytest.mark.impacted)
         else:
             item.add_marker(pytest.mark.skip)
+
+
+def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_dir: Path) -> set[pytest.Item]:
+    """The collected items that belong to an impacted test file.
+
+    An item belongs to both the file it was collected from (``item.path``) and the
+    file its test function is defined in (``item.location``) — they differ for an
+    inherited test (the base class's module) and a pytest-bdd scenario (inside
+    ``pytest_bdd``), and either being impacted selects it: matching only one of
+    them skipped tests. An item from a non-Python file (a ``--doctest-glob`` text
+    file, a YAML collector) cannot be judged by import analysis, so it runs.
+    """
+    impacted = {(root_dir / test).resolve() for test in impacted_tests}
+    resolved: dict[Path, Path] = {}
+
+    def is_impacted(path: Path) -> bool:
+        if path not in resolved:
+            resolved[path] = path.resolve()
+        return resolved[path] in impacted
+
+    return {
+        item
+        for item in items
+        if item.path.suffix != ".py" or is_impacted(item.path) or is_impacted(root_dir / item.location[0])
+    }
 
 
 def get_option_from_config(config: Config, name: str) -> str | None:
