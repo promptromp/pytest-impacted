@@ -7,58 +7,7 @@ import textwrap
 
 import pytest
 
-from pytest_impacted.strategies import clear_dep_tree_cache
-
-from .conftest import isolated_git_env
-
-
-@pytest.fixture
-def git_project(pytester):
-    """A committed project with a package, two test directories, and non-Python data files.
-
-    Returns a helper that modifies a file in the working tree (unstaged) so that
-    ``unstaged`` git mode sees exactly that change. pytester runs in-process, so
-    the module-name-keyed dependency-tree cache is cleared to keep runs isolated.
-    """
-    clear_dep_tree_cache()
-    pytester.mkpydir("pkg")
-    pytester.makepyfile(**{"pkg/core": "def add(a, b):\n    return a + b\n"})
-    pytester.mkdir("tests")
-    pytester.mkdir("tests/unit")
-    pytester.mkdir("tests/integration")
-    pytester.makepyfile(
-        **{
-            "tests/unit/test_core": "from pkg.core import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
-            "tests/integration/test_api": "from pkg.core import add\n\ndef test_api():\n    assert add(0, 0) == 0\n",
-        }
-    )
-    pytester.mkdir("config")
-    data_files = {
-        "config/settings.json": "{}",
-        "config/app.yaml": "key: value\n",
-    }
-    for rel, content in data_files.items():
-        (pytester.path / rel).write_text(content)
-    (pytester.path / ".gitignore").write_text("__pycache__/\n")
-    pytester.makeini(INI)
-
-    env = {**os.environ, **isolated_git_env(pytester.path / "git-home")}
-
-    def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=pytester.path, env=env, check=True, capture_output=True)
-
-    git("init", "-q")
-    git("add", ".")
-    git("commit", "-q", "-m", "init")
-
-    def touch(rel: str) -> None:
-        path = pytester.path / rel
-        path.write_text(path.read_text() + "\n")
-
-    pytester.touch = touch
-    pytester.git = git
-    yield pytester
-    clear_dep_tree_cache()
+from .git_helpers import edit_file, isolated_git_env
 
 
 INI = textwrap.dedent(
@@ -69,6 +18,31 @@ INI = textwrap.dedent(
     impacted_tests_dir = tests
     """
 )
+FILES = {
+    "pkg/__init__.py": "",
+    "pkg/core.py": "def add(a, b):\n    return a + b\n",
+    "tests/unit/test_core.py": "from pkg.core import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+    "tests/integration/test_api.py": "from pkg.core import add\n\ndef test_api():\n    assert add(0, 0) == 0\n",
+    "config/settings.json": "{}",
+    "config/app.yaml": "key: value\n",
+}
+
+
+@pytest.fixture
+def git_project(make_git_project):
+    """A committed project with a package, two test directories, and non-Python data files.
+
+    ``touch(rel)`` makes an unstaged change that ``unstaged`` git mode sees, and
+    ``git(*args)`` runs git in the project, under the isolated environment.
+    """
+    project = make_git_project(FILES, INI)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=project.path, check=True, capture_output=True)
+
+    project.touch = lambda rel: edit_file(project, rel)
+    project.git = git
+    return project
 
 
 def run(pytester, *args):

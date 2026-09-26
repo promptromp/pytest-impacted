@@ -5,15 +5,9 @@ change that reaches a conftest through the import graph must select the tests in
 that conftest's directory, exactly as editing the conftest itself does.
 """
 
-import os
-import subprocess
-import textwrap
-
 import pytest
 
-from pytest_impacted.strategies import clear_dep_tree_cache
-
-from .conftest import isolated_git_env
+from .git_helpers import edit_file as edit
 
 
 APP = {
@@ -32,31 +26,9 @@ INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = sui
 
 
 @pytest.fixture
-def make_project(pytester):
-    """Build and commit a project from ``{path: source}``; returns the pytester.
-
-    pytester runs in-process, so the dependency-tree cache is cleared to keep runs isolated.
-    """
-    clear_dep_tree_cache()
-    env = {**os.environ, **isolated_git_env(pytester.path / "git-home")}
-
-    def make(files: dict[str, str], ini: str = INI):
-        for rel, source in {**files, ".gitignore": "__pycache__/\n"}.items():
-            path = pytester.path / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(textwrap.dedent(source))
-        pytester.makeini(ini)
-        for args in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]):
-            subprocess.run(["git", *args], cwd=pytester.path, env=env, check=True, capture_output=True)
-        return pytester
-
-    yield make
-    clear_dep_tree_cache()
-
-
-def edit(pytester, rel: str) -> None:
-    path = pytester.path / rel
-    path.write_text(path.read_text() + "\n# edited\n")
+def make_project(make_git_project):
+    """The shared factory, defaulting to this module's ini."""
+    return lambda files, ini=INI: make_git_project(files, ini)
 
 
 def run(pytester):

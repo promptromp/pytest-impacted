@@ -117,6 +117,16 @@ rebuilding a path from the dotted name — that silently fails for src-layout, w
 name drops `src/`. `is_test_module` is false for any `conftest`, even under `tests/`: it
 holds fixtures, never tests.
 
+**A collected item is selected if `item.path` *or* `item.location` is an impacted file**
+(`plugin._impacted_items`). They differ for an inherited test (location: the base class's
+module) and a pytest-bdd scenario (location: inside `pytest_bdd`). Matching location alone
+skipped scenarios; path alone skipped inherited tests whose base changed with no graph edge
+(`from checks import Checks` in a rootless dir). The location is also still matched by
+path suffix, as 0.31.0 did, so the result is a strict superset of the old selection. Keep
+every half — each only adds tests. Items import analysis cannot judge always run: those
+from non-Python files (`--doctest-glob`, YAML collectors) and `DoctestItem`s — also when
+nothing at all is impacted.
+
 **Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
 every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
 into the file name and match nothing.
@@ -190,7 +200,8 @@ file pytest actually loaded, `session.config.inipath`; disable with
 configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
 which unions results. `get_default_strategies()` builds the default composition.
 Duck-typed strategies need only `find_impacted_tests`: the composite skips the lifecycle
-hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for the same reason.
+hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for the same
+reason.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the
@@ -211,7 +222,12 @@ that rather than re-deriving it, and put new extension-author content there.
 ## Testing
 
 `pytester` is enabled in `tests/conftest.py` (`pytest_plugins = "pytester"`) for
-plugin-level tests.
+plugin-level tests. End-to-end tests build throwaway repos with the `make_git_project`
+factory fixture (it also isolates the in-process `runpytest` from your git config) and
+`git_helpers.edit_file`; an autouse fixture clears the analysis caches around every test.
+Plain helpers live in `tests/git_helpers.py` — never import from a conftest. In-process
+projects must not name their tests dir `tests` (it would clash with this repo's package in
+`sys.modules`); use `suite`.
 
 **The suite scrubs git's repo-locating variables** (`GIT_DIR`, `GIT_INDEX_FILE`, … — read
 from `git rev-parse --local-env-vars`, with a fallback copy) in `pytest_configure`, and

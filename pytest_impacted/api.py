@@ -28,7 +28,11 @@ from pytest_impacted.traversal import (
 
 
 def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
-    """Check if the item path matches any of the impacted tests."""
+    """Check if the item path matches any of the impacted tests.
+
+    Kept for callers of the API; the plugin itself matches items by both the file
+    they were collected from and the file their test is defined in.
+    """
     return any(test == item_path or test.endswith(os.sep + item_path) for test in impacted_tests)
 
 

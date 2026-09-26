@@ -2,8 +2,13 @@
 
 import os
 import subprocess
+import textwrap
 
 import pytest
+
+from pytest_impacted.strategies import clear_dep_tree_cache
+
+from .git_helpers import isolated_git_env
 
 
 pytest_plugins = "pytester"
@@ -59,38 +64,46 @@ def pytest_unconfigure(config):
     _scrubbed_git_env.clear()
 
 
-def isolated_git_env(home) -> dict[str, str]:
-    """Environment that shields git from the developer's global/system config.
-
-    Hooks from ``init.templateDir``, ``core.excludesFile`` patterns, a
-    ``diff.renames`` override or a non-``main`` ``init.defaultBranch`` would
-    otherwise change what these tests observe. Identity is supplied the same
-    way, so no ``git config`` calls are needed.
-
-    Automatic maintenance is switched off: recent git detaches it after a
-    commit, and a copy of the repository taken meanwhile races its
-    ``.git/objects/maintenance.lock``.
-    """
-    return {
-        "GIT_CONFIG_GLOBAL": os.devnull,  # git >= 2.32
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_COUNT": "2",  # git >= 2.31
-        "GIT_CONFIG_KEY_0": "maintenance.auto",
-        "GIT_CONFIG_VALUE_0": "false",
-        "GIT_CONFIG_KEY_1": "gc.auto",
-        "GIT_CONFIG_VALUE_1": "0",
-        # Older git only knows $HOME/.gitconfig and $XDG_CONFIG_HOME/git/config.
-        "HOME": str(home),
-        "XDG_CONFIG_HOME": str(home / "xdg"),
-        "GIT_AUTHOR_NAME": "Test",
-        "GIT_AUTHOR_EMAIL": "test@example.com",
-        "GIT_COMMITTER_NAME": "Test",
-        "GIT_COMMITTER_EMAIL": "test@example.com",
-    }
-
-
 @pytest.fixture
 def isolated_git_config(monkeypatch, tmp_path):
     """Apply :func:`isolated_git_env` to the current process."""
     for key, value in isolated_git_env(tmp_path).items():
         monkeypatch.setenv(key, value)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_analysis_caches():
+    """Start and end every test with empty dependency-graph and discovery caches.
+
+    Both are process-wide LRU caches keyed on the project root, and pytester runs
+    in-process: a graph cached by one test must never answer for another.
+    """
+    clear_dep_tree_cache()
+    yield
+    clear_dep_tree_cache()
+
+
+@pytest.fixture
+def make_git_project(pytester, monkeypatch):
+    """Factory: write ``{path: source}`` and an ini into pytester's directory, and commit it.
+
+    Returns the pytester, ready for ``edit_file`` and ``runpytest``. The whole test —
+    the setup commits *and* the plugin's own git calls during in-process
+    ``runpytest`` — runs under :func:`isolated_git_env`, so the developer's git
+    configuration cannot change what it observes.
+    """
+    for key, value in isolated_git_env(pytester.path / "git-home").items():
+        monkeypatch.setenv(key, value)
+    env = dict(os.environ)
+
+    def make(files: dict[str, str], ini: str):
+        for rel, source in {**files, ".gitignore": "__pycache__/\n"}.items():
+            path = pytester.path / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(textwrap.dedent(source))
+        pytester.makeini(ini)
+        for args in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]):
+            subprocess.run(["git", *args], cwd=pytester.path, env=env, check=True, capture_output=True)
+        return pytester
+
+    return make
