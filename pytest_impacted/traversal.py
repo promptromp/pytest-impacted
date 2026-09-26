@@ -296,13 +296,25 @@ def _conftest_names(directory: Path, root: Path) -> list[str]:
 
 
 def discover_ancestor_conftests(
+    packages: Iterable[str], root_dir: str | Path | None = None, *, taken: Iterable[str] = ()
+) -> dict[str, str]:
+    """Find the ``conftest.py`` files between *root_dir* and each package directory.
+
+    Returns:
+        Dict mapping each conftest's name (``conftest``, ``backend.conftest``; see
+        :func:`_discover_ancestor_conftests`) -> absolute file path, like :func:`discover_submodules`.
+    """
+    return _discover_ancestor_conftests(packages, root_dir, taken=taken).modules
+
+
+def _discover_ancestor_conftests(
     packages: Iterable[str],
     root_dir: str | Path | None = None,
     *,
     taken: Iterable[str] = (),
     known_paths: Iterable[str] = (),
 ) -> ProjectModules:
-    """Find the ``conftest.py`` files between *root_dir* and each package directory.
+    """Find the ``conftest.py`` files between *root_dir* and each package directory, and name them.
 
     pytest loads every conftest from the rootdir down to a test file, so one
     above the analysed packages — most often at the repository root — still
@@ -335,20 +347,24 @@ def discover_ancestor_conftests(
             if directory == root:
                 break
             directory = directory.parent
-    return _name_conftests(candidates, used=set(taken))
+    return _name_conftests(candidates, taken=taken)
 
 
-def _name_conftests(candidates: dict[str, tuple[list[str], str]], *, used: set[str]) -> ProjectModules:
-    """Name each conftest path from its ``(names, last_resort)`` candidates, never one in *used*.
+def _name_conftests(candidates: dict[str, tuple[list[str], str]], *, taken: Iterable[str]) -> ProjectModules:
+    """Name each conftest path from its ``(names, last_resort)`` candidates, never one in *taken*.
 
     Names are handed out by rank across all conftests, so one conftest's second choice
-    never takes another's first; the free names left are aliases, once every conftest
-    has its own. A conftest with no free name gets its *last_resort*, which no import
-    spells, rather than being dropped: that would lose every edge from it.
+    never takes another's first, and within a rank to the conftests with the fewest
+    names first, so one with alternatives never starves one without. The free names
+    left are aliases, once every conftest has its own. A conftest with no free name gets
+    its *last_resort*, which no import spells, rather than being dropped: that would
+    lose every edge from it.
     """
+    used = set(taken)
+    most_constrained_first = sorted(candidates.items(), key=lambda item: len(item[1][0]))
     chosen: dict[str, str] = {}
     for rank in range(max((len(names) for names, _ in candidates.values()), default=0)):
-        for path, (names, _) in candidates.items():
+        for path, (names, _) in most_constrained_first:
             if path not in chosen and rank < len(names) and names[rank] not in used:
                 chosen[path] = names[rank]
                 used.add(names[rank])
@@ -381,7 +397,7 @@ def discover_project_modules(
       walk, ``tests.x`` by the tests-dir walk.
 
     Conftests above the two directories are modules too (see
-    :func:`discover_ancestor_conftests`): pytest loads them, so they are graph nodes,
+    :func:`_discover_ancestor_conftests`): pytest loads them, so they are graph nodes,
     and an edit to one must resolve to its node like any other module. They are named
     last, around every name already in use.
     """
@@ -409,7 +425,7 @@ def discover_project_modules(
                 aliases.setdefault(name, canonical_of[path])
     # The walk up from a tests dir inside the package passes conftests the walks already named.
     packages = [package, tests_package] if tests_package else [package]
-    ancestors = discover_ancestor_conftests(
+    ancestors = _discover_ancestor_conftests(
         packages, root_dir=root, taken=chain(modules, aliases), known_paths=modules.values()
     )
     modules = {**ancestors.modules, **modules}

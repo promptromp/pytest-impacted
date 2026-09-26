@@ -358,6 +358,26 @@ def test_a_conftest_named_like_one_in_the_package_keeps_its_edges(tmp_path):
     assert graph.resolve_files_to_nodes(["mysite/conftest.py"], dep_tree, root_dir=tmp_path) == [".mysite.conftest"]
 
 
+def test_a_conftest_with_no_free_name_keeps_its_relative_imports(tmp_path):
+    """``x/conftest.py``'s only name, ``x.conftest``, is an alias of ``x/x/conftest.py``: it gets the last
+    resort, but is still parsed as ``x.conftest``, so ``.x.tests.helpers`` resolves to the helper."""
+    files = {
+        "x/conftest.py": "from .x.tests.helpers import make\n",
+        "x/x/conftest.py": "",
+        "x/x/mod.py": "",
+        "x/x/tests/helpers.py": "",
+        "x/x/tests/test_a.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("x/x", tests_package="x/x/tests", root_dir=tmp_path)
+
+    assert dep_tree.nodes[".x.conftest"]["path"] == str((tmp_path / "x/conftest.py").resolve())
+    assert dep_tree.has_edge("x.x.tests.helpers", ".x.conftest")
+
+
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):
     """A tests dir inside the package is walked by both discoveries; its files must not be doubled."""
     files = {

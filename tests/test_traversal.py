@@ -465,16 +465,15 @@ def test_discover_ancestor_conftests(tmp_path):
 
     found = discover_ancestor_conftests(["backend/tests"], root_dir=tmp_path)
 
-    assert found.modules == {
+    assert found == {
         "conftest": str((tmp_path / "conftest.py").resolve()),
         "backend.conftest": str((tmp_path / "backend/conftest.py").resolve()),
     }
-    assert found.aliases == {}
 
 
 def test_discover_ancestor_conftests_without_any(tmp_path):
     (tmp_path / "pkg").mkdir()
-    assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == ({}, {})
+    assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}
 
 
 @pytest.mark.parametrize(
@@ -533,6 +532,19 @@ def test_a_conftest_keeps_its_own_name_before_another_takes_it_as_an_alias(tmp_p
     assert project.modules["y.conftest"] == str((tmp_path / "y/conftest.py").resolve())
     assert project.modules["x.y.conftest"] == str((tmp_path / "x/y/conftest.py").resolve())
     assert "y.conftest" not in project.aliases
+
+
+def test_a_conftest_with_one_name_gets_it_before_one_with_alternatives(tmp_path):
+    """``x/y/conftest.py`` (``y`` is a regular package) is ``y.conftest`` or ``x.y.conftest``;
+    ``y/conftest.py`` can only be ``y.conftest``. Walked first or not, each gets a name."""
+    for rel in ("x/y/__init__.py", "x/y/conftest.py", "x/y/pkg/__init__.py", "y/conftest.py", "y/tests/test_a.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    project = discover_project_modules("x/y/pkg", "y/tests", root_dir=tmp_path)
+
+    assert project.modules["y.conftest"] == str((tmp_path / "y/conftest.py").resolve())
+    assert project.modules["x.y.conftest"] == str((tmp_path / "x/y/conftest.py").resolve())
 
 
 def test_conftests_above_the_packages_are_project_modules_and_resolve(tmp_path, caplog):

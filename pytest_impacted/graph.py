@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
     """Parse imports for all discovered submodules.
 
+    A conftest with no free name is keyed by a leading dot (see
+    :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), which is no base
+    for its relative imports, so it is parsed under the name without the dot, its
+    path from the root. That name belongs to another module, so it is parsed apart.
+    """
+    last_resort = {name for name in submodules if name.startswith(".")}
+    result = _parse_imports({name: path for name, path in submodules.items() if name not in last_resort})
+    parsed = _parse_imports({name[1:]: submodules[name] for name in last_resort})
+    return result | {f".{name}": imports for name, imports in parsed.items()}
+
+
+def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
+    """Parse the imports of each ``{name: path}``, resolving relative imports from *name*.
+
     Uses the Rust extension (parallel batch via rayon) when available,
     falling back to sequential astroid parsing.
     """

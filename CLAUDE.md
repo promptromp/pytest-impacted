@@ -139,7 +139,8 @@ sees a root-level `conftest.py`, so `discover_project_modules` adds them via
 resolve. They are named around every name already in use, aliases included — taking a
 package file's alias would re-point its imports — and a conftest with no free name gets a
 leading dot (`.mysite.conftest`, which no import spells) rather than being dropped: a
-dropped conftest loses every edge from it. A conftest is recognised by its file
+dropped conftest loses every edge from it. It is parsed under the name without the dot, or
+its relative imports would lose theirs. A conftest is recognised by its file
 name, `conftest.py`, on both the changed-file and the graph path. Every node carries its
 source file in the `path` attribute. Resolve a node to a file with `_module_path`, never by
 rebuilding a path from the dotted name — that silently fails for src-layout, where the
