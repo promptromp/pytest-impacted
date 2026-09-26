@@ -25,6 +25,7 @@ CLI_OPTION_DESTS = {
     "impacted_module",
     "impacted_git_mode",
     "impacted_base_branch",
+    "impacted_no_merge_base",
     "impacted_tests_dir",
     "no_impacted_dep_files",
     "impacted_invalidate_all",

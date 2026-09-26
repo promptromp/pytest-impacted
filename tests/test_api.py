@@ -68,7 +68,9 @@ def test_get_impacted_tests_no_impacted_files(mock_find_impacted_files):
         tests_dir="tests",
     )
     assert result is None
-    mock_find_impacted_files.assert_called_once_with(Path("."), git_mode=GitMode.UNSTAGED, base_branch="main")
+    mock_find_impacted_files.assert_called_once_with(
+        Path("."), git_mode=GitMode.UNSTAGED, base_branch="main", use_merge_base=True
+    )
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")

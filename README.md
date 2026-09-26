@@ -95,7 +95,7 @@ That's it. Unaffected tests are automatically skipped.
 | Mode | Flag | What it compares |
 |------|------|-----------------|
 | **unstaged** (default) | `--impacted-git-mode=unstaged` | All uncommitted changes (staged and unstaged, including deletions) + untracked files |
-| **branch** | `--impacted-git-mode=branch` | Everything differing between the base ref and `HEAD` (`git diff <base> HEAD`), including changes made on the base since you branched |
+| **branch** | `--impacted-git-mode=branch` | Everything your branch changed since it forked from the base ref (`git diff <base>...HEAD`, as a pull request shows it); `--impacted-no-merge-base` diffs against the base tip instead |
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
 
@@ -141,7 +141,7 @@ else
 fi
 ```
 
-The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--root-dir`, `--tests-dir`,
+The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `--root-dir`, `--tests-dir`,
 `--verbose`, `--no-dep-files`, `--invalidate-all` and `--disable-ext`. If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
@@ -170,6 +170,7 @@ CLI flags override these defaults.
 | `--impacted-module` | *(required)* | Top-level Python package to analyze |
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
+| `--impacted-no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |

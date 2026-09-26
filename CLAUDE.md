@@ -73,6 +73,11 @@ collapse "unknown" into "no changes". The notice is printed exactly once: by
 so it survives pytest-xdist), otherwise by the collection hook. Never via `warnings.warn`,
 which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path.
 
+**Branch mode diffs from the merge base**, not the base tip: `_merge_base` runs
+`git merge-base` (through `rev_args`) and the diff starts there, like a pull request. No merge
+base — unrelated histories, or a shallow CI clone — falls back to the tip with a logged warning
+rather than failing; `use_merge_base=False` (`--impacted-no-merge-base`) always uses the tip.
+
 **Every diff goes through `_name_status_diff` with fixed `--name-status -z --no-renames`.**
 `-z` stops git C-quoting non-ASCII paths (`core.quotePath`), which would never match a
 file on disk; `--no-renames` turns a rename into a delete plus an add, so no record

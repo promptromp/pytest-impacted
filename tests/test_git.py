@@ -389,12 +389,16 @@ def test_impacted_files_for_branch_mode_detached_head():
 
     type(repo.head).reference = property(_raise_type_error)
     repo.head.commit = "abc123"
+    repo.git.merge_base.return_value = "fork456\n"
 
     result = git.impacted_files_for_branch_mode(repo, "main")
 
     assert result == ["file1.py"]
-    # Verify git.diff was called with the commit hash fallback
-    repo.git.diff.assert_called_once_with("--name-status", "-z", "--no-renames", "--end-of-options", "main", "abc123")
+    # The commit hash stands in for the detached branch, in the merge base and the diff
+    repo.git.merge_base.assert_called_once_with("--end-of-options", "main", "abc123")
+    repo.git.diff.assert_called_once_with(
+        "--name-status", "-z", "--no-renames", "--end-of-options", "fork456", "abc123"
+    )
 
 
 # --- Tests for validate_rev (git option-injection guard) ---
@@ -835,3 +839,49 @@ def test_branch_mode_rejects_option_like_base_ref(real_repo):
 
     with pytest.raises(git.InvalidGitRefError):
         branch(root, "--output=/tmp/pwned")
+
+
+def _fork_then_advance_base(repo, root):
+    """``feature`` edits a.py; afterwards the base branch edits b.py. Returns the base name."""
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+    repo.git.checkout(base)
+    (root / "pkg" / "b.py").write_text("y = 2\n")
+    commit_all(repo, "base moves on")
+    repo.git.checkout("feature")
+    return base
+
+
+def test_branch_mode_diffs_from_the_fork_point(real_repo):
+    """Like a pull request's diff: what the base gained since the fork is not this branch's change."""
+    repo, root = real_repo
+    base = _fork_then_advance_base(repo, root)
+
+    assert branch(root, base) == ["pkg/a.py"]
+
+
+def test_branch_mode_can_diff_against_the_base_tip(real_repo):
+    repo, root = real_repo
+    base = _fork_then_advance_base(repo, root)
+
+    result = git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base, use_merge_base=False)
+
+    assert result == ["pkg/a.py", "pkg/b.py"]
+
+
+def test_branch_mode_without_a_fork_point_diffs_against_the_base_tip(real_repo):
+    """No merge base (unrelated histories, or a shallow CI clone): fall back rather than fail."""
+    repo, root = real_repo
+    original = repo.active_branch.name
+    repo.git.checkout("--orphan", "unrelated")
+    repo.git.rm("-r", "-q", "--cached", ".")
+    (root / "other.txt").write_text("unrelated\n")
+    repo.git.add("other.txt")
+    repo.git.commit("-m", "unrelated root")
+    repo.git.checkout("-f", "-b", "feature", original)  # back onto the original history
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+
+    assert "pkg/a.py" in branch(root, "unrelated")

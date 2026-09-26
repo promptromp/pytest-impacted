@@ -196,3 +196,19 @@ def test_editing_the_config_file_passed_with_c_runs_every_test(git_project):
     git_project.touch("ci/pytest-ci.ini")
 
     run(git_project, "-c", "ci/pytest-ci.ini", f"--rootdir={git_project.path}").assert_outcomes(passed=2)
+
+
+def test_branch_mode_ignores_what_the_base_gained_since_the_fork(git_project):
+    """The base branch moving on must not select tests for changes this branch never made."""
+    git_project.git("branch", "-M", "trunk")
+    git_project.git("checkout", "-q", "-b", "feature")
+    git_project.touch("tests/unit/test_core.py")
+    git_project.git("commit", "-q", "-am", "feature work")
+    git_project.git("checkout", "-q", "trunk")
+    git_project.touch("tests/integration/test_api.py")
+    git_project.git("commit", "-q", "-am", "trunk moves on")
+    git_project.git("checkout", "-q", "feature")
+    branch_mode = ("--impacted-git-mode=branch", "--impacted-base-branch=trunk")
+
+    run(git_project, *branch_mode).assert_outcomes(passed=1, skipped=1)
+    run(git_project, *branch_mode, "--impacted-no-merge-base").assert_outcomes(passed=2)

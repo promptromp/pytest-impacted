@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # the problem itself (see GitUnavailableError).
 try:
     from git import Repo
-    from git.exc import GitCommandNotFound
+    from git.exc import GitCommandError, GitCommandNotFound
 
     GIT_AVAILABLE = True
 except ImportError:
@@ -200,7 +200,9 @@ def normalize_git_paths(file_paths: list[str], git_root: Path, working_dir: Path
     return result
 
 
-def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:
+def find_impacted_files_in_repo(
+    repo_dir: str | Path, git_mode: GitMode, base_branch: str | None, *, use_merge_base: bool = True
+) -> list[str] | None:
     """Find impacted files in the repository. The definition of impacted is dependent on the git mode:
 
     UNSTAGED:
@@ -208,12 +210,15 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         - Any untracked files are also included.
 
     BRANCH:
-        - All files that have been modified in the current branch, relative to the base branch.
+        - All files that have been modified in the current branch since it forked from the base
+          branch (``git diff base...HEAD``, as a pull request shows it), or relative to the base
+          branch's tip when *use_merge_base* is false or there is no fork point.
         - This does *not* include untracked files as the expectation is that this is used for committed changes.
 
     :param repo_dir: path to the project directory (may be a subdirectory of the git root).
     :param git_mode: the git mode to use.
     :param base_branch: the base branch to compare against.
+    :param use_merge_base: in BRANCH mode, diff from the fork point rather than the base tip.
     :returns: the changed files, or ``None`` when there are none.
     :raises GitUnavailableError: when git cannot be run at all.
 
@@ -222,7 +227,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         raise GitUnavailableError()
 
     try:
-        return _find_impacted_files(repo_dir, git_mode, base_branch)
+        return _find_impacted_files(repo_dir, git_mode, base_branch, use_merge_base)
     except GitCommandNotFound as err:
         # The import succeeded (e.g. GIT_PYTHON_REFRESH=quiet) but git could not be
         # launched. GitPython uses this for any launch failure, so keep its reason —
@@ -230,7 +235,9 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         raise GitUnavailableError(str(err).strip().splitlines()[0]) from err
 
 
-def _find_impacted_files(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:
+def _find_impacted_files(
+    repo_dir: str | Path, git_mode: GitMode, base_branch: str | None, use_merge_base: bool
+) -> list[str] | None:
     repo = find_repo(repo_dir)
     if repo.bare:
         raise ValueError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")
@@ -243,7 +250,9 @@ def _find_impacted_files(repo_dir: str | Path, git_mode: GitMode, base_branch: s
             if not base_branch:
                 raise ValueError("Base branch is required for running in BRANCH git mode")
 
-            impacted_files = impacted_files_for_branch_mode(repo, base_branch=base_branch)
+            impacted_files = impacted_files_for_branch_mode(
+                repo, base_branch=base_branch, use_merge_base=use_merge_base
+            )
 
         case _:
             raise ValueError(f"Invalid git mode: {git_mode}")
@@ -308,8 +317,12 @@ def _untracked_files(repo: Repo) -> list[str]:
     return [path for path in output.split("\0") if path]
 
 
-def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
-    """Get the impacted files when in the BRANCH git mode."""
+def impacted_files_for_branch_mode(repo: Repo, base_branch: str, *, use_merge_base: bool = True) -> list[str]:
+    """Get the impacted files when in the BRANCH git mode.
+
+    By default the diff starts at the fork point, so commits that landed on the
+    base branch after this one forked are not counted as this branch's changes.
+    """
 
     try:
         current_ref = repo.head.reference
@@ -317,4 +330,25 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
         # Detached HEAD state (common in CI) — fall back to HEAD commit
         current_ref = repo.head.commit
 
-    return _impactful_paths(_name_status_diff(repo, *rev_args(base_branch, current_ref)))
+    start = (_merge_base(repo, base_branch, current_ref) if use_merge_base else None) or base_branch
+    return _impactful_paths(_name_status_diff(repo, *rev_args(start, current_ref)))
+
+
+def _merge_base(repo: Repo, base_branch: str, current_ref: object) -> str | None:
+    """The commit *current_ref* forked from *base_branch* at, or ``None`` if there is none.
+
+    There is none for unrelated histories, and often in a shallow CI clone
+    (``fetch-depth: 1``). The caller then diffs against the base tip, which
+    still covers every change on this branch.
+    """
+    try:
+        return repo.git.merge_base(*rev_args(base_branch, current_ref)).strip() or None
+    except GitCommandError:
+        logger.warning(
+            "No merge base between %s and %s (unrelated histories or a shallow clone?); "
+            "diffing against %s directly, which may also include its newer commits.",
+            base_branch,
+            current_ref,
+            base_branch,
+        )
+        return None

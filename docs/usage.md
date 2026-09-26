@@ -32,7 +32,7 @@ pytest --impacted --impacted-module=my_package --impacted-git-mode=unstaged
 
 ### Branch Mode
 
-Compares your current `HEAD` against a base ref (a two-dot `git diff <base> HEAD`). Note this also picks up files changed on the base branch since you branched — conservative by design, so extra tests may run when the base has moved ahead:
+Compares your current `HEAD` with the point where it forked from a base ref — `git diff <base>...HEAD`, the same diff a pull request shows. Commits the base branch gained after you branched are *not* your changes, so they no longer select tests:
 
 ```bash
 pytest --impacted \
@@ -42,6 +42,8 @@ pytest --impacted \
 ```
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
+
+When there is no fork point — unrelated histories, or a shallow CI clone (`actions/checkout` defaults to `fetch-depth: 1`) — pytest-impacted diffs against the base branch's tip instead, which still covers every change on your branch. Fetch enough history (`fetch-depth: 0`) for the precise diff. To always diff against the tip (`git diff <base> HEAD`), pass `--impacted-no-merge-base` (ini: `impacted_no_merge_base = true`).
 
 ## External Tests Directory
 
@@ -226,6 +228,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--module` | *(required)* | Namespace (top-level) module for the package under test |
 | `--git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--base-branch` | `main` | Base branch/ref for branch-mode comparison |
+| `--no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
 | `--root-dir` | `.` | Root directory of the project repository; `--module` and `--tests-dir` are relative to it |
 | `--tests-dir` | `None` | Directory containing test files outside the namespace module |
 | `--verbose` | `false` | Verbose output (written to stderr, so it will not pollute the piped test list) |
@@ -274,6 +277,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-module` | *(required)* | Top-level Python package to analyze |
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
+| `--impacted-no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |

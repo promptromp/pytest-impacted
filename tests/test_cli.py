@@ -84,6 +84,7 @@ class TestImpactedTestsCLI:
                 ns_module="test_ns",
                 tests_dir=None,
                 strategy=ANY,
+                use_merge_base=True,
             )
             call_kwargs = mock_get_impacted_tests.call_args[1]
             assert isinstance(call_kwargs["strategy"], CompositeImpactStrategy)
@@ -160,6 +161,7 @@ class TestImpactedTestsCLI:
                 ns_module="test_ns",
                 tests_dir="tests",
                 strategy=ANY,
+                use_merge_base=True,
             )
 
     @patch("pytest_impacted.cli.get_impacted_tests")
@@ -213,6 +215,19 @@ class TestImpactedTestsCLI:
             assert result.exit_code == 1
             assert "changed files cannot be determined" in result.output
             assert "No impacted tests found." not in result.output
+
+    @patch("pytest_impacted.cli.get_impacted_tests", return_value=None)
+    @patch("pytest_impacted.cli.configure_logging")
+    def test_cli_no_merge_base(self, mock_configure_logging, mock_get_impacted_tests):
+        with self.runner.isolated_filesystem():
+            Path("test_ns").mkdir()
+
+            result = self.runner.invoke(
+                impacted_tests_cli, ["--git-mode", "branch", "--module", "test_ns", "--no-merge-base"]
+            )
+
+            assert result.exit_code == 0, result.output
+            assert mock_get_impacted_tests.call_args.kwargs["use_merge_base"] is False
 
     def test_cli_missing_required_arg(self):
         """Test CLI fails when required argument is missing."""
@@ -325,6 +340,7 @@ class TestImpactedTestsCLI:
                 ns_module="test_ns",
                 tests_dir=None,  # default
                 strategy=ANY,  # CompositeImpactStrategy with extensions
+                use_merge_base=True,
             )
 
     @patch("pytest_impacted.cli.get_impacted_tests")
