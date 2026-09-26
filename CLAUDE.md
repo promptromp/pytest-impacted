@@ -130,13 +130,21 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 ## Strategies
 
 `strategies.py` defines `ImpactStrategy` (ABC) plus `ASTImpactStrategy`,
-`PytestImpactStrategy` (a changed `conftest.py` impacts every test in its directory
-and below — invisible to static import analysis), `DependencyFileImpactStrategy`
+`PytestImpactStrategy` (a conftest that changed *or imports something that changed*
+impacts every test in its directory and below — tests never import their conftest, so
+this is invisible to test-side import analysis), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`; disable with
 `--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
 `--impacted-invalidate-all`, marking every test impacted; only added to the pipeline when
 configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
 which unions results. `get_default_strategies()` builds the default composition.
+
+**Conftests above the analysed packages are graph nodes too.** Package discovery never
+sees a root-level `conftest.py`, so `build_dep_tree` adds them via
+`discover_ancestor_conftests` (named by dotted path from the root: `conftest`,
+`backend.conftest`). Every node carries its source file in the `path` attribute. Resolve
+a node to a file with `_module_path`, never by rebuilding a path from the dotted name —
+that silently fails for src-layout, where the name drops `src/`.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the

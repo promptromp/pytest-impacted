@@ -202,7 +202,7 @@ Impact analysis is pluggable via a strategy pattern. The default pipeline combin
 | Strategy | What it does |
 |----------|-------------|
 | **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
-| **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, **all tests in its directory and subdirectories** are marked as impacted |
+| **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, or any module it imports does, **all tests in its directory and subdirectories** are marked as impacted |
 | **DependencyFileImpactStrategy** | When dependency files change (`uv.lock`, `requirements.txt`, `pyproject.toml`, etc.), **all tests** are marked as impacted |
 | **InvalidationFileImpactStrategy** | Only active when configured. Files matching a `--impacted-invalidate-all` glob mark **all tests** as impacted — the user-extensible counterpart to the built-in dependency-file list |
 

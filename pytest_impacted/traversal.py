@@ -3,6 +3,7 @@
 import logging
 import os
 import pkgutil
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 
@@ -188,6 +189,32 @@ def clear_discovery_cache() -> None:
 # The cache moved to the private inner function when ``root_dir`` was added, but
 # ``discover_submodules`` is part of the public surface — keep the old call working.
 discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: ignore[attr-defined]
+
+
+def discover_ancestor_conftests(packages: Iterable[str], root_dir: str | Path | None = None) -> dict[str, str]:
+    """Find the ``conftest.py`` files between *root_dir* and each package directory.
+
+    pytest loads every conftest from the rootdir down to a test file, so one
+    above the analysed packages — most often at the repository root — still
+    provides fixtures to their tests. Package discovery never sees it, so
+    without this its imports would be invisible to the dependency graph.
+
+    Returns:
+        Dict mapping a dotted name relative to *root_dir* (``conftest``,
+        ``backend.conftest``) -> absolute file path, like :func:`discover_submodules`.
+    """
+    root = canonical_root(root_dir)
+    found: dict[str, str] = {}
+    for package in packages:
+        directory = (root / package_name_to_path(package)).parent
+        while directory.is_relative_to(root):
+            conftest = directory / "conftest.py"
+            if conftest.is_file():
+                found[".".join((*directory.relative_to(root).parts, "conftest"))] = str(conftest.resolve())
+            if directory == root:
+                break
+            directory = directory.parent
+    return found
 
 
 def resolve_files_to_modules(

@@ -4,6 +4,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import networkx as nx
+
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
 )
@@ -45,8 +47,8 @@ class TestIntegration:
             patch("pytest_impacted.strategies.resolve_impacted_tests") as mock_resolve,
             patch("pytest_impacted.strategies.is_test_module") as mock_is_test,
         ):
-            mock_dep_tree = MagicMock()
-            mock_dep_tree.nodes = ["tests.test_example"]
+            dep_tree = nx.DiGraph()
+            dep_tree.add_node("tests.test_example")
             mock_resolve.return_value = []
             mock_is_test.side_effect = lambda x: x.startswith("tests.") and "test_" in x
 
@@ -58,6 +60,6 @@ class TestIntegration:
                     ns_module="mypackage",
                     tests_package="tests",
                     root_dir=self.root_dir,
-                    dep_tree=mock_dep_tree,
+                    dep_tree=dep_tree,
                 )
                 assert result == ["tests.test_example"]

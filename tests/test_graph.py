@@ -153,3 +153,17 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
 
         # Only test_core should run (depends on pkg.core), not test_utils
         assert set(impacted) == {"tests.test_core"}
+
+
+def test_build_dep_tree_includes_root_conftest_with_paths(tmp_path):
+    """A root conftest joins the graph, and every node records its source file."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/__init__.py").touch()
+    (tmp_path / "app/db.py").write_text("")
+    (tmp_path / "conftest.py").write_text("from app.db import connect\n")
+
+    dep_tree = graph.build_dep_tree("app", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("app.db", "conftest")  # the graph is inverted: dependency -> dependent
+    assert dep_tree.nodes["conftest"]["path"] == str((tmp_path / "conftest.py").resolve())
+    assert dep_tree.nodes["app.db"]["path"] == str((tmp_path / "app/db.py").resolve())

@@ -58,8 +58,8 @@ class TestPytestImpactStrategy:
         test_file = subdir / "test_example.py"
         test_file.touch()
 
-        mock_dep_tree = MagicMock()
-        mock_dep_tree.nodes = ["tests.subdir.test_example", "tests.test_other", "module_b"]
+        dep_tree = nx.DiGraph()
+        dep_tree.add_nodes_from(["tests.subdir.test_example", "tests.test_other", "module_b"])
         mock_resolve.return_value = []  # No AST-based impacts
         mock_is_test.side_effect = lambda x: x.startswith("tests.") and "test_" in x
 
@@ -70,7 +70,7 @@ class TestPytestImpactStrategy:
             ns_module="mypackage",
             tests_package="tests",
             root_dir=self.root_dir,
-            dep_tree=mock_dep_tree,
+            dep_tree=dep_tree,
         )
 
         # Should include test modules affected by conftest.py
