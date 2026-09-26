@@ -139,6 +139,23 @@ def test_test_code_reaching_a_conftest_selects_its_directory(make_project, files
     assert_selected(run(project, *args), passed=passed, skipped=skipped)
 
 
+@pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])
+def test_a_conftest_importing_an_edited_conftest_above_the_package(make_project, args):
+    """``backend/conftest.py`` sits above ``--impacted-module=backend/app``; ``suite/db`` star-imports it."""
+    files = {
+        "backend/app/__init__.py": "",
+        "backend/app/db.py": "def connect():\n    return 'conn'\n",
+        "backend/conftest.py": DB_FIXTURE.replace("from app.db", "from backend.app.db"),
+        "suite/db/conftest.py": "from backend.conftest import *  # noqa: F403\n",
+        "suite/db/test_db.py": "def test_db(db):\n    assert db\n",
+        "suite/other/test_other.py": "def test_other():\n    assert True\n",
+    }
+    project = make_project(files, INI.replace("impacted_module = app", "impacted_module = backend/app"))
+    edit(project, "backend/conftest.py")
+
+    assert_selected(run(project, "suite", *args), passed=["test_db.py"], skipped=["test_other.py"])
+
+
 @pytest.mark.parametrize(
     ("tests_dir", "passed", "skipped"),
     [

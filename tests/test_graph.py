@@ -1,12 +1,13 @@
 """Unit tests for the graph module."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import networkx as nx
 import pytest
 
 from pytest_impacted import graph
-from pytest_impacted.traversal import ProjectModules
+from pytest_impacted.traversal import ProjectModules, resolve_files_to_modules
 
 
 @pytest.fixture
@@ -80,7 +81,6 @@ def test_build_dep_tree():
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
-        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
     ):
         # Set up mock imports for each module
@@ -109,7 +109,6 @@ def test_changed_init_with_no_dependents_impacts_nothing():
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
-        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
         # pkg/__init__.py imports nothing, pkg.core imports nothing,
@@ -140,7 +139,6 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
-        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
         mock_parse.side_effect = [
@@ -298,6 +296,31 @@ def test_a_test_importing_from_the_package_root_sees_what_its_init_imports(tmp_p
     assert dep_tree.has_edge("app", "tests.test_app")
     assert graph.resolve_impacted_tests(["app"], dep_tree) == ["tests.test_app"]
     assert graph.resolve_impacted_tests(["app.core"], dep_tree) == ["tests.test_app"]
+
+
+def test_every_node_resolves_back_to_itself(tmp_path):
+    """The graph and the changed-file resolver name every file alike: a node an edit cannot
+    resolve to is a change that impacts nothing."""
+    files = {
+        "conftest.py": "",
+        "backend/conftest.py": "from backend.app.db import connect\n",
+        "backend/app/__init__.py": "",
+        "backend/app/db.py": "",
+        "backend/app/ns/x.py": "",
+        "backend/app/checks/test_in.py": "",
+        "suite/conftest.py": "from backend.conftest import *\n",
+        "suite/test_a.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+    root = tmp_path.resolve()
+
+    dep_tree = graph.build_dep_tree("backend/app", tests_package="suite", root_dir=tmp_path)
+
+    for node, path in dep_tree.nodes(data="path"):
+        changed = str(Path(path).relative_to(root))
+        assert resolve_files_to_modules([changed], "backend/app", "suite", root_dir=tmp_path) == [node], changed
 
 
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):

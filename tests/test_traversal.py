@@ -476,6 +476,22 @@ def test_discover_ancestor_conftests_without_any(tmp_path):
     assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}
 
 
+def test_conftests_above_the_packages_are_project_modules_and_resolve(tmp_path, caplog):
+    """The graph has them as nodes, so an edit to one must resolve to its node like any module."""
+    for rel in ("conftest.py", "backend/conftest.py", "backend/app/__init__.py", "suite/test_x.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    project = discover_project_modules("backend/app", "suite", root_dir=tmp_path)
+    with caplog.at_level("WARNING", logger="pytest_impacted.traversal"):
+        resolved = resolve_files_to_modules(["conftest.py", "backend/conftest.py"], "backend/app", "suite", tmp_path)
+
+    assert project.modules["conftest"] == str((tmp_path / "conftest.py").resolve())
+    assert project.modules["backend.conftest"] == str((tmp_path / "backend/conftest.py").resolve())
+    assert resolved == ["conftest", "backend.conftest"]
+    assert "could not be resolved" not in caplog.text
+
+
 # --- implicit namespace sub-packages (PEP 420) -----------------------------------------
 
 

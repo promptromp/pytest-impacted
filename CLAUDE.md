@@ -43,8 +43,8 @@ modules (never raise — it would be an INTERNALERROR), and a symlinked portion 
 only while it stays inside the project and does not point back up the tree.
 
 **One file is one graph node, under one canonical name.** `discover_project_modules` is the
-only place the package and tests-dir walks are merged — `build_dep_tree` and both
-`resolve_*` functions go through it. The package walk's name is canonical (for a file the
+only place the package walk, the tests-dir walk and the ancestor conftests are merged —
+`build_dep_tree` and both `resolve_*` functions go through it. The package walk's name is canonical (for a file the
 walk reaches twice through a symlinked directory, the name not through the link); every
 other name the file imports under is an *alias*: `tests.x` for `app/tests/x.py`, and a name
 rooted at any directory above the module's first regular package (`company.app.x`,
@@ -130,8 +130,10 @@ in traversal, graph or strategy code — `canonical_root`'s `None` default is th
 it may appear.
 
 **Conftests above the analysed packages are graph nodes too.** Package discovery never
-sees a root-level `conftest.py`, so `build_dep_tree` adds them via
-`discover_ancestor_conftests`, named the way package discovery names modules (`conftest`,
+sees a root-level `conftest.py`, so `discover_project_modules` adds them via
+`discover_ancestor_conftests` — in the graph *and* the resolvers: when only the graph had
+them, an edit to `backend/conftest.py` resolved to nothing and reached no conftest
+importing it. They are named the way package discovery names modules (`conftest`,
 `backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
 resolve — unless that name is taken, when the full path name is used instead: a clash
 would silently drop the conftest from the graph. A conftest is recognised by its file

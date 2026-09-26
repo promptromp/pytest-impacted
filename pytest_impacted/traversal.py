@@ -343,6 +343,10 @@ def discover_project_modules(
       (see :func:`_root_aliases`).
     * A tests dir inside the package is walked twice: ``app.tests.x`` by the package
       walk, ``tests.x`` by the tests-dir walk.
+
+    Conftests above the two directories are modules too (see
+    :func:`discover_ancestor_conftests`): pytest loads them, so they are graph nodes,
+    and an edit to one must resolve to its node like any other module.
     """
     root = canonical_root(root_dir)
     walked = discover_submodules(package, require_init=True, root_dir=root)
@@ -366,6 +370,11 @@ def discover_project_modules(
                 modules[name] = path
             else:
                 aliases.setdefault(name, canonical_of[path])
+    # Skip any a walk already found: the walk up from a tests dir inside the package passes through it.
+    packages = [package, tests_package] if tests_package else [package]
+    known_paths = set(modules.values())
+    ancestors = discover_ancestor_conftests(packages, root_dir=root, taken=modules.keys())
+    modules = {**{name: path for name, path in ancestors.items() if path not in known_paths}, **modules}
     return ProjectModules(modules, {alias: name for alias, name in aliases.items() if alias not in modules})
 
 

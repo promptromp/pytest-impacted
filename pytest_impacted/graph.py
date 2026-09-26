@@ -12,7 +12,7 @@ from pytest_impacted.parsing import (
     parse_file_imports,
     parse_pytest_plugins,
 )
-from pytest_impacted.traversal import discover_ancestor_conftests, discover_project_modules
+from pytest_impacted.traversal import discover_project_modules
 
 
 logger = logging.getLogger(__name__)
@@ -115,20 +115,13 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     Package paths are resolved against *root_dir* (default: the current directory).
 
     Conftests above the packages are included too (see
-    :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), and every
+    :func:`~pytest_impacted.traversal.discover_project_modules`), and every
     discovered node carries its absolute file in the ``path`` attribute. Modules
     named in a ``pytest_plugins`` declaration count as imports (see
     :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are flagged with
     the ``pytest_plugin`` attribute.
     """
     submodules, aliases = discover_project_modules(package, tests_package, root_dir=root_dir)
-
-    # Skip any the package scan already found: the walk up from a tests
-    # directory inside the package passes through package directories.
-    packages = [package, tests_package] if tests_package else [package]
-    known_paths = set(submodules.values())
-    ancestors = discover_ancestor_conftests(packages, root_dir=root_dir, taken=submodules.keys())
-    submodules = {**{name: path for name, path in ancestors.items() if path not in known_paths}, **submodules}
 
     logger.debug("Building dependency tree for %d submodules", len(submodules))
 
