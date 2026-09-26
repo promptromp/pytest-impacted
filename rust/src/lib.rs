@@ -114,7 +114,7 @@ fn extract_from_import_from(
 
 /// Recursively collect import statements from a list of statements.
 ///
-/// Python imports can appear inside if/try/with/for/function bodies,
+/// Python imports can appear inside if/try/with/for/while/match/function/class bodies,
 /// so we must recurse into all compound statement bodies.
 fn collect_imports_from_stmts(
     stmts: &[Stmt],

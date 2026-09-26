@@ -257,9 +257,9 @@ class TestImpactedTestsCLI:
                 ["--git-mode", "invalid_mode", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
             )
 
-            assert result.exit_code != 0
-            # The invalid git mode should cause an error during execution
-            assert result.exception is not None
+            # Rejected up front as a usage error, not a traceback from deep in git.py
+            assert result.exit_code == 2
+            assert "is not one of 'unstaged', 'branch'" in result.output
 
     def test_cli_nonexistent_root_dir(self):
         """Test CLI fails with non-existent root directory."""

@@ -212,3 +212,17 @@ def test_branch_mode_ignores_what_the_base_gained_since_the_fork(git_project):
 
     run(git_project, *branch_mode).assert_outcomes(passed=1, skipped=1)
     run(git_project, *branch_mode, "--impacted-no-merge-base").assert_outcomes(passed=2)
+
+
+def test_branch_mode_without_a_fork_point_warns_on_the_terminal(git_project):
+    """The fallback is reported where the user sees it, not in a log record pytest swallows."""
+    git_project.git("branch", "-M", "trunk")
+    git_project.git("checkout", "-q", "--orphan", "unrelated")
+    git_project.git("rm", "-r", "-q", "--cached", ".")
+    git_project.git("commit", "-q", "--allow-empty", "-m", "unrelated root")
+    git_project.git("checkout", "-q", "-f", "trunk")
+
+    result = run(git_project, "--impacted-git-mode=branch", "--impacted-base-branch=unrelated")
+
+    result.stdout.fnmatch_lines(["*WARNING: No merge base*the histories are unrelated*"])
+    result.assert_outcomes(passed=2)

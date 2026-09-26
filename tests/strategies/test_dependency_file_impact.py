@@ -229,6 +229,22 @@ class TestLoadedConfigFile:
 
         assert result == ["tests.test_a"]
 
+    def test_a_same_named_file_elsewhere_does_not_count(self, tmp_path):
+        """Only the loaded file itself: the name matching is just a shortcut before the path check."""
+        dep_tree = nx.DiGraph()
+        dep_tree.add_node("tests.test_a")
+
+        result = DependencyFileImpactStrategy().find_impacted_tests(
+            changed_files=["other/pytest-ci.ini"],
+            impacted_modules=[],
+            ns_module="pkg",
+            root_dir=tmp_path,
+            session=self.session_with_inipath(tmp_path / "ci/pytest-ci.ini"),
+            dep_tree=dep_tree,
+        )
+
+        assert result == []
+
     def test_other_ini_files_do_not_count(self, tmp_path):
         dep_tree = nx.DiGraph()
         dep_tree.add_node("tests.test_a")
@@ -245,16 +261,24 @@ class TestLoadedConfigFile:
         assert result == []
 
 
-def test_a_session_without_a_real_config_is_ignored():
-    """A test double's ``config.inipath`` is not a path; that must not fail the pipeline."""
+def _session_without_config_file():
+    session = MagicMock()
+    session.config.inipath = None  # pytest found no config file
+    return session
+
+
+@pytest.mark.parametrize("session", [_session_without_config_file(), None], ids=["no_config_file", "cli_no_session"])
+def test_without_a_loaded_config_only_names_match(session):
+    """No config file found, or no pytest session at all (the CLI): name patterns still apply."""
     dep_tree = nx.DiGraph()
     dep_tree.add_node("tests.test_a")
+    strategy = DependencyFileImpactStrategy()
 
-    result = DependencyFileImpactStrategy().find_impacted_tests(
-        changed_files=["ci/other.ini"], impacted_modules=[], ns_module="pkg", session=MagicMock(), dep_tree=dep_tree
-    )
+    def run(changed):
+        return strategy.find_impacted_tests(changed, [], "pkg", session=session, dep_tree=dep_tree)
 
-    assert result == []
+    assert run(["ci/other.ini"]) == []
+    assert run(["pytest.ini"]) == ["tests.test_a"]
 
 
 def test_requirements_txt_survives_custom_glob_patterns():

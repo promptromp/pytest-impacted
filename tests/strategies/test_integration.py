@@ -2,7 +2,7 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import networkx as nx
 
@@ -18,23 +18,6 @@ class TestIntegration:
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
         self.root_dir = Path(self.temp_dir)
-
-    def test_pytest_strategy_includes_ast_results(self):
-        """Test that PytestImpactStrategy includes AST results."""
-        with patch("pytest_impacted.strategies.resolve_impacted_tests") as mock_resolve:
-            mock_dep_tree = MagicMock()
-            mock_resolve.return_value = ["test_module_ast"]
-
-            strategy = PytestImpactStrategy()
-            result = strategy.find_impacted_tests(
-                changed_files=["src/module.py"],
-                impacted_modules=["module"],
-                ns_module="mypackage",
-                dep_tree=mock_dep_tree,
-            )
-
-            # Should include AST-based results even when no conftest.py changes
-            assert "test_module_ast" in result
 
     def test_absolute_and_relative_paths(self):
         """``changed_files`` may mix repo-relative and absolute paths; both resolve against ``root_dir``."""

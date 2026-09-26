@@ -117,7 +117,7 @@ The core strategy. It uses static analysis to:
 Extends the AST analysis with pytest-specific dependency detection:
 
 - **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and **are not captured through static import analysis**.
-- **Code a conftest depends on**: The same applies when a conftest *imports* a changed module, directly or through other modules. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. Conftests above your package and tests directory, such as one at the repository root, count too. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir` are followed; a helper package outside both is invisible.
+- **Code a conftest depends on**: The same applies when a conftest *imports* a changed module, directly or through other modules. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. Conftests above your package and tests directory, up to the pytest rootdir (usually the repository root), count too. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir` are followed; a helper package outside both is invisible.
 - **`pytest_plugins` modules**: A module named in a `pytest_plugins` declaration is loaded by pytest, not imported by your tests, and pytest registers it for the whole session — its fixtures and hooks reach every test, wherever it was declared. So a change to a plugin module, or to anything it imports, impacts **every test** — as does a change to a plugin loaded with `-p` (on the command line or in `addopts`) or through `PYTEST_PLUGINS`. Declarations are read from conftests, test modules and (transitively) the plugins themselves, in any form pytest accepts: a comma-separated string or a list/tuple, assigned, `+=`, `.append`/`.extend`, concatenated, including inside module-level `if`/`try`/`match`/loop blocks. Only literal strings are followed; names computed at runtime, and plugins outside the analysed package and tests directory, are not.
 
     Two limitations. Editing the *declaration* in a test module (rather than the root `conftest.py`, where any edit already selects every test) selects only that module, even though pytest registers the plugin session-wide — declare plugins in the root conftest. And the standalone `impacted-tests` CLI has no pytest session, so it knows `PYTEST_PLUGINS` but not `-p` options.
@@ -131,9 +131,9 @@ Monitored files — each matched by file name, in any directory:
 
 - Lockfiles and metadata: `uv.lock`, `poetry.lock`, `pdm.lock`, `pixi.lock`, `Pipfile`, `Pipfile.lock`, `pylock*.toml` (PEP 751), `requirements*.lock` (rye), `pyproject.toml`, `setup.py`, `setup.cfg`
 - pytest configuration: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini` — settings such as `addopts`, `markers` and `filterwarnings` apply to every test
-- Requirements: any `*requirements*.txt` or `*requirements*.in` (`requirements-dev.txt`, `test-requirements.txt`, pip-tools inputs, …) and `constraints*.txt`
+- Requirements: any `*requirements*.txt` or `*requirements*.in` (`requirements-dev.txt`, `test-requirements.txt`, pip-tools inputs, …) and `*constraints*.txt`
 
-Plus files inside a `requirements/` directory, one or two levels deep: `requirements/*.txt`, `requirements/*/*.txt`, and the same for `.in`. And whichever config file the running pytest actually loaded — including one passed with `-c` under any name.
+Plus files inside a `requirements/` directory, one or two levels deep: `requirements/*.txt`, `requirements/*/*.txt`, and the same for `.in`. And whichever config file the running pytest actually loaded — including one passed with `-c` under any name (pytest plugin only: the `impacted-tests` CLI has no pytest session).
 
 This strategy is enabled by default. To disable it, use:
 
@@ -201,8 +201,9 @@ See the **[Extensions](extensions.md)** guide for the full reference: programmat
 For CI pipelines where git analysis and test execution happen in separate stages, use the standalone `impacted-tests` CLI:
 
 ```bash
-# Stage 1: identify impacted tests
-impacted-tests --module=my_package --git-mode=branch --base-branch=main > impacted_tests.txt
+# Stage 1: identify impacted tests. Stop if it fails (e.g. exit 1 when git is
+# unavailable) — an empty file must mean "nothing impacted", never "unknown".
+impacted-tests --module=my_package --git-mode=branch --base-branch=origin/main > impacted_tests.txt || exit 1
 
 # Stage 2: run only those tests. An empty list means nothing was impacted —
 # guard it, or a bare `pytest` would run the whole suite.
@@ -218,7 +219,7 @@ for the same reason the pytest flag does, otherwise the dependency graph will no
 contain your test modules:
 
 ```bash
-impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-branch=main
+impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-branch=origin/main
 ```
 
 ### `impacted-tests` options
@@ -249,9 +250,11 @@ impacted_base_branch = "main"
 impacted_tests_dir = "tests"
 no_impacted_dep_files = false  # set to true to disable dep file detection
 impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
+impacted_no_merge_base = false  # true: branch mode diffs against the base tip
+impacted_disable_ext = []  # extension names to disable
 ```
 
-CLI flags override these defaults.
+CLI flags override these defaults — except that a boolean set to `true` here cannot currently be switched off from the command line.
 
 ## Input Validation
 
@@ -267,7 +270,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-base-branch=--some-option` | Rejected before reaching git — refs may not begin with `-`, since git would parse them as options rather than revisions |
 | No git repository found (branch mode) | Clear error naming the rootdir searched: no `.git` found at or above it |
 | No git repository found (unstaged mode) | Not validated up front — the failure surfaces from GitPython during collection |
-| git executable not installed (or GitPython missing) | **Fails open**: every test runs, and a `WARNING` line in the report header says so. The `impacted-tests` CLI exits with status 1 instead of printing an empty list. When git *is* available, a missing repository is different — that is a configuration error and stays one |
+| git executable not installed (or GitPython missing) | **Fails open**: every test runs. If git was missing when the plugin loaded, a `WARNING` line in the report header says so; if it fails only when invoked, a terminal warning does (not shown under pytest-xdist). The `impacted-tests` CLI exits with status 1 instead of printing an empty list. When git *is* available, a missing repository is different — that is a configuration error and stays one |
 
 ## All Options
 
@@ -293,6 +296,8 @@ graph LR
     C --> D[AST import parsing]
     D --> E[Dependency graph]
     E --> G[Impacted tests]
+    E --> P[conftest / plugin rules]
+    P --> G
     B --> F[Dep file detection]
     F -->|uv.lock, requirements*.txt, pytest.ini, etc.| G
     B --> H[Invalidation patterns]
@@ -303,9 +308,10 @@ graph LR
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
-6. **Invalidation patterns** — user-declared globs for non-Python files that static analysis cannot see (see [InvalidationFileImpactStrategy](#invalidationfileimpactstrategy))
-7. **Test filtering** skips tests whose modules are not in the impact set
+5. **pytest-aware rules** — a `conftest.py` that changed, or imports changed code, selects every test in its directory and below; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects every test
+6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
+7. **Invalidation patterns** — user-declared globs for non-Python files that static analysis cannot see (see [InvalidationFileImpactStrategy](#invalidationfileimpactstrategy))
+8. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run).
 

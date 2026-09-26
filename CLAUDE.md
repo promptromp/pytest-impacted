@@ -56,9 +56,9 @@ is a back-compat alias onto the inner cache.
 
 **Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref
 straight to `repo.git.<cmd>(...)`. It validates each ref with `validate_rev` (rejecting
-option-like values with a clear error) *and* prefixes `--end-of-options` so git cannot parse
-an operand as an option even if the string check is ever bypassed. This is why the project
-requires git >= 2.24, and why tests assert on the `--end-of-options` token in the argv.
+option-like values with a clear error) *and* prefixes `--end-of-options` so git cannot
+parse an operand as an option even if the string check is ever bypassed. This is why the
+project requires git >= 2.24, and why tests assert on the `--end-of-options` token.
 
 **`GIT_AVAILABLE` is not defensive clutter.** `from git import Repo` raises
 `ImportError` when the *git executable* is missing, not just when GitPython is absent —
@@ -74,12 +74,18 @@ so it survives pytest-xdist), otherwise by the collection hook. Never via `warni
 which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path.
 
 **Branch mode diffs from the merge base**, not the base tip: `_merge_bases` runs
-`git merge-base --all` (through `rev_args`) and the result is the union of the diffs from each
-fork point — criss-cross merges have several, and one alone can miss a file. Only git's exit
-status 1 (no common ancestor: unrelated histories, or a shallow clone cut above the fork) falls back to the tip,
-and it says so through `on_fallback` (the API routes it to `display.warn`; a bare log record is
-swallowed during collection). Any other failure, such as an unknown ref, propagates.
-`use_merge_base=False` (`--impacted-no-merge-base`) always uses the tip.
+`git merge-base --all` (through `rev_args`) and the result is the union of the diffs from
+each fork point — criss-cross merges have several, and one alone can miss a file. Only
+git's exit status 1 (no common ancestor: unrelated histories, or a shallow clone cut above
+the fork) falls back to the tip, and it says so through `on_fallback`. Any other failure,
+such as an unknown ref, propagates. `use_merge_base=False` (`--impacted-no-merge-base`)
+always uses the tip.
+
+**Anything the user must see goes through `display.notify` / `display.warn` with the
+session.** A `logger` record is swallowed during collection, and `warnings.warn` becomes an
+INTERNALERROR under `filterwarnings = error`. Under pytest-xdist even terminal output is
+lost (collection runs on the workers), so only `pytest_report_header` reliably reaches the
+user there.
 
 **Every diff goes through `_name_status_diff` with fixed `--name-status -z --no-renames`.**
 `-z` stops git C-quoting non-ASCII paths (`core.quotePath`), which would never match a
@@ -96,22 +102,41 @@ the conftest walk all resolve against `root_dir` (the plugin passes `config.root
 never the process CWD — running pytest from a subdirectory used to resolve nothing. It
 absolutizes *and* resolves symlinks, and both caches canonicalize before their lookup so a
 `None` default cannot collapse two projects onto one entry. Never reach for `Path.cwd()`
-in traversal, graph or strategy code.
+in traversal, graph or strategy code — `canonical_root`'s `None` default is the only place
+it may appear.
+
+**Conftests above the analysed packages are graph nodes too.** Package discovery never
+sees a root-level `conftest.py`, so `build_dep_tree` adds them via
+`discover_ancestor_conftests`, named the way package discovery names modules (`conftest`,
+`backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
+resolve — unless that name is taken, when the full path name is used instead: a clash
+would silently drop the conftest from the graph. A conftest is recognised by its file
+name, `conftest.py`, on both the changed-file and the graph path. Every node carries its
+source file in the `path` attribute. Resolve a node to a file with `_module_path`, never by
+rebuilding a path from the dotted name — that silently fails for src-layout, where the
+name drops `src/`. `is_test_module` is false for any `conftest`, even under `tests/`: it
+holds fixtures, never tests.
+
+**Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
+every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
+into the file name and match nothing.
 
 **`pytest_plugins` declarations are edges, and their targets are global.** `build_dep_tree`
-adds an edge from each conftest, test module or (transitively) plugin to the modules its
-`pytest_plugins` names, and flags those with the `pytest_plugin` node attribute.
-`PytestImpactStrategy` marks *every* test impacted when a change reaches a flagged node or a
-`-p` / `PYTEST_PLUGINS` plugin (`_session_wide_changes`) — pytest registers plugins
-session-wide, not for the declaring module's directory. Editing a module that merely
-*declares* plugins is deliberately not session-wide: it over-selected every edit to a test
-module using `pytest_plugins = "pytester"`, and still could not see a removed declaration.
-`parse_pytest_plugins` uses stdlib `ast`, outside the backend on purpose (it cannot break
-Rust/Python parity), behind a text pre-filter, with warnings silenced so `-W error` cannot
-turn a `SyntaxWarning` into a lost declaration — `_quiet_parse` does the same for the astroid
-import parser. Do not catch `RecursionError` in `parse_file_imports`: ruff would still return
-the imports, and a silent `[]` there breaks backend parity. `read_source` and `is_conftest_module` are the
-shared reader and conftest-name check — don't re-implement either.
+treats each `pytest_plugins` entry in a conftest, test module or (transitively) plugin as
+an import of the declaring module — so, like every import, the returned graph has an edge
+*from the plugin to its declarer* — and flags the targets with the `pytest_plugin` node
+attribute. `PytestImpactStrategy` marks *every* test impacted when a change reaches a
+flagged node or a `-p` / `PYTEST_PLUGINS` plugin (`_session_wide_changes`): pytest registers
+plugins session-wide, not for the declaring module's directory. Editing a module that
+merely *declares* plugins is deliberately not session-wide: it over-selected every edit to
+a test module using `pytest_plugins = "pytester"`, and still could not see a removed
+declaration. `parse_pytest_plugins` uses stdlib `ast`, outside the backend on purpose (it
+cannot break Rust/Python parity), behind a text pre-filter, with warnings silenced so
+`-W error` cannot turn a `SyntaxWarning` into a lost declaration — `_quiet_parse` does the
+same for the astroid import parser. Do not catch `RecursionError` in `parse_file_imports`:
+ruff would still return the imports, and a silent `[]` there breaks backend parity.
+`read_source` and `is_conftest_module` are the shared reader and conftest-name check —
+don't re-implement either.
 
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`
 emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg`, so
@@ -139,8 +164,10 @@ formats Python code blocks inside Markdown, so `ruff format` covers `README.md` 
 `local`/`system` hooks invoking `uv run …`, and CI's lint job runs
 `uv run pre-commit run --all-files` with `SKIP=pytest`. So `.pre-commit-config.yaml`
 is the single source of truth for what is enforced, and pre-commit and CI cannot
-drift apart. Upgrade with `uv lock --upgrade` — there is no hook `rev` to bump, and
-new checks go in the pre-commit config, never as bare workflow steps.
+drift apart. Upgrade ruff/mypy/pytest with `uv lock --upgrade` — they have no hook `rev`
+(the remaining `rev:` pins, pre-commit-hooks and uv-pre-commit, are bumped with
+`pre-commit autoupdate`) — and new checks go in the pre-commit config, never as bare
+workflow steps.
 
 **The ruff version in `uv.lock` and the `ruff_python_parser` / `ruff_python_ast` git
 tags in `rust/Cargo.toml` are kept at the same release.** Bump them together.
@@ -156,27 +183,14 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 `PytestImpactStrategy` (a conftest that changed *or imports something that changed*
 impacts every test in its directory and below — tests never import their conftest, so
 this is invisible to test-side import analysis), `DependencyFileImpactStrategy`
-(patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config file
-pytest actually loaded, `session.config.inipath`; disable with `--no-impacted-dep-files`),
-`InvalidationFileImpactStrategy` (user globs from
+(patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config
+file pytest actually loaded, `session.config.inipath`; disable with
+`--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
 `--impacted-invalidate-all`, marking every test impacted; only added to the pipeline when
 configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
 which unions results. `get_default_strategies()` builds the default composition.
-
-**Conftests above the analysed packages are graph nodes too.** Package discovery never
-sees a root-level `conftest.py`, so `build_dep_tree` adds them via
-`discover_ancestor_conftests`, named the way package discovery names modules (`conftest`,
-`backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
-resolve — unless that name is taken, when the full path name is used instead: a clash
-would silently drop the conftest from the graph. A conftest is recognised by its file name, `conftest.py`, on both the changed-file
-and the graph path. Every node carries its source file in the `path` attribute. Resolve
-a node to a file with `_module_path`, never by rebuilding a path from the dotted name —
-that silently fails for src-layout, where the name drops `src/`. `is_test_module` is
-false for any `conftest`, even under `tests/`: it holds fixtures, never tests.
-
-**Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
-every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
-into the file name and match nothing.
+Duck-typed strategies need only `find_impacted_tests`: the composite skips the lifecycle
+hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for the same reason.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the
@@ -201,15 +215,15 @@ plugin-level tests.
 
 **The suite scrubs git's repo-locating variables** (`GIT_DIR`, `GIT_INDEX_FILE`, … — read
 from `git rev-parse --local-env-vars`, with a fallback copy) in `pytest_configure`, and
-restores them in `pytest_unconfigure`. Git exports them to hooks, and
-the pre-commit hook runs this suite mid-commit; inherited, every throwaway test repository
-resolves to the real one. From a linked worktree that overwrote the index and set
-`core.bare=true` on the shared `.git`. It must stay `pytest_configure`, not an autouse
-fixture — session-scoped repo fixtures are set up before any function-scoped one.
+restores them in `pytest_unconfigure`. Git exports them to hooks, and the pre-commit hook
+runs this suite mid-commit; inherited, every throwaway test repository resolves to the
+real one. From a linked worktree that overwrote the index and set `core.bare=true` on the
+shared `.git`. It must stay `pytest_configure`, not an autouse fixture — session-scoped
+repo fixtures are set up before any function-scoped one.
 
-The pre-commit pytest hook filters with `-m 'not slow'`, but no test
-currently carries that marker and `slow` is registered nowhere (there is no
-`[tool.pytest.ini_options]`) — register it before using it, or the mark warns.
+The pre-commit pytest hook filters with `-m 'not slow'`, but no test currently carries
+that marker and `slow` is registered nowhere (there is no `[tool.pytest.ini_options]`) —
+register it before using it, or the mark warns.
 
 ## Documentation
 

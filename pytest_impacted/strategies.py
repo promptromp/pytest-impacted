@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 import networkx as nx
 
 from pytest_impacted.display import notify
-from pytest_impacted.extensions import ConfigOption
+from pytest_impacted.extensions import ConfigOption, StrategyProtocol
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_conftest_module, is_test_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache
@@ -106,7 +106,7 @@ def _cached_build_dep_tree(ns_module: str, tests_package: str | None, root: Path
     Note:
         maxsize=8 keeps recent dependency trees without unbounded growth. The
         common case is the same ns_module/tests_package/root used repeatedly
-        within one pytest run.
+        across runs in one process (in-process ``pytest.main``, pytester).
     """
     return build_dep_tree(ns_module, tests_package=tests_package, root_dir=root)
 
@@ -148,8 +148,8 @@ def clear_dep_tree_cache() -> None:
 def _loaded_config_file(session: Any) -> Path | None:
     """The config file this pytest run loaded (``config.inipath``), or ``None``.
 
-    ``None`` too when there is no real pytest session behind *session* (e.g. a
-    test double), rather than failing the whole pipeline.
+    ``None`` too when pytest found no config file, or when there is no pytest
+    session at all (the standalone CLI).
     """
     inipath = getattr(getattr(session, "config", None), "inipath", None)
     return Path(inipath).resolve() if isinstance(inipath, str | os.PathLike) else None
@@ -172,7 +172,7 @@ def _resolve_changed_file_dir(changed_file: str, root_dir: Path) -> Path | None:
 
 
 def _test_module_path(test_module: str, root_dir: Path) -> Path | None:
-    """Locate the source file for a dotted test module name under *root_dir*."""
+    """Locate the source file for a dotted module name under *root_dir* (fallback for nodes without a ``path``)."""
     module_path = "/".join(test_module.split("."))
     root_path = normalize_path(root_dir)
     for candidate in (root_path / (module_path + ".py"), root_path / module_path / "__init__.py"):
@@ -203,7 +203,8 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
     """Return the sorted test modules whose files live in *directory* or any subdirectory.
 
     This is the "same directory and below" impact rule used by
-    :class:`PytestImpactStrategy` for ``conftest.py`` changes.
+    :class:`PytestImpactStrategy` for every conftest that changed or imports
+    something that changed.
     """
     matches = []
     for test_module in dep_tree.nodes:
@@ -256,7 +257,7 @@ def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
 def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any) -> list[str]:
     """Reached modules that pytest loads as plugins, whose fixtures and hooks reach every test.
 
-    - a ``pytest_plugins`` module (flagged in the graph), or anything it imports
+    - a ``pytest_plugins`` target (flagged in the graph) — reached when it, or anything it imports, changed
     - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
     """
     return sorted(
@@ -347,7 +348,7 @@ class ImpactStrategy(ABC):
                 so mutations do not persist across pytest runs.
             ns_module: The namespace module being analyzed.
             tests_package: Optional tests package name.
-            root_dir: Root directory of the repository.
+            root_dir: Project root (the pytest rootdir); may be below the git root.
             session: Optional pytest session object.
         """
 
@@ -372,7 +373,7 @@ class ImpactStrategy(ABC):
         Args:
             ns_module: The namespace module being analyzed.
             tests_package: Optional tests package name.
-            root_dir: Root directory of the repository.
+            root_dir: Project root (the pytest rootdir); may be below the git root.
             session: Optional pytest session object.
             dep_tree: The pre-built dependency graph for this run. Safe to
                 inspect; do not mutate here — :meth:`enrich_dep_tree`, which
@@ -406,7 +407,7 @@ class ImpactStrategy(ABC):
             impacted_modules: List of Python modules corresponding to changed files
             ns_module: The namespace module being analyzed
             tests_package: Optional tests package name
-            root_dir: Root directory of the repository
+            root_dir: Project root (the pytest rootdir); may be below the git root
             session: Optional pytest session object
             dep_tree: Pre-built dependency graph (NetworkX DiGraph). Built once
                 per run by :func:`~pytest_impacted.api.get_impacted_tests` (via
@@ -620,7 +621,7 @@ def get_default_strategies(
 class CompositeImpactStrategy(ImpactStrategy):
     """Strategy that combines multiple strategies."""
 
-    def __init__(self, strategies: list[ImpactStrategy]):
+    def __init__(self, strategies: Sequence[ImpactStrategy | StrategyProtocol]):
         """Initialize with a list of strategies to apply."""
         self.strategies = strategies
 
@@ -647,8 +648,11 @@ class CompositeImpactStrategy(ImpactStrategy):
         and :meth:`find_impacted_tests`.
         """
         for strategy in self.strategies:
+            # Duck-typed extensions need only find_impacted_tests; the hooks are optional.
+            if (enrich := getattr(strategy, "enrich_dep_tree", None)) is None:
+                continue
             try:
-                strategy.enrich_dep_tree(
+                enrich(
                     dep_tree,
                     ns_module=ns_module,
                     tests_package=tests_package,
@@ -680,8 +684,10 @@ class CompositeImpactStrategy(ImpactStrategy):
         entry-point discovery in :mod:`pytest_impacted.extensions`.
         """
         for strategy in self.strategies:
+            if (strategy_setup := getattr(strategy, "setup", None)) is None:
+                continue
             try:
-                strategy.setup(
+                strategy_setup(
                     ns_module=ns_module,
                     tests_package=tests_package,
                     root_dir=root_dir,
@@ -705,8 +711,10 @@ class CompositeImpactStrategy(ImpactStrategy):
         reason as :meth:`setup`.
         """
         for strategy in reversed(self.strategies):
+            if (strategy_teardown := getattr(strategy, "teardown", None)) is None:
+                continue
             try:
-                strategy.teardown()
+                strategy_teardown()
             except Exception:
                 logger.warning(
                     "Strategy %s.%s raised in teardown(); continuing with remaining strategies.",

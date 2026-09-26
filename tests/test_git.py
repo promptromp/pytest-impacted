@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -899,13 +899,7 @@ def test_branch_mode_without_a_fork_point_diffs_against_the_base_tip(real_repo):
 def test_branch_mode_in_a_shallow_clone_falls_back(real_repo, tmp_path):
     """``actions/checkout`` defaults to ``fetch-depth: 1``: the fork point is simply not there."""
     repo, root = real_repo
-    base = repo.active_branch.name
-    repo.git.checkout("-b", "feature")
-    (root / "pkg" / "a.py").write_text("x = 2\n")
-    commit_all(repo)
-    repo.git.checkout(base)
-    (root / "pkg" / "b.py").write_text("y = 2\n")
-    commit_all(repo, "base moves on")
+    base = _fork_then_advance_base(repo, root)
     clone = tmp_path / "shallow"
     Repo.clone_from(f"file://{root}", clone, depth=1, no_single_branch=True).git.checkout("feature")
     notices: list[str] = []
@@ -947,3 +941,12 @@ def test_branch_mode_with_criss_cross_merges_combines_every_fork_point(real_repo
     assert len(repo.git.merge_base("--all", "left", "right").split()) == 2  # precondition
 
     assert branch(root, "left") == ["pkg/a.py", "pkg/b.py"]
+
+
+def test_normalize_git_paths_emits_posix_paths_for_windows_paths():
+    """Every matcher is PurePosixPath-based; backslashes would become part of a file name."""
+    result = git.normalize_git_paths(
+        ["backend/src/m.py", "frontend/a.js"], PureWindowsPath("C:/repo"), PureWindowsPath("C:/repo/backend")
+    )
+
+    assert result == ["src/m.py", "C:/repo/frontend/a.js"]

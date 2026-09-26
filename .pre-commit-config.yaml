@@ -38,9 +38,9 @@ repos:
 - repo: local
   hooks:
   # Ruff, mypy and pytest all run out of the dev dependency group resolved in
-  # uv.lock. That is deliberate: CI runs `uv run ruff check` / `uv run mypy`,
-  # so sourcing the same binaries here makes it structurally impossible for the
-  # pre-commit and CI versions to drift apart. (They previously did: the
+  # uv.lock. That is deliberate: CI runs this same config via
+  # `uv run pre-commit run --all-files`, so sourcing the same binaries here makes
+  # it structurally impossible for the pre-commit and CI versions to drift apart. (They previously did: the
   # ruff-pre-commit rev sat at v0.15.13 while uv.lock resolved ruff 0.15.16.)
   # Bump ruff/mypy via `uv lock --upgrade` — there is no separate rev to update.
   - id: ruff-check

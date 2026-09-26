@@ -123,22 +123,11 @@ PLUGIN_FIXTURES = "import pytest\nfrom app.db import connect\n\n@pytest.fixture\
 
 @pytest.mark.parametrize("edited", ["suite/plugin_fixtures.py", "app/db.py"])
 def test_fixtures_loaded_through_pytest_plugins(make_project, edited):
-    """Plugins are registered for the whole session, so a change reaching one runs every test."""
-    project = make_project(
-        {
-            **APP,
-            **TESTS,
-            "suite/plugin_fixtures.py": PLUGIN_FIXTURES,
-            "conftest.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n',
-        }
-    )
-    edit(project, edited)
+    """Plugins are registered for the whole session, so a change reaching one runs every test.
 
-    run(project).assert_outcomes(passed=2)
-
-
-def test_pytest_plugins_declared_in_a_test_module(make_project):
-    """pytest registers the plugin for the whole session, so every test sees its fixtures and hooks."""
+    Declared in a test module on purpose: a root conftest would select everything
+    through the directory rule anyway, and prove nothing about session-wide scope.
+    """
     project = make_project(
         {
             **APP,
@@ -147,7 +136,7 @@ def test_pytest_plugins_declared_in_a_test_module(make_project):
             "suite/db/test_db.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n\ndef test_db(db):\n    assert db\n',
         }
     )
-    edit(project, "suite/plugin_fixtures.py")
+    edit(project, edited)
 
     run(project).assert_outcomes(passed=2)
 
@@ -160,7 +149,7 @@ def test_plugins_declared_by_a_plugin_are_followed(make_project):
             **TESTS,
             "suite/plugin_fixtures.py": 'pytest_plugins = ["suite.db_fixtures"]\n',
             "suite/db_fixtures.py": PLUGIN_FIXTURES,
-            "conftest.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n',
+            "suite/db/test_db.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n\ndef test_db(db):\n    assert db\n',
         }
     )
     edit(project, "suite/db_fixtures.py")

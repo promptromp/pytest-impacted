@@ -38,9 +38,11 @@ impacted = get_impacted_tests(
 
 `get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run".
 
+The strategy you pass **replaces** the default pipeline — the AST, conftest and dependency-file strategies included, and `watch_dep_files` / `invalidate_all_patterns` then have no effect. To add to the defaults instead, pass `CompositeImpactStrategy([*get_default_strategies(), MyCustomStrategy()])` (both from `pytest_impacted.strategies`).
+
 This is the right entry point for one-off integrations or for driving impact analysis from your own test runner. For reusable, auto-discovered strategies that ship as their own package, see the packaged extension system below.
 
-`changed_files` lists every path git reports as changed, relative to the project root — except files living outside it (a monorepo whose git root sits above the pytest rootdir), which arrive as absolute paths. It **includes deleted files**: a removed `conftest.py` or lockfile still matters. So resolve an entry against `root_dir` only when it is relative, and check that it exists before reading it.
+`changed_files` lists every path git reports as changed, relative to the project root — except files living outside it (a monorepo whose git root sits above the pytest rootdir), which arrive as absolute paths. It **includes deleted files**: a removed `conftest.py` or lockfile still matters. So resolve an entry against `root_dir` only when it is relative, and check that it exists before reading it. Paths always use `/` separators, on every platform.
 
 ## Packaged extensions
 
@@ -65,7 +67,7 @@ class MyStrategy(ImpactStrategy):
 # pyproject.toml for the extension package
 [project]
 name = "pytest-impacted-my-extension"
-dependencies = ["pytest-impacted>=0.30"]
+dependencies = ["pytest-impacted>=0.31"]
 
 [project.entry-points."pytest_impacted.strategies"]
 my_extension = "my_extension.strategy:MyStrategy"
@@ -119,7 +121,7 @@ impacted_ext_coverage_coverage_file = ".coverage.ci"
 
 ### Duck-typed extensions (zero dependency)
 
-Extensions don't need to inherit from `ImpactStrategy`. Any class with a `find_impacted_tests` method works:
+Extensions don't need to inherit from `ImpactStrategy`. Any class with a `find_impacted_tests` method works; the lifecycle hooks (`enrich_dep_tree`, `setup`, `teardown`) are optional and simply skipped when absent:
 
 ```python
 # No import from pytest_impacted at all!
@@ -129,7 +131,7 @@ class MyLightweightStrategy:
         return [...]
 ```
 
-When the entry point is loaded, `validate_strategy_class` checks that it resolves to a class whose `find_impacted_tests` accepts `changed_files`, `impacted_modules` and `ns_module` (or `**kwargs`). `StrategyProtocol` is a runtime-checkable `typing.Protocol` describing the same shape, handy for `isinstance` assertions in your own tests.
+When the entry point is loaded, `validate_strategy_class` checks that it resolves to a class whose `find_impacted_tests` accepts `changed_files`, `impacted_modules` and `ns_module` (or `**kwargs`). The pipeline also passes `tests_package`, `root_dir`, `session` and `dep_tree` by keyword, so accept those too (or `**kwargs`) — a missing one fails the run with a `TypeError`, deliberately loudly. `StrategyProtocol` is a runtime-checkable `typing.Protocol` describing the same shape, handy for `isinstance` assertions in your own tests.
 
 ## Using extensions
 
@@ -152,7 +154,7 @@ impacted_disable_ext = ["my_extension"]
 
 ### Viewing loaded extensions
 
-Extensions are listed in the pytest report header:
+Discovered extensions are listed in the pytest report header (including ones disabled with `--impacted-disable-ext`):
 
 ```
 pytest-impacted: ..., extensions=my_extension,coverage
@@ -337,7 +339,7 @@ class DIBindingStrategy(ImpactStrategy):
 
 **Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order, forwarding all context kwargs unchanged. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
 
-**Node attributes.** Every node the built-in graph discovers carries its absolute source file in a `path` attribute (`dep_tree.nodes["mypkg.core"]["path"]`). Set it on nodes you add — `dep_tree.add_node("mypkg.generated", path="/abs/path/generated.py")` — whenever the node has a file. Built-in strategies use it to place a module on disk (for example, to find the tests under a `conftest.py`). Without it they fall back to rebuilding the path from the dotted name, which cannot see a src-layout `src/` prefix. Modules pytest loads as plugins through `pytest_plugins` carry `pytest_plugin=True`; a change reaching such a node marks every test impacted, because pytest registers plugins for the whole session — set it on plugin nodes you add.
+**Node attributes** (since 0.31). Every node the built-in graph discovers carries its absolute source file in a `path` attribute (`dep_tree.nodes["mypkg.core"]["path"]`). Set it on nodes you add — `dep_tree.add_node("mypkg.generated", path="/abs/path/generated.py")` — whenever the node has a file. Built-in strategies use it to place a module on disk (for example, to find the tests under a `conftest.py`). Without it they fall back to rebuilding the path from the dotted name, which cannot see a src-layout `src/` prefix. Modules pytest loads as plugins through `pytest_plugins` carry `pytest_plugin=True`; a change reaching such a node marks every test impacted, because pytest registers plugins for the whole session — set it on plugin nodes you add. Conftests are graph nodes too (ones above the analysed packages are named `conftest`, `backend.conftest`, …), but `is_test_module()` is false for them: they hold fixtures, never tests.
 
 !!! tip
     Prefer `enrich_dep_tree` over doing your own DFS inside `find_impacted_tests` when the relationships you're modeling can be expressed as edges. You get the built-in traversal, deduplication, and transitive closure for free, and the edges are visible to every other strategy in the pipeline — not just yours.
@@ -424,8 +426,12 @@ The extension system is designed to be fault-tolerant:
 - **Import errors**: If an extension package fails to import, it is skipped with a warning log. Other extensions and built-in strategies continue to work.
 - **Instantiation errors**: If a strategy's `__init__` raises an exception, the extension is skipped.
 - **Invalid classes**: If an entry point resolves to a class without `find_impacted_tests`, it is skipped with a warning.
+- **Missing required options**: A `ConfigOption(required=True)` with no value skips the extension with a warning.
+- **Lifecycle hooks**: Exceptions from `enrich_dep_tree`, `setup` or `teardown` are logged and that phase is skipped for the strategy; the others carry on.
 
-Extensions never prevent the core pytest-impacted functionality from working.
+These warnings are log records on the `pytest_impacted.extensions` / `pytest_impacted.strategies` loggers — not shown in pytest's terminal output by default (use `--log-cli-level=WARNING` to see them).
+
+An exception from `find_impacted_tests` is **not** caught: it propagates and fails the run, because silently dropping a strategy's answer could skip tests that should run. Handle your own errors there.
 
 ## Testing extensions
 
@@ -479,7 +485,7 @@ def test_extension_discovered_by_plugin(mock_eps, pytester):
     clear_extension_cache()
 
     pytester.makepyfile(test_smoke="def test_ok(): pass")
-    result = pytester.runpytest("-v", "--impacted", "--impacted-module=pytest_impacted")
+    result = pytester.runpytest("-v")  # the header is written with or without --impacted
     result.stdout.fnmatch_lines(["*extensions=my_extension*"])
 ```
 

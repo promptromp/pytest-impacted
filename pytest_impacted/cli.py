@@ -38,7 +38,12 @@ def configure_logging(verbose: bool) -> None:
 
 
 @click.command(context_settings={"show_default": True})
-@click.option("--git-mode", default=GitMode.UNSTAGED, help="Git mode.")
+@click.option(
+    "--git-mode",
+    type=click.Choice([mode.value for mode in GitMode]),
+    default=GitMode.UNSTAGED.value,
+    help="Which changes count.",
+)
 @click.option("--base-branch", default="main", help="Base branch.")
 @click.option(
     "--root-dir",

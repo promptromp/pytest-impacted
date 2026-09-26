@@ -220,7 +220,7 @@ def test_plugin_imports_without_git_executable(tmp_path):
     assert "git" not in result.stderr.lower(), result.stderr
 
 
-@pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files"])
+@pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files", "impacted_no_merge_base"])
 def test_boolean_ini_values_are_typed(pytester, ini_name):
     """Untyped ini values arrive as strings, and ``"false"`` is truthy — so ``= false`` did the opposite."""
     pytester.makeini(f"[pytest]\n{ini_name} = false\n")
@@ -272,8 +272,16 @@ def test_runs_every_test_when_git_is_unavailable(pytester, pytest_ini):
     assert result.stdout.count("Running every test") == 1, result.stdout  # once, not per hook
 
 
-def test_fails_open_when_git_disappears_after_import(pytester):
-    """GitPython imports fine but the binary is gone at run time (e.g. ``GIT_PYTHON_REFRESH=quiet``)."""
+@pytest.mark.parametrize(
+    "mode_args",
+    [["--impacted-git-mode=unstaged"], ["--impacted-git-mode=branch", "--impacted-base-branch=main"]],
+    ids=["unstaged", "branch"],
+)
+def test_fails_open_when_git_disappears_after_import(pytester, mode_args):
+    """GitPython imports fine but the binary is gone at run time (e.g. ``GIT_PYTHON_REFRESH=quiet``).
+
+    Branch mode also exercises base-branch validation, which must not crash either.
+    """
     pytester.makepyfile(**{"mypkg/__init__.py": "", "tests/test_a.py": "def test_a(): pass\n"})
     git_env = {**os.environ, **isolated_git_env(pytester.path)}
     subprocess.run(["git", "init", "-q"], cwd=pytester.path, check=True, env=git_env)
@@ -286,7 +294,7 @@ def test_fails_open_when_git_disappears_after_import(pytester):
             "no:cacheprovider",
             "--impacted",
             "--impacted-module=mypkg",
-            "--impacted-git-mode=unstaged",
+            *mode_args,
             "tests",
         ],
         cwd=pytester.path,

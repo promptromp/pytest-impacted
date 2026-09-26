@@ -24,11 +24,11 @@ pytest --impacted --impacted-module=my_package \
 | :deciduous_tree: | **Dependency-aware** | Follows import chains transitively, not just direct file changes |
 | :gear: | **No imports at analysis time** | Filesystem discovery + AST parsing — no module-level side effects |
 | :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options |
-| :wrench: | **conftest.py aware** | Changes to `conftest.py` automatically impact all tests in scope |
+| :wrench: | **conftest.py aware** | A `conftest.py` that changes, or imports changed code, impacts every test beneath it; a change reaching a `pytest_plugins` / `-p` plugin impacts all tests |
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements*.txt`, `pyproject.toml`, `pytest.ini` etc. trigger all tests |
 | :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `config/*.yaml`, …) that trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
-| :rocket: | **Rust-accelerated** | Optional Rust extension for 37-65x faster import parsing on large codebases |
+| :rocket: | **Rust-accelerated** | Optional Rust extension for up to 37-65x faster import parsing on large codebases |
 | :electric_plug: | **Extensible** | Third-party strategies installable as plugins via Python entry points |
 | :shield: | **Helpful errors** | Validates config early with clear messages and suggestions |
 
@@ -49,13 +49,13 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add pytest-impacted
 ```
 
-For **37-65x faster** import parsing on large codebases, install with the optional Rust extension:
+For **up to 37-65x faster** import parsing on large codebases, install with the optional Rust extension:
 
 ```bash
 pip install pytest-impacted[fast]
 ```
 
-Requires **Python 3.11+** and a **git 2.24+** CLI on `PATH`.
+Requires **Python 3.11+** and a **git 2.24+** CLI on `PATH`. Without git (or GitPython), the plugin fails open: every test runs and a warning says why, while the `impacted-tests` CLI exits with status 1.
 
 ---
 
@@ -95,7 +95,7 @@ That's it. Unaffected tests are automatically skipped.
 | Mode | Flag | What it compares |
 |------|------|-----------------|
 | **unstaged** (default) | `--impacted-git-mode=unstaged` | All uncommitted changes (staged and unstaged, including deletions) + untracked files |
-| **branch** | `--impacted-git-mode=branch` | Everything your branch changed since it forked from the base ref (`git diff <base>...HEAD`, as a pull request shows it); `--impacted-no-merge-base` diffs against the base tip instead |
+| **branch** | `--impacted-git-mode=branch` | Everything your branch committed since it forked from the base ref (`git diff <base>...HEAD`, as a pull request shows it; uncommitted changes are not included). With no fork point (e.g. a shallow CI clone) it warns and diffs against the base tip; `--impacted-no-merge-base` always does |
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
 
@@ -129,8 +129,9 @@ The plugin automatically detects that `src/` is not a Python package and uses th
 For CI pipelines where git access and test execution happen in separate stages, use the `impacted-tests` CLI to generate the test file list:
 
 ```bash
-# Stage 1: identify impacted tests
-impacted-tests --module=my_package --git-mode=branch --base-branch=main > impacted_tests.txt
+# Stage 1: identify impacted tests. Stop if it fails (e.g. exit 1 when git is
+# unavailable) — an empty file must mean "nothing impacted", never "unknown".
+impacted-tests --module=my_package --git-mode=branch --base-branch=origin/main > impacted_tests.txt || exit 1
 
 # Stage 2: run only those tests. An empty list means nothing was impacted —
 # guard it, or a bare `pytest` would run the whole suite.
@@ -145,6 +146,8 @@ The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `-
 `--verbose`, `--no-dep-files`, `--invalidate-all` and `--disable-ext`. If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
+In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit — and name it as the remote-tracking ref (`origin/main`): a PR checkout has no local `main`.
+
 ### Configuration via `pyproject.toml`
 
 All CLI options can be set as defaults in your `pyproject.toml` (or `pytest.ini`):
@@ -158,9 +161,10 @@ impacted_base_branch = "main"
 impacted_tests_dir = "tests"
 # no_impacted_dep_files = true  # uncomment to disable dep file detection
 # impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
+# impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
 ```
 
-CLI flags override these defaults.
+CLI flags override these defaults — except that a boolean set to `true` here cannot currently be switched off from the command line.
 
 ### All Options
 
@@ -175,6 +179,7 @@ CLI flags override these defaults.
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
+| `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension (see `pytest --help`) |
 
 ---
 
@@ -182,6 +187,7 @@ CLI flags override these defaults.
 
 ```
 Git diff → Changed files → Module resolution → AST import parsing → Dependency graph → Impacted tests
+                         ↘ conftest.py / pytest plugins → Tests beneath the conftest, or all tests (plugins)
                          ↘ Dependency file detection → All tests (if dep files changed)
                          ↘ Invalidation patterns → All tests (if your globs match)
 ```
@@ -190,9 +196,10 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
-5. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
-6. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`
-7. **Test filtering** skips tests whose modules are not in the impact set
+5. **pytest wiring** — a `conftest.py` that changed or imports changed code selects every test in its directory and below; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects all tests
+6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
+7. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`
+8. **Test filtering** skips tests whose modules are not in the impact set
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run).
 
@@ -203,7 +210,7 @@ Impact analysis is pluggable via a strategy pattern. The default pipeline combin
 | Strategy | What it does |
 |----------|-------------|
 | **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
-| **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, or any module it imports does, **all tests in its directory and subdirectories** are marked as impacted; a change reaching a plugin module (`pytest_plugins`, `-p` or `PYTEST_PLUGINS`) impacts **all tests** |
+| **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, or any module it imports (directly or transitively; conftests above the package, e.g. at the repo root, included) does, **all tests in its directory and subdirectories** are marked as impacted; a change reaching a plugin module (`pytest_plugins`, `-p` or `PYTEST_PLUGINS`) impacts **all tests** |
 | **DependencyFileImpactStrategy** | When dependency or test-config files change (`uv.lock`, `requirements*.txt`, `pyproject.toml`, `pytest.ini`, etc.), **all tests** are marked as impacted |
 | **InvalidationFileImpactStrategy** | Only active when configured. Files matching a `--impacted-invalidate-all` glob mark **all tests** as impacted — the user-extensible counterpart to the built-in dependency-file list |
 
@@ -247,7 +254,7 @@ Extensions can also be duck-typed (any class with a `find_impacted_tests` method
 
 ## Performance: Optional Rust Acceleration
 
-For large codebases, install the optional Rust extension to accelerate import parsing by **37-65x**:
+For large codebases, install the optional Rust extension to accelerate import parsing by **up to 37-65x** (results vary by project):
 
 ```bash
 pip install pytest-impacted[fast]
@@ -282,7 +289,7 @@ uv run python -m pytest
 uv run python -m pytest --cov=pytest_impacted --cov-branch tests
 
 # Lint + format + type check
-pre-commit run --all-files
+uv run pre-commit run --all-files
 
 # Install with Rust acceleration (pre-built wheels, no Rust toolchain needed)
 pip install pytest-impacted[fast]
@@ -292,11 +299,11 @@ pip install maturin
 cd rust && maturin develop --release
 
 # Run parsing benchmarks
-python -m benchmarks.bench_parsing
+uv run python -m benchmarks.bench_parsing
 ```
 
 ---
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/promptromp/pytest-impacted/blob/main/LICENSE)

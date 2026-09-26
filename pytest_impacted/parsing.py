@@ -169,7 +169,7 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
     but as strings, which import parsing never sees. Follows what pytest accepts:
     a comma-separated string or a list/tuple of strings, assigned, annotated,
     extended with ``+=``, ``.append`` or ``.extend``, including inside
-    module-level ``if``/``try``/``with`` blocks. Computed entries are ignored.
+    module-level ``if``/``try``/``with``/``match``/``for``/``while`` blocks. Computed entries are ignored.
 
     Parsed with the stdlib ``ast`` and independent of the parsing backend, so both
     backends see the same edges.

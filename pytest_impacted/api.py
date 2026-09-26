@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pytest_impacted.display import notify, warn
-from pytest_impacted.extensions import load_extensions
+from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
@@ -75,7 +75,7 @@ def get_impacted_tests(
     ns_module: str,
     tests_dir: str | None = None,
     session=None,
-    strategy: ImpactStrategy | None = None,
+    strategy: ImpactStrategy | StrategyProtocol | None = None,
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
     use_merge_base: bool = True,
@@ -102,6 +102,10 @@ def get_impacted_tests(
                 invalidate_all_patterns=invalidate_all_patterns,
             )
         )
+    elif not isinstance(strategy, ImpactStrategy):
+        # A duck-typed strategy need only have find_impacted_tests; the composite
+        # skips the lifecycle hooks it lacks.
+        strategy = CompositeImpactStrategy([strategy])
 
     tests_package = None
     if tests_dir:

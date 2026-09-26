@@ -65,7 +65,10 @@ def pytest_addoption(parser: Parser):
         choices=GitMode.__members__.values(),
         default=None,
         nargs="?",
-        help="Git reference for computing impacted files.",
+        help=(
+            "Which changes count: 'unstaged' (uncommitted work, untracked files included) or "
+            + "'branch' (changes since forking from --impacted-base-branch)."
+        ),
     )
     parser.addini(
         "impacted_git_mode",
