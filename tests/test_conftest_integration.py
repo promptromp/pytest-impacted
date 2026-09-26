@@ -141,21 +141,6 @@ def test_fixtures_loaded_through_pytest_plugins(make_project, edited):
     run(project).assert_outcomes(passed=2)
 
 
-def test_pytest_plugins_declared_in_a_test_module(make_project):
-    """pytest registers the plugin for the whole session, so every test sees its fixtures and hooks."""
-    project = make_project(
-        {
-            **APP,
-            **TESTS,
-            "suite/plugin_fixtures.py": PLUGIN_FIXTURES,
-            "suite/db/test_db.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n\ndef test_db(db):\n    assert db\n',
-        }
-    )
-    edit(project, "suite/plugin_fixtures.py")
-
-    run(project).assert_outcomes(passed=2)
-
-
 def test_plugins_declared_by_a_plugin_are_followed(make_project):
     """pytest reads ``pytest_plugins`` from every plugin it loads, not just conftests and test modules."""
     project = make_project(

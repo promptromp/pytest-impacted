@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -945,8 +945,6 @@ def test_branch_mode_with_criss_cross_merges_combines_every_fork_point(real_repo
 
 def test_normalize_git_paths_emits_posix_paths_for_windows_paths():
     """Every matcher is PurePosixPath-based; backslashes would become part of a file name."""
-    from pathlib import PureWindowsPath  # noqa: PLC0415
-
     result = git.normalize_git_paths(
         ["backend/src/m.py", "frontend/a.js"], PureWindowsPath("C:/repo"), PureWindowsPath("C:/repo/backend")
     )

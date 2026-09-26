@@ -261,18 +261,24 @@ class TestLoadedConfigFile:
         assert result == []
 
 
-def test_a_run_without_a_config_file_matches_names_only():
-    """pytest found no config file (``config.inipath is None``): only the name patterns apply."""
+def _session_without_config_file():
     session = MagicMock()
-    session.config.inipath = None
+    session.config.inipath = None  # pytest found no config file
+    return session
+
+
+@pytest.mark.parametrize("session", [_session_without_config_file(), None], ids=["no_config_file", "cli_no_session"])
+def test_without_a_loaded_config_only_names_match(session):
+    """No config file found, or no pytest session at all (the CLI): name patterns still apply."""
     dep_tree = nx.DiGraph()
     dep_tree.add_node("tests.test_a")
+    strategy = DependencyFileImpactStrategy()
 
-    result = DependencyFileImpactStrategy().find_impacted_tests(
-        changed_files=["ci/other.ini"], impacted_modules=[], ns_module="pkg", session=session, dep_tree=dep_tree
-    )
+    def run(changed):
+        return strategy.find_impacted_tests(changed, [], "pkg", session=session, dep_tree=dep_tree)
 
-    assert result == []
+    assert run(["ci/other.ini"]) == []
+    assert run(["pytest.ini"]) == ["tests.test_a"]
 
 
 def test_requirements_txt_survives_custom_glob_patterns():

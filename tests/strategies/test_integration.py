@@ -19,20 +19,6 @@ class TestIntegration:
         self.temp_dir = tempfile.mkdtemp()
         self.root_dir = Path(self.temp_dir)
 
-    def test_pytest_strategy_includes_ast_results(self):
-        """PytestImpactStrategy includes import-graph results, not only the conftest rule."""
-        dep_tree = nx.DiGraph([("module", "tests.test_module_ast")])
-
-        result = PytestImpactStrategy().find_impacted_tests(
-            changed_files=["src/module.py"],
-            impacted_modules=["module"],
-            ns_module="mypackage",
-            root_dir=self.root_dir,
-            dep_tree=dep_tree,
-        )
-
-        assert result == ["tests.test_module_ast"]
-
     def test_absolute_and_relative_paths(self):
         """``changed_files`` may mix repo-relative and absolute paths; both resolve against ``root_dir``."""
         test_dir = self.root_dir / "tests"

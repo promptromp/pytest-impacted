@@ -203,7 +203,7 @@ For CI pipelines where git analysis and test execution happen in separate stages
 ```bash
 # Stage 1: identify impacted tests. Stop if it fails (e.g. exit 1 when git is
 # unavailable) — an empty file must mean "nothing impacted", never "unknown".
-impacted-tests --module=my_package --git-mode=branch --base-branch=main > impacted_tests.txt || exit 1
+impacted-tests --module=my_package --git-mode=branch --base-branch=origin/main > impacted_tests.txt || exit 1
 
 # Stage 2: run only those tests. An empty list means nothing was impacted —
 # guard it, or a bare `pytest` would run the whole suite.
@@ -219,7 +219,7 @@ for the same reason the pytest flag does, otherwise the dependency graph will no
 contain your test modules:
 
 ```bash
-impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-branch=main
+impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-branch=origin/main
 ```
 
 ### `impacted-tests` options

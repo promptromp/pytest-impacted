@@ -545,17 +545,20 @@ def test_get_impacted_tests_enrich_receives_full_context(
 def test_duck_typed_strategy_passed_directly(mock_tree, mock_files):
     """A strategy with only find_impacted_tests works through the API, lifecycle hooks and all."""
 
+    calls = []
+
     class DuckTyped:
         def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            calls.append(changed_files)
             return []
 
-    assert (
-        get_impacted_tests(
-            impacted_git_mode=GitMode.UNSTAGED,
-            impacted_base_branch="main",
-            root_dir=Path("."),
-            ns_module="pkg",
-            strategy=DuckTyped(),
-        )
-        is None
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=Path("."),
+        ns_module="pkg",
+        strategy=DuckTyped(),
     )
+
+    assert calls == [["pkg/a.py"]]  # delegated to, not bypassed
+    assert result is None
