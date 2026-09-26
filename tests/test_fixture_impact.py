@@ -303,3 +303,23 @@ def test_an_aliased_fixture_decorator_still_counts():
 def test_affected_code_whose_role_is_unknowable_is_undecidable(source):
     """A hook under another name affects any test; a computed ``name=`` hides the fixture's real name."""
     assert analyse(source) is None
+
+
+def test_a_global_written_by_affected_code_is_affected():
+    """``db`` never names the changed code: it reads a global that affected code assigns."""
+    source = """
+    import pytest
+    from app.db import connect
+
+    ENGINE = None
+
+    def init():
+        global ENGINE
+        ENGINE = connect()
+
+    @pytest.fixture
+    def db():
+        return ENGINE
+    """
+    result = analyse(source)
+    assert result is None or "db" in result

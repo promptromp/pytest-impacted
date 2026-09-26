@@ -105,7 +105,8 @@ def _propagate(statements: list[ast.stmt], tainted: set[str]) -> None:
             if isinstance(stmt, ast.Import | ast.ImportFrom) or not (_names(stmt) & tainted):
                 continue
             if isinstance(stmt, _DEFINITIONS):
-                new = {stmt.name}
+                # A function also taints the module globals it assigns (`global ENGINE`).
+                new = {stmt.name} | {n for g in ast.walk(stmt) if isinstance(g, ast.Global) for n in g.names}
             elif isinstance(stmt, ast.Assign | ast.AnnAssign | ast.AugAssign):
                 targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
                 if not all(isinstance(t, ast.Name) for t in targets):
