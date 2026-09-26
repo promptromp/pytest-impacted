@@ -259,7 +259,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-base-branch=--some-option` | Rejected before reaching git — refs may not begin with `-`, since git would parse them as options rather than revisions |
 | No git repository found (branch mode) | Clear error naming the rootdir searched: no `.git` found at or above it |
 | No git repository found (unstaged mode) | Not validated up front — the failure surfaces from GitPython during collection |
-| git executable not installed (or GitPython missing) | **Fails open**: every test runs, with a warning in the summary. The `impacted-tests` CLI exits with status 1 instead of printing an empty list |
+| git executable not installed (or GitPython missing) | **Fails open**: every test runs, with a warning. The `impacted-tests` CLI exits with status 1 instead of printing an empty list. A missing *repository* is different — that is a configuration error and stays one |
 
 ## All Options
 

@@ -17,6 +17,8 @@ from pytest_impacted.plugin import (
     validate_tests_dir,
 )
 
+from .conftest import isolated_git_env
+
 
 CLI_OPTION_DESTS = {
     "impacted",
@@ -225,13 +227,24 @@ def test_boolean_ini_values_are_typed(pytester, ini_name):
     assert config.getini(ini_name) is False
 
 
-def test_runs_every_test_when_git_is_unavailable(pytester):
+def _env_without_git(tmp: Path) -> dict[str, str]:
+    """The current environment with git unreachable, and no GitPython override to find it anyway."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_PYTHON_")}
+    return {**env, "PATH": str(tmp / "no-git")}
+
+
+@pytest.mark.parametrize(
+    "pytest_ini", ["", "[pytest]\nfilterwarnings = error\n"], ids=["default", "warnings-as-errors"]
+)
+def test_runs_every_test_when_git_is_unavailable(pytester, pytest_ini):
     """Fail open: without git the changes are unknown, so nothing may be skipped.
 
     A real run with git missing from PATH, as in a slim CI container — the
     case that used to skip the whole suite and exit 0.
     """
     pytester.makepyfile(**{"mypkg/__init__.py": "", "tests/test_a.py": "def test_a(): pass\ndef test_b(): pass\n"})
+    if pytest_ini:
+        pytester.makeini(pytest_ini)
     result = subprocess.run(
         [
             sys.executable,
@@ -245,7 +258,7 @@ def test_runs_every_test_when_git_is_unavailable(pytester):
             "tests",
         ],
         cwd=pytester.path,
-        env={**os.environ, "PATH": str(pytester.path / "no-git")},
+        env=_env_without_git(pytester.path),
         capture_output=True,
         text=True,
         check=False,  # assert below, so a failure reports the child's output
@@ -253,4 +266,32 @@ def test_runs_every_test_when_git_is_unavailable(pytester):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "2 passed" in result.stdout
+    assert "Running every test" in result.stdout
+
+
+def test_fails_open_when_git_disappears_after_import(pytester):
+    """GitPython imports fine but the binary is gone at run time (e.g. ``GIT_PYTHON_REFRESH=quiet``)."""
+    pytester.makepyfile(**{"mypkg/__init__.py": "", "tests/test_a.py": "def test_a(): pass\n"})
+    subprocess.run(["git", "init", "-q"], cwd=pytester.path, check=True, env=isolated_git_env(pytester.path))
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "--impacted",
+            "--impacted-module=mypkg",
+            "--impacted-git-mode=unstaged",
+            "tests",
+        ],
+        cwd=pytester.path,
+        env={**_env_without_git(pytester.path), "GIT_PYTHON_REFRESH": "quiet"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
     assert "Running every test" in result.stdout

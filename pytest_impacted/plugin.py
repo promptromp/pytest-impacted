@@ -1,5 +1,4 @@
 import os
-import warnings
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -9,6 +8,7 @@ from pytest import Config, Parser, UsageError
 
 from pytest_impacted._rust import RUST_AVAILABLE
 from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
+from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
     discover_extension_metadata,
     get_ext_cli_flag,
@@ -242,8 +242,9 @@ def pytest_collection_modifyitems(session, config, items):
             strategy=strategy,
         )
     except GitUnavailableError as err:
-        # Fail open: with the changes unknown, every test may be impacted.
-        warnings.warn(f"pytest-impacted: {err} Running every test.", stacklevel=1)
+        # Fail open: with the changes unknown, every test may be impacted. Not
+        # warnings.warn — `filterwarnings = error` would turn it into a crash.
+        warn(f"pytest-impacted: {err} Running every test.", session)
         return
     if not impacted_tests:
         # skip all tests
@@ -354,7 +355,7 @@ def validate_base_branch(base_branch: str, root_dir: str) -> None:
         return
 
     # Importable only when GIT_AVAILABLE; see the guarded import in git.py.
-    from git import GitCommandError, InvalidGitRepositoryError  # noqa: PLC0415
+    from git import GitCommandError, GitCommandNotFound, InvalidGitRepositoryError  # noqa: PLC0415
 
     try:
         args = rev_args(base_branch)
@@ -364,6 +365,8 @@ def validate_base_branch(base_branch: str, root_dir: str) -> None:
         raise UsageError(
             f"Invalid base branch: {err} Please check the value passed to --impacted-base-branch."
         ) from err
+    except GitCommandNotFound:
+        return  # Nothing to validate against; the run itself fails open.
     except InvalidGitRepositoryError as err:
         raise UsageError(
             f"No git repository found at or above '{root_dir}'. Make sure you are running from within a git repository."
