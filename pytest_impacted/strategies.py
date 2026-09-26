@@ -202,9 +202,9 @@ def _is_under(path: Path, directory: Path) -> bool:
 def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: Path) -> list[str]:
     """Return the sorted test modules whose files live in *directory* or any subdirectory.
 
-    This is the "same directory and below" impact rule used by
-    :class:`PytestImpactStrategy` for every conftest that changed or imports
-    something that changed.
+    This is the "same directory and below" impact rule used for every edited conftest
+    (:class:`PytestImpactStrategy`) and, when opted in, every conftest that imports
+    changed code (:class:`ConftestImportImpactStrategy`).
     """
     matches = []
     for test_module in dep_tree.nodes:
@@ -235,8 +235,10 @@ def _reached(impacted_modules: list[str], dep_tree: nx.DiGraph) -> set[str]:
     return set().union(*nx.bfs_layers(dep_tree, sources))
 
 
-def _conftest_dirs(nodes: set[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
+def _conftest_dirs(nodes: set[str], dep_tree: nx.DiGraph, root_dir: Path | None) -> set[Path]:
     """Directories of the conftests among *nodes*."""
+    if not root_dir:
+        return set()
     return {
         path.parent
         for node in nodes
@@ -245,6 +247,30 @@ def _conftest_dirs(nodes: set[str], dep_tree: nx.DiGraph, root_dir: Path) -> set
         if is_conftest_module(node)
         if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
     }
+
+
+def _changed_conftest_dirs(changed_files: list[str], root_dir: Path | None) -> set[Path]:
+    """Directories of the changed files named exactly ``conftest.py`` (the only name pytest loads)."""
+    if not root_dir:
+        return set()
+    return {
+        conftest_dir
+        for changed_file in changed_files
+        if PurePosixPath(changed_file).name == "conftest.py"
+        # None: the path could not be normalized
+        if (conftest_dir := _resolve_changed_file_dir(changed_file, root_dir)) is not None
+    }
+
+
+def _tests_under_conftests(conftest_dirs: set[Path], dep_tree: nx.DiGraph, root_dir: Path | None) -> list[str]:
+    """The test modules in each conftest directory and below, each directory scanned once."""
+    if not root_dir:
+        return []
+    return [
+        test_module
+        for conftest_dir in _outermost(conftest_dirs)
+        for test_module in find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir)
+    ]
 
 
 def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
@@ -439,7 +465,12 @@ class ASTImpactStrategy(ImpactStrategy):
 
 
 class PytestImpactStrategy(ImpactStrategy):
-    """Strategy that handles pytest-specific dependencies like conftest.py files."""
+    """Strategy that handles pytest-specific dependencies like conftest.py files.
+
+    An edited conftest impacts every test in its directory and below; a change reaching
+    a pytest plugin impacts every test. A conftest that merely *imports* changed code is
+    left to the opt-in :class:`ConftestImportImpactStrategy`.
+    """
 
     def find_impacted_tests(
         self,
@@ -464,42 +495,36 @@ class PytestImpactStrategy(ImpactStrategy):
         impacted_tests = [node for node in reached if is_test_module(node)]
         impacted_tests += resolve_impacted_tests([m for m in impacted_modules if m not in dep_tree], dep_tree)
 
-        # Add conftest.py impact analysis
-        conftest_impacted_tests = self._find_conftest_impacted_tests(changed_files, reached, root_dir, dep_tree)
+        # Tests never import their conftest — pytest injects its fixtures — so an
+        # edited conftest impacts its whole directory.
+        impacted_tests += _tests_under_conftests(_changed_conftest_dirs(changed_files, root_dir), dep_tree, root_dir)
+        return sorted(set(impacted_tests))
 
-        # Combine and deduplicate
-        all_impacted = list(set(impacted_tests + conftest_impacted_tests))
-        return sorted(all_impacted)
 
-    def _find_conftest_impacted_tests(
+class ConftestImportImpactStrategy(ImpactStrategy):
+    """Strategy for conftests that import changed code, directly or transitively.
+
+    Tests never import their conftest, so a fixture built on changed code is invisible
+    to test-side import analysis. This strategy treats such a conftest like an edited
+    one: every test in its directory and below is impacted. It is safe but coarse — a
+    top-level conftest importing the application selects almost every test on almost
+    every change — so it is opt-in (``--impacted-conftest-imports``).
+    """
+
+    def find_impacted_tests(
         self,
         changed_files: list[str],
-        reached: set[str],
-        root_dir: Path | None,
+        impacted_modules: list[str],
+        ns_module: str,
+        tests_package: str | None = None,
+        root_dir: Path | None = None,
+        session: Any = None,
+        *,
         dep_tree: nx.DiGraph,
     ) -> list[str]:
-        """Find tests under every conftest.py that changed or depends on a change.
-
-        Tests never import their conftest — pytest injects its fixtures — so a
-        conftest reached through the import graph (it imports a changed module)
-        impacts its directory exactly as an edit to the conftest itself does.
-        """
-        if not root_dir:
-            return []
-
-        conftest_dirs = {
-            conftest_dir
-            for conftest_file in changed_files
-            if PurePosixPath(conftest_file).name == "conftest.py"
-            # None: the path could not be normalized
-            if (conftest_dir := _resolve_changed_file_dir(conftest_file, root_dir)) is not None
-        }
-        conftest_dirs.update(_conftest_dirs(reached, dep_tree, root_dir))
-
-        impacted_tests: list[str] = []
-        for conftest_dir in _outermost(conftest_dirs):
-            impacted_tests.extend(find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir))
-        return impacted_tests
+        """Return the tests under every conftest that the changed modules reach."""
+        reached = _reached(impacted_modules, dep_tree)
+        return _tests_under_conftests(_conftest_dirs(reached, dep_tree, root_dir), dep_tree, root_dir)
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):
@@ -594,6 +619,7 @@ def get_default_strategies(
     *,
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
+    conftest_imports: bool = False,
 ) -> list[ImpactStrategy]:
     """Return the default (built-in) strategy list for impact analysis.
 
@@ -606,11 +632,15 @@ def get_default_strategies(
         invalidate_all_patterns: Globs for :class:`InvalidationFileImpactStrategy`,
             whose matches impact every test. The strategy is only added to the
             pipeline when at least one pattern is given.
+        conftest_imports: Include :class:`ConftestImportImpactStrategy`, so a
+            conftest importing changed code impacts every test beneath it.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),
         PytestImpactStrategy(),
     ]
+    if conftest_imports:
+        strategies.append(ConftestImportImpactStrategy())
     if watch_dep_files:
         strategies.append(DependencyFileImpactStrategy())
     if invalidate_all_patterns:

@@ -29,6 +29,7 @@ CLI_OPTION_DESTS = {
     "impacted_tests_dir",
     "no_impacted_dep_files",
     "impacted_invalidate_all",
+    "impacted_conftest_imports",
     "impacted_disable_ext",
 }
 
@@ -70,6 +71,7 @@ def test_pytest_report_header(pytestconfig, monkeypatch):
         ("impacted_base_branch", "main"),
         ("impacted_tests_dir", "tests"),
         ("impacted_invalidate_all", ["*.json"]),
+        ("impacted_conftest_imports", True),
     ):
         monkeypatch.setattr(pytestconfig.option, name, value)
 
@@ -81,6 +83,7 @@ def test_pytest_report_header(pytestconfig, monkeypatch):
     assert "impacted_base_branch=main" in header[0]
     assert "impacted_tests_dir=tests" in header[0]
     assert "impacted_invalidate_all=['*.json']" in header[0]
+    assert "impacted_conftest_imports=True" in header[0]
     assert "backend=" in header[0]
 
 

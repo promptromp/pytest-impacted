@@ -40,6 +40,7 @@ def build_strategy_with_extensions(
     *,
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
+    conftest_imports: bool = False,
     disabled: Sequence[str] = (),
     ext_config: dict[str, Any] | None = None,
 ) -> ImpactStrategy:
@@ -54,6 +55,8 @@ def build_strategy_with_extensions(
         watch_dep_files: Whether to include DependencyFileImpactStrategy.
         invalidate_all_patterns: User globs whose matches impact every test
             (see :class:`~pytest_impacted.strategies.InvalidationFileImpactStrategy`).
+        conftest_imports: Whether a conftest importing changed code impacts every
+            test beneath it (see :class:`~pytest_impacted.strategies.ConftestImportImpactStrategy`).
         disabled: Extension names to exclude.
         ext_config: Configuration values for extensions.
 
@@ -63,6 +66,7 @@ def build_strategy_with_extensions(
     builtin_strategies = get_default_strategies(
         watch_dep_files=watch_dep_files,
         invalidate_all_patterns=invalidate_all_patterns,
+        conftest_imports=conftest_imports,
     )
     ext_strategies = load_extensions(disabled=disabled, ext_config=ext_config)
 
@@ -83,11 +87,12 @@ def get_impacted_tests(
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
     use_merge_base: bool = True,
+    conftest_imports: bool = False,
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
-    ``watch_dep_files`` and ``invalidate_all_patterns`` configure the default
-    pipeline and are ignored when an explicit ``strategy`` is supplied.
+    ``watch_dep_files``, ``invalidate_all_patterns`` and ``conftest_imports`` configure
+    the default pipeline and are ignored when an explicit ``strategy`` is supplied.
     ``use_merge_base`` makes branch mode diff from the fork point (the default)
     rather than the base branch's tip.
 
@@ -104,6 +109,7 @@ def get_impacted_tests(
             get_default_strategies(
                 watch_dep_files=watch_dep_files,
                 invalidate_all_patterns=invalidate_all_patterns,
+                conftest_imports=conftest_imports,
             )
         )
     elif not isinstance(strategy, ImpactStrategy):

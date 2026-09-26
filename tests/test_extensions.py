@@ -22,6 +22,7 @@ from pytest_impacted.extensions import (
 from pytest_impacted.strategies import (
     ASTImpactStrategy,
     CompositeImpactStrategy,
+    ConftestImportImpactStrategy,
     DependencyFileImpactStrategy,
     ImpactStrategy,
     InvalidationFileImpactStrategy,
@@ -483,6 +484,14 @@ class TestBuildStrategyWithExtensions:
         assert isinstance(strategy.strategies[3], InvalidationFileImpactStrategy)
         assert strategy.strategies[3].patterns == ("*.json",)
         assert isinstance(strategy.strategies[4], SimpleStrategy)
+
+    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+    def test_conftest_imports_reaches_builtin_strategies(self, mock_entry_points):
+        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+        strategy = build_strategy_with_extensions(conftest_imports=True)
+        # The opt-in built-in joins the other built-ins, ahead of extensions.
+        assert isinstance(strategy.strategies[2], ConftestImportImpactStrategy)
+        assert isinstance(strategy.strategies[-1], SimpleStrategy)
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_with_extension(self, mock_entry_points):

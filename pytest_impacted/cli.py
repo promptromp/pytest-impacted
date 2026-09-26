@@ -80,6 +80,12 @@ def configure_logging(verbose: bool) -> None:
     metavar="PATTERN",
     help="Glob for files that, when changed, mark ALL tests as impacted (repeatable).",
 )
+@click.option(
+    "--conftest-imports",
+    is_flag=True,
+    default=False,
+    help="Also treat a conftest.py that imports changed code as impacting every test beneath it.",
+)
 @click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
 @click.pass_context
 def impacted_tests_cli(
@@ -93,6 +99,7 @@ def impacted_tests_cli(
     verbose,
     no_dep_files,
     invalidate_all,
+    conftest_imports,
     disable_ext,
     **ext_kwargs,
 ):
@@ -108,6 +115,8 @@ def impacted_tests_cli(
         click.secho("  no-merge-base: True", fg="blue", bold=True, err=True)
     if invalidate_all:
         click.secho("  invalidate-all: {}".format(", ".join(invalidate_all)), fg="blue", bold=True, err=True)
+    if conftest_imports:
+        click.secho("  conftest-imports: True", fg="blue", bold=True, err=True)
     if disable_ext:
         click.secho("  disable-ext: {}".format(", ".join(disable_ext)), fg="blue", bold=True, err=True)
 
@@ -124,6 +133,7 @@ def impacted_tests_cli(
     strategy = build_strategy_with_extensions(
         watch_dep_files=not no_dep_files,
         invalidate_all_patterns=invalidate_all,
+        conftest_imports=conftest_imports,
         disabled=disable_ext,
         ext_config=ext_kwargs,
     )

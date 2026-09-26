@@ -209,9 +209,12 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 ## Strategies
 
 `strategies.py` defines `ImpactStrategy` (ABC) plus `ASTImpactStrategy`,
-`PytestImpactStrategy` (a conftest that changed *or imports something that changed*
-impacts every test in its directory and below — tests never import their conftest, so
-this is invisible to test-side import analysis), `DependencyFileImpactStrategy`
+`PytestImpactStrategy` (an edited conftest impacts every test in its directory and
+below — tests never import their conftest, so this is invisible to test-side import
+analysis), `ConftestImportImpactStrategy` (the same for a conftest that merely *imports*
+changed code; opt-in via `--impacted-conftest-imports`, because a root conftest importing
+the app turned 0.31.0's every edit into a full run — keep it out of the default until
+narrowing can make it selective), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config
 file pytest actually loaded, `session.config.inipath`; disable with
 `--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
