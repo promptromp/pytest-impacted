@@ -1,10 +1,10 @@
 """End-to-end tests for conftests, via pytester and a real git repo.
 
-Tests never import their conftest — pytest injects its fixtures by name. An *edited*
-conftest therefore selects every test in its directory and below. A conftest that only
-*imports* changed code does the same with ``--impacted-conftest-imports``; without it the
-import graph alone decides, since a top-level conftest importing the app would otherwise
-select almost every test on almost every change.
+Tests never import their conftest — pytest injects its fixtures by name. A conftest that
+was edited, or imports changed test code (a fixture module, another conftest), therefore
+selects every test in its directory and below. One importing changed *application* code
+does the same only with ``--impacted-conftest-imports``: a top-level conftest importing the
+app would otherwise select almost every test on almost every change.
 """
 
 import pytest
@@ -78,6 +78,7 @@ def test_opted_in_application_code_reaching_a_conftest_selects_its_directory(
 
     assert_selected(result, passed=passed, skipped=skipped)
     result.stdout.fnmatch_lines(["*impacted_conftest_imports=True*"])
+    result.stdout.no_fnmatch_line("*pass --impacted-conftest-imports*")
 
 
 @pytest.mark.parametrize(
@@ -136,6 +137,22 @@ def test_test_code_reaching_a_conftest_selects_its_directory(make_project, files
     edit(project, edited)
 
     assert_selected(run(project, *args), passed=passed, skipped=skipped)
+
+
+def test_a_fixture_module_in_a_tests_directory_inside_the_package_is_test_code(make_project):
+    """Tests kept inside the package, no ``--impacted-tests-dir``: ``app/tests`` is still test code."""
+    files = {
+        **APP,
+        "app/tests/__init__.py": "",
+        "app/tests/fixtures.py": DB_FIXTURE,
+        "app/tests/db/conftest.py": "from app.tests.fixtures import *  # noqa: F403\n",
+        "app/tests/db/test_db.py": "def test_db(db):\n    assert db\n",
+        "app/tests/other/test_other.py": "def test_other():\n    assert True\n",
+    }
+    project = make_project(files, ini="[pytest]\npythonpath = .\nimpacted_module = app\n")
+    edit(project, "app/tests/fixtures.py")
+
+    assert_selected(run(project), passed=["test_db.py"], skipped=["test_other.py"])
 
 
 @pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])

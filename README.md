@@ -161,7 +161,7 @@ impacted_base_branch = "main"
 impacted_tests_dir = "tests"
 # no_impacted_dep_files = true  # uncomment to disable dep file detection
 # impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
-# impacted_conftest_imports = true  # a conftest importing changed code selects every test beneath it
+# impacted_conftest_imports = true  # a conftest importing changed app code selects every test beneath it
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
 ```
 

@@ -55,8 +55,9 @@ def build_strategy_with_extensions(
         watch_dep_files: Whether to include DependencyFileImpactStrategy.
         invalidate_all_patterns: User globs whose matches impact every test
             (see :class:`~pytest_impacted.strategies.InvalidationFileImpactStrategy`).
-        conftest_imports: Whether a conftest importing changed code impacts every
-            test beneath it (see :class:`~pytest_impacted.strategies.ConftestImportImpactStrategy`).
+        conftest_imports: Whether a conftest importing changed *application* code
+            impacts every test beneath it, as one importing changed test code always does
+            (see :class:`~pytest_impacted.strategies.ConftestImportImpactStrategy`).
         disabled: Extension names to exclude.
         ext_config: Configuration values for extensions.
 
