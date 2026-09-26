@@ -1,4 +1,5 @@
 import os
+import warnings
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,14 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.git import GIT_AVAILABLE, GitMode, InvalidGitRefError, find_repo, rev_args
+from pytest_impacted.git import (
+    GIT_AVAILABLE,
+    GitMode,
+    GitUnavailableError,
+    InvalidGitRefError,
+    find_repo,
+    rev_args,
+)
 
 
 def pytest_addoption(parser: Parser):
@@ -223,15 +231,20 @@ def pytest_collection_modifyitems(session, config, items):
         ext_config=ext_config,
     )
 
-    impacted_tests = get_impacted_tests(
-        impacted_git_mode=impacted_git_mode,
-        impacted_base_branch=impacted_base_branch,
-        root_dir=root_dir,
-        ns_module=ns_module,
-        tests_dir=impacted_tests_dir,
-        session=session,
-        strategy=strategy,
-    )
+    try:
+        impacted_tests = get_impacted_tests(
+            impacted_git_mode=impacted_git_mode,
+            impacted_base_branch=impacted_base_branch,
+            root_dir=root_dir,
+            ns_module=ns_module,
+            tests_dir=impacted_tests_dir,
+            session=session,
+            strategy=strategy,
+        )
+    except GitUnavailableError as err:
+        # Fail open: with the changes unknown, every test may be impacted.
+        warnings.warn(f"pytest-impacted: {err} Running every test.", stacklevel=1)
+        return
     if not impacted_tests:
         # skip all tests
         for item in items:

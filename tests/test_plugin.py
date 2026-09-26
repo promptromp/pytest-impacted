@@ -223,3 +223,34 @@ def test_boolean_ini_values_are_typed(pytester, ini_name):
     config = pytester.parseconfig()
 
     assert config.getini(ini_name) is False
+
+
+def test_runs_every_test_when_git_is_unavailable(pytester):
+    """Fail open: without git the changes are unknown, so nothing may be skipped.
+
+    A real run with git missing from PATH, as in a slim CI container — the
+    case that used to skip the whole suite and exit 0.
+    """
+    pytester.makepyfile(**{"mypkg/__init__.py": "", "tests/test_a.py": "def test_a(): pass\ndef test_b(): pass\n"})
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "--impacted",
+            "--impacted-module=mypkg",
+            "--impacted-git-mode=unstaged",
+            "tests",
+        ],
+        cwd=pytester.path,
+        env={**os.environ, "PATH": str(pytester.path / "no-git")},
+        capture_output=True,
+        text=True,
+        check=False,  # assert below, so a failure reports the child's output
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "2 passed" in result.stdout
+    assert "Running every test" in result.stdout

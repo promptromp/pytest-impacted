@@ -28,6 +28,15 @@ class InvalidGitRefError(ValueError):
     """A ref name was rejected before it could be handed to the git CLI."""
 
 
+class GitUnavailableError(RuntimeError):
+    """Git cannot be run, so the set of changed files is unknown.
+
+    Deliberately an exception rather than an empty result: "no changes" means
+    no test needs to run, whereas "unknown" means every test might, and
+    conflating the two would skip the whole suite and report success.
+    """
+
+
 def validate_rev(rev: str) -> str:
     """Reject refs that git would parse as a command-line option, returning *rev* unchanged.
 
@@ -190,15 +199,15 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     :param repo_dir: path to the project directory (may be a subdirectory of the git root).
     :param git_mode: the git mode to use.
     :param base_branch: the base branch to compare against.
+    :returns: the changed files, or ``None`` when there are none.
+    :raises GitUnavailableError: when git cannot be run at all.
 
     """
     if not GIT_AVAILABLE:
-        warnings.warn(
-            "Git functionality is disabled because GitPython or the git executable is not available. "
-            "To enable git functionality, install GitPython and ensure git CLI is available.",
-            stacklevel=2,
+        raise GitUnavailableError(
+            "GitPython or the git executable is not available, so changed files cannot be determined. "
+            "Install GitPython and ensure the git CLI is on PATH."
         )
-        return None
 
     repo = find_repo(repo_dir)
     if repo.bare:

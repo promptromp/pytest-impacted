@@ -735,12 +735,12 @@ def test_bare_repo_is_a_clear_error(tmp_path, isolated_git_config, mode):
         git.find_impacted_files_in_repo(tmp_path, mode, "main")
 
 
-def test_find_impacted_files_warns_and_returns_none_without_git(monkeypatch):
-    """The runtime guard, distinct from the import-time one pinned in tests/test_plugin.py."""
+def test_find_impacted_files_raises_without_git(monkeypatch):
+    """Unknown changes are an error, never ``None`` — which callers read as "nothing changed"."""
     monkeypatch.setattr(git, "GIT_AVAILABLE", False)
 
-    with pytest.warns(UserWarning, match="git executable is not available"):
-        assert git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None) is None
+    with pytest.raises(git.GitUnavailableError, match="git executable is not available"):
+        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
 
 
 # --- BRANCH mode against a real repository ---------------------------------------

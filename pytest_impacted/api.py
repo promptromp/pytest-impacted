@@ -83,6 +83,10 @@ def get_impacted_tests(
 
     ``watch_dep_files`` and ``invalidate_all_patterns`` configure the default
     pipeline and are ignored when an explicit ``strategy`` is supplied.
+
+    Returns ``None`` when nothing is impacted, and raises
+    :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known
+    because git cannot run — callers must not treat the two alike.
     """
     git_mode = impacted_git_mode
     base_branch = impacted_base_branch
