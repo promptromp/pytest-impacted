@@ -534,17 +534,32 @@ def test_a_conftest_keeps_its_own_name_before_another_takes_it_as_an_alias(tmp_p
     assert "y.conftest" not in project.aliases
 
 
-def test_a_conftest_with_one_name_gets_it_before_one_with_alternatives(tmp_path):
-    """``x/y/conftest.py`` (``y`` is a regular package) is ``y.conftest`` or ``x.y.conftest``;
-    ``y/conftest.py`` can only be ``y.conftest``. Walked first or not, each gets a name."""
+def test_a_conftest_in_a_regular_package_keeps_the_name_python_resolves(tmp_path):
+    """``y`` is a regular package in ``x/``, so ``y.conftest`` is ``x/y/conftest.py`` wherever ``x/`` is on
+    ``sys.path`` — a regular package beats the namespace portion ``y/`` — as ``..conftest`` in its modules is."""
     for rel in ("x/y/__init__.py", "x/y/conftest.py", "x/y/pkg/__init__.py", "y/conftest.py", "y/tests/test_a.py"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
 
     project = discover_project_modules("x/y/pkg", "y/tests", root_dir=tmp_path)
 
-    assert project.modules["y.conftest"] == str((tmp_path / "y/conftest.py").resolve())
-    assert project.modules["x.y.conftest"] == str((tmp_path / "x/y/conftest.py").resolve())
+    assert project.modules["y.conftest"] == str((tmp_path / "x/y/conftest.py").resolve())
+    assert project.modules[".y.conftest"] == str((tmp_path / "y/conftest.py").resolve())
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["walk_order", "reversed"])
+def test_conftest_names_do_not_depend_on_walk_order(reverse):
+    """The conftest rooted at a regular package chooses first, wherever the walk met it."""
+    candidates = {
+        "/p/y/conftest.py": traversal._ConftestCandidate(["y.conftest"], ".y.conftest", in_package=False),
+        "/p/x/y/conftest.py": traversal._ConftestCandidate(["y.conftest", "x.y.conftest"], ".x.y.conftest", True),
+    }
+    if reverse:
+        candidates = dict(reversed(candidates.items()))
+
+    named = traversal._name_conftests(candidates, taken=())
+
+    assert named.modules == {"y.conftest": "/p/x/y/conftest.py", ".y.conftest": "/p/y/conftest.py"}
 
 
 def test_conftests_above_the_packages_are_project_modules_and_resolve(tmp_path, caplog):

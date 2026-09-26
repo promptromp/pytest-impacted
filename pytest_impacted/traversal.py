@@ -278,21 +278,45 @@ class ProjectModules(NamedTuple):
     aliases: dict[str, str]
 
 
-def _conftest_names(directory: Path, root: Path) -> list[str]:
+#: Starts the name of a conftest with no free importable name: no import spells one so.
+LAST_RESORT_PREFIX = "."
+
+
+def import_base(module_name: str) -> str:
+    """The name *module_name*'s relative imports resolve from: itself, less a :data:`LAST_RESORT_PREFIX`."""
+    return module_name.removeprefix(LAST_RESORT_PREFIX)
+
+
+class _ConftestCandidate(NamedTuple):
+    """The names a conftest can take, and whether its preferred one is rooted at a regular package."""
+
+    #: Importable names, preferred first (see :func:`_conftest_candidate`).
+    names: list[str]
+    #: Its name when every one of *names* is taken: unique, and spelled by no import.
+    last_resort: str
+    #: A regular package beats a namespace portion of the same name wherever both are on
+    #: ``sys.path``, so a name rooted at one is the name Python resolves.
+    in_package: bool
+
+
+def _conftest_candidate(directory: Path, root: Path) -> _ConftestCandidate:
     """The names ``directory/conftest.py`` can be imported under, preferred first.
 
-    Preferably the way package discovery names modules, dropping a non-package
-    prefix like ``src/``, so the conftest's relative imports resolve to the modules
-    they refer to; then the name rooted at each other directory that could be on
-    ``sys.path``, as for a package's modules (see :func:`_rooted_names`).
+    Preferably the way package discovery names modules, rooted at the first regular
+    package and dropping a non-package prefix like ``src/``, so the conftest's relative
+    imports resolve to the modules they refer to; then the name rooted at each other
+    directory that could be on ``sys.path``, as for a package's modules (see
+    :func:`_rooted_names`). The last resort is its full path with a leading dot.
     """
     parts = directory.relative_to(root).parts
+    last_resort = LAST_RESORT_PREFIX + ".".join((*parts, "conftest"))
     if not parts:
-        return ["conftest"]
-    _, importable = find_non_package_prefix(str(Path(*parts)), root)
+        return _ConftestCandidate(["conftest"], last_resort, in_package=False)
+    prefix, importable = find_non_package_prefix(str(Path(*parts)), root)
     preferred = f"{path_to_package_name(importable)}.conftest"
     rooted = _rooted_names(parts, (*parts, "conftest"), root, len(parts) - 1, _is_regular_package)
-    return list(dict.fromkeys([preferred, *rooted]))
+    in_package = _is_regular_package(root / prefix / Path(importable).parts[0])
+    return _ConftestCandidate(list(dict.fromkeys([preferred, *rooted])), last_resort, in_package)
 
 
 def discover_ancestor_conftests(
@@ -303,6 +327,8 @@ def discover_ancestor_conftests(
     Returns:
         Dict mapping each conftest's name (``conftest``, ``backend.conftest``; see
         :func:`_discover_ancestor_conftests`) -> absolute file path, like :func:`discover_submodules`.
+        A conftest with no free importable name is keyed by :data:`LAST_RESORT_PREFIX` and its
+        path (``.mysite.conftest``): parse its imports under :func:`import_base` of that name.
     """
     return _discover_ancestor_conftests(packages, root_dir, taken=taken).modules
 
@@ -321,7 +347,7 @@ def _discover_ancestor_conftests(
     provides fixtures to their tests. Package discovery never sees it, so
     without this its imports would be invisible to the dependency graph.
 
-    Each conftest is named from :func:`_conftest_names` around every name in *taken*
+    Each conftest is named from :func:`_conftest_candidate` around every name in *taken*
     (see :func:`_name_conftests`).
 
     Args:
@@ -334,44 +360,41 @@ def _discover_ancestor_conftests(
     """
     root = canonical_root(root_dir)
     seen = set(known_paths)
-    candidates: dict[str, tuple[list[str], str]] = {}
+    candidates: dict[str, _ConftestCandidate] = {}
     for package in packages:
         directory = (root / package_name_to_path(package)).parent
         while directory.is_relative_to(root):
             conftest = directory / "conftest.py"
             if os.path.isfile(conftest) and (path := str(conftest.resolve())) not in seen:
                 seen.add(path)
-                # The full path is unique among conftests; the leading dot keeps it from every import.
-                last_resort = "." + ".".join((*directory.relative_to(root).parts, "conftest"))
-                candidates[path] = (_conftest_names(directory, root), last_resort)
+                candidates[path] = _conftest_candidate(directory, root)
             if directory == root:
                 break
             directory = directory.parent
     return _name_conftests(candidates, taken=taken)
 
 
-def _name_conftests(candidates: dict[str, tuple[list[str], str]], *, taken: Iterable[str]) -> ProjectModules:
-    """Name each conftest path from its ``(names, last_resort)`` candidates, never one in *taken*.
+def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterable[str]) -> ProjectModules:
+    """Name each conftest path from its candidates, never with a name in *taken*.
 
     Names are handed out by rank across all conftests, so one conftest's second choice
-    never takes another's first, and within a rank to the conftests with the fewest
-    names first, so one with alternatives never starves one without. The free names
-    left are aliases, once every conftest has its own. A conftest with no free name gets
-    its *last_resort*, which no import spells, rather than being dropped: that would
-    lose every edge from it.
+    never takes another's first; within a rank, conftests whose names are rooted at a
+    regular package choose first, as Python would resolve the name to them. The free
+    names left are aliases, once every conftest has its own. A conftest with no free
+    name gets its last resort rather than being dropped, which would lose every edge from it.
     """
     used = set(taken)
-    most_constrained_first = sorted(candidates.items(), key=lambda item: len(item[1][0]))
+    in_packages_first = sorted(candidates.items(), key=lambda item: not item[1].in_package)
     chosen: dict[str, str] = {}
-    for rank in range(max((len(names) for names, _ in candidates.values()), default=0)):
-        for path, (names, _) in most_constrained_first:
-            if path not in chosen and rank < len(names) and names[rank] not in used:
-                chosen[path] = names[rank]
-                used.add(names[rank])
-    modules = {chosen.get(path, last_resort): path for path, (_, last_resort) in candidates.items()}
+    for rank in range(max((len(candidate.names) for candidate in candidates.values()), default=0)):
+        for path, candidate in in_packages_first:
+            if path not in chosen and rank < len(candidate.names) and candidate.names[rank] not in used:
+                chosen[path] = candidate.names[rank]
+                used.add(candidate.names[rank])
+    modules = {chosen.get(path, candidate.last_resort): path for path, candidate in candidates.items()}
     aliases: dict[str, str] = {}
     for name, path in modules.items():
-        for alias in candidates[path][0]:
+        for alias in candidates[path].names:
             if alias not in used:
                 aliases[alias] = name
                 used.add(alias)

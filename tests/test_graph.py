@@ -344,8 +344,9 @@ def test_a_conftest_named_like_one_in_the_package_keeps_its_edges(tmp_path):
     files = {
         "mysite/conftest.py": "from mysite.models import Poll\n",
         "mysite/mysite/__init__.py": "",
-        "mysite/mysite/conftest.py": "",
+        "mysite/mysite/conftest.py": "from mysite.views import index\n",
         "mysite/mysite/models.py": "",
+        "mysite/mysite/views.py": "",
     }
     for rel, source in files.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -355,6 +356,10 @@ def test_a_conftest_named_like_one_in_the_package_keeps_its_edges(tmp_path):
 
     assert dep_tree.nodes[".mysite.conftest"]["path"] == str((tmp_path / "mysite/conftest.py").resolve())
     assert dep_tree.has_edge("mysite.models", ".mysite.conftest")
+    # Parsed apart, though both are parsed as ``mysite.conftest``: neither takes the other's imports.
+    assert dep_tree.has_edge("mysite.views", "mysite.conftest")
+    assert not dep_tree.has_edge("mysite.views", ".mysite.conftest")
+    assert not dep_tree.has_edge("mysite.models", "mysite.conftest")
     assert graph.resolve_files_to_nodes(["mysite/conftest.py"], dep_tree, root_dir=tmp_path) == [".mysite.conftest"]
 
 
@@ -376,6 +381,26 @@ def test_a_conftest_with_no_free_name_keeps_its_relative_imports(tmp_path):
 
     assert dep_tree.nodes[".x.conftest"]["path"] == str((tmp_path / "x/conftest.py").resolve())
     assert dep_tree.has_edge("x.x.tests.helpers", ".x.conftest")
+
+
+def test_a_module_in_a_regular_package_reaches_its_conftest_by_relative_import(tmp_path):
+    """``from ..conftest import helper`` in ``x/y/pkg/mod.py`` can only mean ``x/y/conftest.py``."""
+    files = {
+        "x/y/__init__.py": "",
+        "x/y/conftest.py": "def helper(): ...\n",
+        "x/y/pkg/__init__.py": "",
+        "x/y/pkg/mod.py": "from ..conftest import helper\n",
+        "y/conftest.py": "",
+        "y/tests/test_a.py": "from y.pkg import mod\n",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("x/y/pkg", tests_package="y/tests", root_dir=tmp_path)
+
+    conftest = graph.resolve_files_to_nodes(["x/y/conftest.py"], dep_tree, root_dir=tmp_path)
+    assert graph.resolve_impacted_tests(conftest, dep_tree) == ["tests.test_a"]
 
 
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):

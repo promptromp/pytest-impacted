@@ -12,7 +12,7 @@ from pytest_impacted.parsing import (
     parse_file_imports,
     parse_pytest_plugins,
 )
-from pytest_impacted.traversal import discover_project_modules, modules_for_files
+from pytest_impacted.traversal import LAST_RESORT_PREFIX, discover_project_modules, import_base, modules_for_files
 
 
 logger = logging.getLogger(__name__)
@@ -21,15 +21,20 @@ logger = logging.getLogger(__name__)
 def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
     """Parse imports for all discovered submodules.
 
-    A conftest with no free name is keyed by a leading dot (see
+    A conftest with no free name is keyed by its last resort (see
     :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), which is no base
-    for its relative imports, so it is parsed under the name without the dot, its
-    path from the root. That name belongs to another module, so it is parsed apart.
+    for its relative imports, so it is parsed under its
+    :func:`~pytest_impacted.traversal.import_base`. That name may belong to another
+    module, so it is parsed apart.
     """
-    last_resort = {name for name in submodules if name.startswith(".")}
-    result = _parse_imports({name: path for name, path in submodules.items() if name not in last_resort})
-    parsed = _parse_imports({name[1:]: submodules[name] for name in last_resort})
-    return result | {f".{name}": imports for name, imports in parsed.items()}
+    bases = {import_base(name): name for name in submodules if name.startswith(LAST_RESORT_PREFIX)}
+    if not bases:
+        return _parse_imports(submodules)
+    result = _parse_imports(
+        {name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)}
+    )
+    parsed = _parse_imports({base: submodules[name] for base, name in bases.items()})
+    return result | {bases[base]: imports for base, imports in parsed.items()}
 
 
 def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
