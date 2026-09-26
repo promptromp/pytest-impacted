@@ -498,6 +498,12 @@ def test_discover_ancestor_conftests_without_any(tmp_path):
             {"src.app.conftest": "app.conftest"},
             id="importable_under_its_full_path_too",
         ),
+        pytest.param(
+            ["src/company/conftest.py", "src/company/app/__init__.py"],
+            "src/company/app",
+            {"company.conftest": "src.company.conftest"},
+            id="below_a_namespace_package",
+        ),
     ],
 )
 def test_every_conftest_is_one_module_under_its_own_name(tmp_path, files, package, aliases):

@@ -12,7 +12,7 @@ from pytest_impacted.parsing import (
     parse_file_imports,
     parse_pytest_plugins,
 )
-from pytest_impacted.traversal import discover_project_modules
+from pytest_impacted.traversal import discover_project_modules, modules_for_files
 
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,16 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
+def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
+    """Resolve changed files (relative to *root_dir*, as git reports them) to the graph's nodes.
+
+    Through the nodes' own ``path``, not a second discovery: every module returned is a
+    node, however the graph was cached. A module the graph lacks would read as a
+    production module outside it, and :func:`resolve_impacted_tests` would select every test.
+    """
+    return modules_for_files(filenames, {path: node for node, path in dep_tree.nodes(data="path") if path}, root_dir)
+
+
 def _pytest_plugin_edges(submodules: dict[str, str], aliases: dict[str, str]) -> dict[str, list[str]]:
     """``{declaring module: [plugin modules]}`` for every ``pytest_plugins`` declaration in scope.
 
@@ -144,7 +154,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
 
     # Other names each module imports under (see discover_project_modules), for names
     # that come from outside the source, such as ``-p`` plugins.
-    digraph.graph["aliases"] = dict(aliases)  # a copy: the discovery result is cached and shared
+    digraph.graph["aliases"] = aliases
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     return digraph.reverse()

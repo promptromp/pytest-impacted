@@ -324,18 +324,37 @@ def test_every_node_resolves_back_to_itself(tmp_path):
         assert resolve_files_to_modules([changed], "backend/app", "suite", root_dir=tmp_path) == [node], changed
 
 
-def test_the_resolvers_never_name_a_module_the_cached_graph_lacks(tmp_path):
-    """A conftest created after the graph was built must not resolve to a missing node, which
-    would read as a production module outside the graph and select every test."""
-    for rel in ("backend/app/__init__.py", "suite/test_a.py"):
+def test_changed_files_resolve_to_the_graph_nodes_with_that_path(tmp_path):
+    """Including a conftest above the package; a file created after the graph was cached is no node."""
+    for rel in ("backend/conftest.py", "backend/app/__init__.py", "backend/app/db.py", "suite/test_a.py"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
     dep_tree = cached_build_dep_tree("backend/app", "suite", root_dir=tmp_path)
-    (tmp_path / "backend/conftest.py").touch()
+    (tmp_path / "suite/test_new.py").touch()
 
-    resolved = resolve_files_to_modules(["backend/conftest.py"], "backend/app", "suite", root_dir=tmp_path)
+    changed = ["backend/conftest.py", "backend/app/db.py", "suite/test_new.py", "gone.py", "README.md"]
 
-    assert set(resolved) <= set(dep_tree.nodes)
+    assert graph.resolve_files_to_nodes(changed, dep_tree, root_dir=tmp_path) == ["backend.conftest", "app.db"]
+
+
+def test_a_conftest_named_like_one_in_the_package_keeps_its_edges(tmp_path):
+    """Django's ``mysite/conftest.py`` beside ``mysite/mysite/conftest.py``: no importable name is
+    free, so it is named with a leading dot, which no import spells, and keeps its own imports."""
+    files = {
+        "mysite/conftest.py": "from mysite.models import Poll\n",
+        "mysite/mysite/__init__.py": "",
+        "mysite/mysite/conftest.py": "",
+        "mysite/mysite/models.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("mysite/mysite", root_dir=tmp_path)
+
+    assert dep_tree.nodes[".mysite.conftest"]["path"] == str((tmp_path / "mysite/conftest.py").resolve())
+    assert dep_tree.has_edge("mysite.models", ".mysite.conftest")
+    assert graph.resolve_files_to_nodes(["mysite/conftest.py"], dep_tree, root_dir=tmp_path) == [".mysite.conftest"]
 
 
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):

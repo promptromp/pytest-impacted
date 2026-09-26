@@ -60,8 +60,10 @@ must resolve to the module name `my_package`, or AST-parsed imports will not mat
 discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
-(`cached_build_dep_tree → .copy() → enrich_dep_tree → setup → find_impacted_tests →
-teardown`). The copy is load-bearing: without it, extension enrichment pollutes the
+(`cached_build_dep_tree → .copy() → resolve_files_to_nodes → enrich_dep_tree → setup →
+find_impacted_tests → teardown`). Changed files resolve through the graph's own node
+`path`s, never a second discovery: a module the (cached) graph lacks would read as a
+production module outside it, and `resolve_impacted_tests` would select every test. The copy is load-bearing: without it, extension enrichment pollutes the
 LRU-cached base graph and the next run in the same process starts dirty. `teardown`
 runs in a `finally`.
 
@@ -72,14 +74,11 @@ strategy decide. This is why `DependencyFileImpactStrategy`, which operates on
 non-Python files, needs no special-casing. Keep it that way.
 
 **The dependency graph is built once** and passed to every strategy as a required
-keyword-only `dep_tree`. The caches live on *private* inner functions —
-`_cached_build_dep_tree` (maxsize=8), `_discover_submodules` and
-`_discover_project_modules` — because the public wrappers must canonicalize `root_dir`
-before the lookup. `clear_dep_tree_cache()` clears them all (via
-`traversal.clear_discovery_cache()`); `discover_submodules.cache_clear` is a back-compat
-alias onto the inner cache. Project discovery is cached so the graph and the changed-file
-resolvers see one snapshot: a file the resolver names but the cached graph lacks reads as
-a production module outside the graph, which selects every test.
+keyword-only `dep_tree`. Both caches live on *private* inner functions —
+`_cached_build_dep_tree` (maxsize=8) and `_discover_submodules` — because the public
+wrappers must canonicalize `root_dir` before the lookup. `clear_dep_tree_cache()`
+clears both (via `traversal.clear_discovery_cache()`); `discover_submodules.cache_clear`
+is a back-compat alias onto the inner cache.
 
 **Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref
 straight to `repo.git.<cmd>(...)`. It validates each ref with `validate_rev` (rejecting
@@ -138,8 +137,9 @@ sees a root-level `conftest.py`, so `discover_project_modules` adds them via
 them, an edit to `backend/conftest.py` resolved to nothing and reached no conftest
 importing it. They are named the way package discovery names modules (`conftest`,
 `backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
-resolve; the full path name (`src.app.conftest`) is the next choice, and an alias when
-free. They are named around every name in use, aliases included — taking an alias would
+resolve; the names rooted at the other directories that could be on `sys.path`
+(`src.app.conftest`, `company.conftest` — `_rooted_names`, as for a package's modules) are
+the next choices, and aliases when free. They are named around every name in use, aliases included — taking an alias would
 re-point imports of a package file — and with no name free a conftest is named with a
 leading dot (`.mysite.conftest`, which no import spells) rather than dropped: a dropped
 conftest loses every edge from it. A conftest is recognised by its file
