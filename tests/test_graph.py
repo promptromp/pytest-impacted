@@ -6,6 +6,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted import graph
+from pytest_impacted.traversal import ProjectModules
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ def test_build_dep_tree():
 
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
+        patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
         patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
     ):
@@ -107,7 +108,7 @@ def test_changed_init_with_no_dependents_impacts_nothing():
 
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
+        patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
         patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
@@ -138,7 +139,7 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
 
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
+        patch("pytest_impacted.graph.discover_project_modules", return_value=ProjectModules(mock_submodules, {})),
         patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
@@ -277,3 +278,23 @@ def test_namespace_subpackage_modules_are_linked_by_absolute_and_relative_import
     assert dep_tree.has_edge("app.processors.util", "app.processors.ocr")
     assert dep_tree.has_edge("app.processors.ocr", "tests.test_ocr")
     assert graph.resolve_impacted_tests(["app.processors.util"], dep_tree) == ["tests.test_ocr"]
+
+
+def test_a_file_reached_under_two_names_is_one_node(tmp_path):
+    """A tests dir inside the package is walked by both discoveries; its files must not be doubled."""
+    files = {
+        "app/__init__.py": "",
+        "app/core.py": "",
+        "app/tests/helpers.py": "import app.core\n",
+        "app/tests/test_a.py": "from tests.helpers import make\n",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path)
+
+    paths = [dep_tree.nodes[node]["path"] for node in dep_tree.nodes]
+    assert len(paths) == len(set(paths))
+    # ``tests.helpers`` is an alias of ``app.tests.helpers``: the import still becomes an edge.
+    assert "app.tests.test_a" in graph.resolve_impacted_tests(["app.core"], dep_tree)

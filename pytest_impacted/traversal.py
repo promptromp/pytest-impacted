@@ -1,11 +1,13 @@
 """Python package and module traversal utilities."""
 
+import importlib.machinery
 import logging
 import os
 import pkgutil
 from collections.abc import Collection, Iterable
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 
 logger = logging.getLogger(__name__)
@@ -132,7 +134,7 @@ def _discover_pkgutil_impl(
                 sub_scan_path = os.path.join(scan_path, module_parts[-1])
                 results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root, ancestors=ancestors))
 
-    for portion in _namespace_portions(root / scan_path):
+    for portion in _namespace_portions(root / scan_path, root):
         sub_scan_path = os.path.join(scan_path, portion)
         results.update(
             _discover_pkgutil_impl(f"{module_name}.{portion}", sub_scan_path, non_pkg_prefix, root, ancestors=ancestors)
@@ -145,31 +147,55 @@ def _discover_pkgutil_impl(
 #: them costs time and adds phantom graph nodes (``node_modules`` holds thousands).
 _NEVER_PACKAGES = frozenset({"__pycache__", "node_modules"})
 
+#: File suffixes the import system loads as modules (``.py``, ``.pyc``, extension modules).
+#: Read from a constant table: nothing is imported.
+_MODULE_SUFFIXES = tuple(importlib.machinery.all_suffixes())
 
-def _namespace_portions(directory: Path) -> list[str]:
+
+def _namespace_portions(directory: Path, root: Path) -> list[str]:
     """Sub-directories of *directory* that ``pkgutil`` skips but the import system resolves.
 
     ``pkgutil.iter_modules`` lists only regular packages, those with an ``__init__.py``.
     Since PEP 420, any directory inside a package whose name is an identifier imports
     as an implicit namespace package — ``import pkg.processors.ocr`` works when
     ``processors/`` has no ``__init__.py`` — so its modules are part of the package.
+    As in the import system, a module beside it with the same name (``processors.py``)
+    wins, and the directory is not a package at all.
 
     Like ``pkgutil``, a directory that cannot be listed — missing, or unreadable, such
     as a container's bind-mounted data directory — has no modules; the ``os.path``
-    checks likewise treat an unreadable entry as absent rather than raising.
+    checks likewise treat an unreadable entry as absent rather than raising. A
+    symlinked portion is followed only while it stays inside the project and does
+    not point back up the tree (see :func:`_is_walkable_link_target`).
     """
     try:
-        entries = sorted(os.listdir(directory))
+        entries = set(os.listdir(directory))
     except OSError:
         return []
+    real_directory = Path(os.path.realpath(directory))
     return [
         name
-        for name in entries
+        for name in sorted(entries)
         if name.isidentifier()
         and name not in _NEVER_PACKAGES
+        and not any(f"{name}{suffix}" in entries for suffix in _MODULE_SUFFIXES)
         and os.path.isdir(directory / name)
         and not os.path.isfile(directory / name / "__init__.py")
+        and _is_walkable_link_target(directory / name, real_directory, root)
     ]
+
+
+def _is_walkable_link_target(path: Path, real_parent: Path, root: Path) -> bool:
+    """Whether a namespace portion's real location is safe to walk.
+
+    Before namespace portions were walked, a directory without ``__init__.py`` was
+    never entered, so a symlink out of the project (``pkg/media -> /mnt/storage``) or
+    back up it (``pkg/ns/up -> ../..``) cost nothing. Walking one would list a whole
+    external tree, or re-walk the project under a second name. Neither can hold a
+    changed project file under that name, so both are skipped.
+    """
+    real = Path(os.path.realpath(path))
+    return real.is_relative_to(root) and not real_parent.is_relative_to(real)
 
 
 def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
@@ -288,6 +314,70 @@ def discover_ancestor_conftests(
     return found
 
 
+class ProjectModules(NamedTuple):
+    """The modules of a project: one canonical name per file, plus the other names that reach it."""
+
+    #: Canonical dotted name -> absolute file path. Each file appears once.
+    modules: dict[str, str]
+    #: Another importable name -> the canonical name of the same file.
+    aliases: dict[str, str]
+
+
+def discover_project_modules(
+    package: str, tests_package: str | None = None, root_dir: str | Path | None = None
+) -> ProjectModules:
+    """Discover *package* and *tests_package* together, naming every file exactly once.
+
+    A file can be imported under several names, and each must reach it, but it must
+    be one graph node — two would double every count and hand each consumer the
+    same test twice. The package walk's name is canonical; the others are aliases:
+
+    * A tests dir inside the package is walked twice: ``app.tests.x`` by the package
+      walk, ``tests.x`` by the tests-dir walk (importable when the tests dir is on
+      ``sys.path``, as pytest's rootdir-relative imports make it).
+    * A package below a non-package prefix — ``src/app``, or ``src/company/app``
+      where ``company/`` is a namespace package — is named ``app.x``, but may be
+      imported as ``company.app.x`` or ``src.app.x`` depending on ``sys.path``.
+    """
+    root = canonical_root(root_dir)
+    modules = dict(discover_submodules(package, require_init=True, root_dir=root))
+    aliases = _prefix_aliases(package, modules, root)
+    if tests_package:
+        canonical_of = {path: name for name, path in modules.items()}
+        for name, path in discover_submodules(tests_package, require_init=False, root_dir=root).items():
+            if canonical_of.get(path, name) == name:
+                modules[name] = path
+            else:
+                aliases.setdefault(name, canonical_of[path])
+    return ProjectModules(modules, {alias: name for alias, name in aliases.items() if alias not in modules})
+
+
+def _prefix_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str, str]:
+    """Names of *modules* rooted at another directory that could be on ``sys.path``.
+
+    Any directory that is not a regular package can be a ``sys.path`` entry: ``src/``
+    usually is, a namespace package such as ``company/`` usually is not, and
+    ``find_non_package_prefix`` cannot tell them apart. So besides the canonical
+    name, a module is reachable under each name rooted at the project root or just
+    below such a directory.
+    """
+    fs_path = package_name_to_path(package)
+    _, importable = find_non_package_prefix(fs_path, root)
+    canonical = path_to_package_name(importable)
+    parts = Path(fs_path).parts
+    alternatives = {
+        ".".join(parts[start:])
+        for start in range(len(parts))
+        if start == 0 or not root.joinpath(*parts[:start], "__init__.py").is_file()
+    } - {canonical}
+    return {
+        f"{alternative}{name[len(canonical) :]}": name
+        for alternative in alternatives
+        for name in modules
+        if name == canonical or name.startswith(f"{canonical}.")
+    }
+
+
 def resolve_files_to_modules(
     filenames: list[str],
     ns_module: str,
@@ -300,18 +390,8 @@ def resolve_files_to_modules(
     *filenames* are interpreted relative to *root_dir*, as git reports them.
     """
     root = canonical_root(root_dir)
-    submodules = discover_submodules(ns_module, require_init=True, root_dir=root)
-    if tests_package:
-        logger.debug("Adding modules from tests_package: %s", tests_package)
-        test_submodules = discover_submodules(tests_package, require_init=False, root_dir=root)
-        submodules = {**submodules, **test_submodules}
-
-    # Reverse mapping: absolute file path -> every module name it was discovered under.
-    # A tests dir inside the package is found twice (``app.tests.x`` by the package
-    # walk, ``tests.x`` by the tests-dir walk) and importers may use either name.
-    path_to_modules: dict[str, list[str]] = {}
-    for name, path in submodules.items():
-        path_to_modules.setdefault(path, []).append(name)
+    modules = discover_project_modules(ns_module, tests_package, root_dir=root).modules
+    path_to_module = {path: name for name, path in modules.items()}
 
     resolved_modules = []
     for file in filenames:
@@ -319,8 +399,8 @@ def resolve_files_to_modules(
             continue
 
         abs_path = str((root / file).resolve())
-        if abs_path in path_to_modules:
-            resolved_modules.extend(path_to_modules[abs_path])
+        if abs_path in path_to_module:
+            resolved_modules.append(path_to_module[abs_path])
         elif not Path(abs_path).exists():
             logger.debug("File %s no longer exists; nothing to resolve", file)
         else:
@@ -342,10 +422,7 @@ def resolve_modules_to_files(
 
     Uses filesystem-based discovery (no imports) to find module files.
     """
-    root = canonical_root(root_dir)
-    submodules = discover_submodules(ns_module, require_init=True, root_dir=root)
-    if tests_package:
-        submodules = {**submodules, **discover_submodules(tests_package, require_init=False, root_dir=root)}
+    submodules = discover_project_modules(ns_module, tests_package, root_dir=root_dir).modules
 
     result = []
     for module_name in modules:

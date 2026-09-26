@@ -12,7 +12,7 @@ from pytest_impacted.parsing import (
     parse_file_imports,
     parse_pytest_plugins,
 )
-from pytest_impacted.traversal import discover_ancestor_conftests, discover_submodules
+from pytest_impacted.traversal import discover_ancestor_conftests, discover_project_modules
 
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
-def _pytest_plugin_edges(submodules: dict[str, str]) -> dict[str, list[str]]:
+def _pytest_plugin_edges(submodules: dict[str, str], aliases: dict[str, str]) -> dict[str, list[str]]:
     """``{declaring module: [plugin modules]}`` for every ``pytest_plugins`` declaration in scope.
 
     pytest reads the declaration from conftests and test modules, and again from
@@ -97,7 +97,8 @@ def _pytest_plugin_edges(submodules: dict[str, str]) -> dict[str, list[str]]:
         if name in edges:
             continue
         edges[name] = []
-        for plugin in parse_pytest_plugins(submodules[name]):
+        for declared in parse_pytest_plugins(submodules[name]):
+            plugin = aliases.get(declared, declared)
             if plugin not in submodules:
                 logger.debug("pytest_plugins entry %r in %s is not an analysed module; not followed", plugin, name)
                 continue
@@ -120,12 +121,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are flagged with
     the ``pytest_plugin`` attribute.
     """
-    submodules = discover_submodules(package, require_init=True, root_dir=root_dir)
-
-    if tests_package:
-        logger.debug("Adding modules from tests_package: %s", tests_package)
-        test_submodules = discover_submodules(tests_package, require_init=False, root_dir=root_dir)
-        submodules = {**submodules, **test_submodules}
+    submodules, aliases = discover_project_modules(package, tests_package, root_dir=root_dir)
 
     # Skip any the package scan already found: the walk up from a tests
     # directory inside the package passes through package directories.
@@ -139,12 +135,13 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     # Parse imports — Rust parallel path or Python sequential fallback
     all_imports = _parse_all_module_imports(submodules)
 
-    plugin_edges = _pytest_plugin_edges(submodules)
+    plugin_edges = _pytest_plugin_edges(submodules, aliases)
 
     digraph = nx.DiGraph()
     for name, file_path in submodules.items():
         digraph.add_node(name, path=file_path)
-        for imp in [*all_imports.get(name, []), *plugin_edges.get(name, [])]:
+        for candidate in [*all_imports.get(name, []), *plugin_edges.get(name, [])]:
+            imp = aliases.get(candidate, candidate)
             if imp in submodules:
                 digraph.add_node(imp)
                 digraph.add_edge(name, imp)

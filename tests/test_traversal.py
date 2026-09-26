@@ -12,6 +12,7 @@ from pytest_impacted import traversal
 from pytest_impacted.traversal import (
     clear_discovery_cache,
     discover_ancestor_conftests,
+    discover_project_modules,
     discover_submodules,
     find_non_package_prefix,
     iter_namespace,
@@ -507,6 +508,7 @@ def make_package(root: Path, prefix: str, *rels: str) -> None:
         ),
         pytest.param(["pkg/my-data/x.py", "pkg/.cache/y.py"], set(), id="non_identifier_directories_cannot_import"),
         pytest.param(["pkg/node_modules/lodash/fp.py", "pkg/__pycache__/x.py"], set(), id="never_package_directories"),
+        pytest.param(["pkg/foo.py", "pkg/foo/bar.py"], {"pkg.foo"}, id="a_same_named_module_shadows_the_directory"),
     ],
 )
 def test_namespace_subpackages_are_discovered(tmp_path, prefix, files, expected):
@@ -539,21 +541,83 @@ def test_an_unreadable_directory_has_no_modules(tmp_path, prefix):
     assert set(found) == {"pkg.core"}
 
 
-def test_a_symlink_back_up_the_tree_is_not_followed_forever(tmp_path, prefix):
-    """Followed, a link to ``.`` names the module once per level until the OS gives up (and two
-    links make that ~2**32 walks); instead each module keeps its one real name."""
-    make_package(tmp_path, prefix, "pkg/ns/mod.py")
-    (tmp_path / prefix / "pkg/ns/loop").symlink_to(".", target_is_directory=True)
+@pytest.mark.parametrize(
+    ("links", "expected"),
+    [
+        pytest.param({"pkg/ns/loop": "."}, set(), id="to_itself"),
+        pytest.param({"pkg/ns/up": "../.."}, set(), id="up_to_the_project_root"),
+        pytest.param({"pkg/media": "../../external"}, set(), id="out_of_the_project"),
+        pytest.param({"pkg/a/x": "../b", "pkg/b/y": "../a"}, {"pkg.a.x.mod_b", "pkg.b.y.mod_a"}, id="crossed"),
+        pytest.param({"pkg/alias": "../shared"}, {"pkg.alias.mod_shared"}, id="within_the_project_is_followed"),
+    ],
+)
+def test_symlinked_namespace_portions(tmp_path, links, expected):
+    """A link is followed like the import system follows it, but never out of the project or back up it."""
+    root = tmp_path / "project"
+    for rel in ("pkg/__init__.py", "pkg/ns/mod.py", "pkg/a/mod_a.py", "pkg/b/mod_b.py", "shared/mod_shared.py"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).touch()
+    (tmp_path / "external").mkdir()
+    (tmp_path / "external/mod_ext.py").touch()
+    for link, target in links.items():
+        (root / link).symlink_to(target, target_is_directory=True)
 
-    assert set(discover_submodules(f"{prefix}pkg", root_dir=tmp_path)) == {"pkg.ns.mod"}
+    found = set(discover_submodules("pkg", root_dir=root))
+
+    assert found - {"pkg.ns.mod", "pkg.a.mod_a", "pkg.b.mod_b"} == expected
 
 
-def test_a_file_found_under_two_names_resolves_to_both(tmp_path):
-    """A tests dir inside the package is walked as ``app.tests`` and as ``tests``; importers use either."""
-    for rel in ("app/__init__.py", "app/tests/factories.py"):
+@pytest.mark.parametrize(
+    ("files", "package", "tests_package", "canonical", "aliases"),
+    [
+        pytest.param(
+            ["app/__init__.py", "app/tests/factories.py"],
+            "app",
+            "app/tests",
+            "app.tests.factories",
+            {"tests.factories"},
+            id="tests_dir_inside_the_package",
+        ),
+        pytest.param(
+            ["src/app/__init__.py", "src/app/core.py"], "src/app", None, "app.core", {"src.app.core"}, id="src_layout"
+        ),
+        pytest.param(
+            ["src/company/app/__init__.py", "src/company/app/core.py"],
+            "src/company/app",
+            None,
+            "app.core",
+            {"company.app.core", "src.company.app.core"},
+            id="package_below_a_namespace_package",
+        ),
+        pytest.param(
+            ["src/company/app/__init__.py", "src/company/app/core.py"],
+            "src/company",
+            None,
+            "src.company.app.core",
+            {"company.app.core"},
+            id="top_level_namespace_package",
+        ),
+        pytest.param(
+            ["app/__init__.py", "app/sub/__init__.py", "app/sub/x.py"],
+            "app/sub",
+            None,
+            "app.sub.x",
+            set(),
+            id="a_regular_package_is_never_a_sys_path_root",
+        ),
+    ],
+)
+def test_each_file_has_one_canonical_name_and_its_other_names_as_aliases(
+    tmp_path, files, package, tests_package, canonical, aliases
+):
+    """A file is one module, however many names reach it: two nodes would double every count."""
+    for rel in files:
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
+    path = str((tmp_path / files[-1]).resolve())
 
-    modules = resolve_files_to_modules(["app/tests/factories.py"], "app", tests_package="app/tests", root_dir=tmp_path)
+    project = discover_project_modules(package, tests_package, root_dir=tmp_path)
 
-    assert sorted(modules) == ["app.tests.factories", "tests.factories"]
+    assert [name for name, p in project.modules.items() if p == path] == [canonical]
+    assert {alias for alias, name in project.aliases.items() if name == canonical} == aliases
+    assert resolve_files_to_modules([files[-1]], package, tests_package, root_dir=tmp_path) == [canonical]

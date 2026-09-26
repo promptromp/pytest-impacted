@@ -31,10 +31,19 @@ dropped from names; `False` uses `Path.rglob` for test directories, which freque
 `__init__.py`, naming modules by path. Picking the wrong one silently finds nothing.
 Despite the name, `True` also walks sub-directories *without* `__init__.py`
 (`_namespace_portions`): since PEP 420 they import as namespace packages, and `pkgutil`
-skips them. That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
-modules (never raise — it would be an INTERNALERROR), and a symlink back up the tree is not
-re-entered. A tests dir inside the package is discovered under two names (`app.tests.x`
-and `tests.x`), so `resolve_files_to_modules` returns every name of a changed file.
+skips them — unless a same-named module (`foo.py` beside `foo/`) shadows them, as in the
+import system. That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
+modules (never raise — it would be an INTERNALERROR), and a symlinked portion is followed
+only while it stays inside the project and does not point back up the tree.
+
+**One file is one graph node, under one canonical name.** `discover_project_modules` is the
+only place the package and tests-dir walks are merged — `build_dep_tree` and both
+`resolve_*` functions go through it. The package walk's name is canonical; every other name
+the file imports under is an *alias* (`tests.x` for `app/tests/x.py`; `company.app.x` and
+`src.app.x` for `src/company/app/x.py`, since any directory that is not a regular package can
+be on `sys.path`). Import candidates and `pytest_plugins` entries are mapped through
+`aliases` before edges are added. Two nodes for one file would double every count and hand
+each consumer the same test twice.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`
@@ -156,7 +165,7 @@ don't re-implement either.
 
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`
 emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg`, so
-`build_dep_tree` filters candidates against `discover_submodules` instead. The apparent
+`build_dep_tree` filters candidates against the discovered modules (and their aliases) instead. The apparent
 over-emission is the design, not a bug.
 
 **The Python and Rust backends must agree exactly.** `parsing.py` (astroid) and
