@@ -191,6 +191,19 @@ def clear_discovery_cache() -> None:
 discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: ignore[attr-defined]
 
 
+def _conftest_module_name(directory: Path, root: Path) -> str:
+    """Dotted name for ``directory/conftest.py``, dropping a non-package prefix like ``src/``.
+
+    Named the way package discovery names modules, so the conftest's relative
+    imports resolve to the same names as the modules they refer to.
+    """
+    relative = directory.relative_to(root)
+    if not relative.parts:
+        return "conftest"
+    _, importable = find_non_package_prefix(str(relative), root)
+    return f"{path_to_package_name(importable)}.conftest"
+
+
 def discover_ancestor_conftests(packages: Iterable[str], root_dir: str | Path | None = None) -> dict[str, str]:
     """Find the ``conftest.py`` files between *root_dir* and each package directory.
 
@@ -200,8 +213,9 @@ def discover_ancestor_conftests(packages: Iterable[str], root_dir: str | Path | 
     without this its imports would be invisible to the dependency graph.
 
     Returns:
-        Dict mapping a dotted name relative to *root_dir* (``conftest``,
-        ``backend.conftest``) -> absolute file path, like :func:`discover_submodules`.
+        Dict mapping a dotted name (``conftest``, ``backend.conftest``; a non-package
+        prefix such as ``src/`` is dropped, as package discovery does) -> absolute
+        file path, like :func:`discover_submodules`.
     """
     root = canonical_root(root_dir)
     found: dict[str, str] = {}
@@ -210,7 +224,7 @@ def discover_ancestor_conftests(packages: Iterable[str], root_dir: str | Path | 
         while directory.is_relative_to(root):
             conftest = directory / "conftest.py"
             if conftest.is_file():
-                found[".".join((*directory.relative_to(root).parts, "conftest"))] = str(conftest.resolve())
+                found[_conftest_module_name(directory, root)] = str(conftest.resolve())
             if directory == root:
                 break
             directory = directory.parent

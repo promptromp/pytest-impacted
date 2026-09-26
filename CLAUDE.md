@@ -141,8 +141,10 @@ which unions results. `get_default_strategies()` builds the default composition.
 
 **Conftests above the analysed packages are graph nodes too.** Package discovery never
 sees a root-level `conftest.py`, so `build_dep_tree` adds them via
-`discover_ancestor_conftests` (named by dotted path from the root: `conftest`,
-`backend.conftest`). Every node carries its source file in the `path` attribute. Resolve
+`discover_ancestor_conftests`, named the way package discovery names modules (`conftest`,
+`backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
+resolve. A conftest is recognised by its file name, `conftest.py`, on both the changed-file
+and the graph path. Every node carries its source file in the `path` attribute. Resolve
 a node to a file with `_module_path`, never by rebuilding a path from the dotted name —
 that silently fails for src-layout, where the name drops `src/`. `is_test_module` is
 false for any `conftest`, even under `tests/`: it holds fixtures, never tests.

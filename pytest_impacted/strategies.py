@@ -185,15 +185,20 @@ def _outermost(directories: set[Path]) -> list[Path]:
 
 
 def _reached_conftest_dirs(impacted_modules: list[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
-    """Directories of the conftests that depend, directly or transitively, on *impacted_modules*."""
-    dirs: set[Path] = set()
-    for module in impacted_modules:
-        if module not in dep_tree:
-            continue
-        for node in nx.dfs_preorder_nodes(dep_tree, source=module):
-            if node.rpartition(".")[2] == "conftest" and (path := _module_path(node, dep_tree, root_dir)):
-                dirs.add(path.parent)
-    return dirs
+    """Directories of the conftests that depend, directly or transitively, on *impacted_modules*.
+
+    One multi-source traversal, so a large changeset does not re-walk shared descendants.
+    """
+    sources = [module for module in impacted_modules if module in dep_tree]
+    if not sources:
+        return set()
+    reached = set().union(*nx.bfs_layers(dep_tree, sources))
+    return {
+        path.parent
+        for node in reached
+        # The file name, as for changed files: a package named ``conftest`` is not one.
+        if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
+    }
 
 
 class ImpactStrategy(ABC):
@@ -407,7 +412,8 @@ class PytestImpactStrategy(ImpactStrategy):
         conftest_dirs = {
             conftest_dir
             for conftest_file in changed_files
-            if PurePosixPath(conftest_file).name == "conftest.py"
+            # Path, not PurePosixPath: monorepo paths are OS-native (backslashes on Windows).
+            if Path(conftest_file).name == "conftest.py"
             # None: the path could not be normalized
             if (conftest_dir := _resolve_changed_file_dir(conftest_file, root_dir)) is not None
         }

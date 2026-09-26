@@ -182,3 +182,20 @@ def test_build_dep_tree_does_not_duplicate_a_conftest_inside_the_package(tmp_pat
 
     assert "app.conftest" in dep_tree
     assert "src.app.conftest" not in dep_tree
+
+
+def test_ancestor_conftest_relative_imports_resolve_in_src_layout(tmp_path):
+    """Named ``app.conftest`` (not ``src.app.conftest``), so ``.core.db`` matches the discovered module."""
+    files = {
+        "src/app/__init__.py": "",
+        "src/app/conftest.py": "from .core.db import connect\n",
+        "src/app/core/__init__.py": "",
+        "src/app/core/db.py": "def connect(): ...\n",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("src/app/core", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("app.core.db", "app.conftest")
