@@ -25,7 +25,7 @@ pytest --impacted --impacted-module=my_package \
 | :gear: | **No imports at analysis time** | Filesystem discovery + AST parsing — no module-level side effects |
 | :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options |
 | :wrench: | **conftest.py aware** | Changes to `conftest.py` automatically impact all tests in scope |
-| :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements.txt`, `pyproject.toml` etc. trigger all tests |
+| :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements*.txt`, `pyproject.toml`, `pytest.ini` etc. trigger all tests |
 | :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `config/*.yaml`, …) that trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
 | :rocket: | **Rust-accelerated** | Optional Rust extension for 37-65x faster import parsing on large codebases |
@@ -203,7 +203,7 @@ Impact analysis is pluggable via a strategy pattern. The default pipeline combin
 |----------|-------------|
 | **ASTImpactStrategy** | Traces transitive import dependencies through the dependency graph |
 | **PytestImpactStrategy** | Extends AST analysis with pytest-specific knowledge — when a `conftest.py` file changes, or any module it imports does, **all tests in its directory and subdirectories** are marked as impacted |
-| **DependencyFileImpactStrategy** | When dependency files change (`uv.lock`, `requirements.txt`, `pyproject.toml`, etc.), **all tests** are marked as impacted |
+| **DependencyFileImpactStrategy** | When dependency or test-config files change (`uv.lock`, `requirements*.txt`, `pyproject.toml`, `pytest.ini`, etc.), **all tests** are marked as impacted |
 | **InvalidationFileImpactStrategy** | Only active when configured. Files matching a `--impacted-invalidate-all` glob mark **all tests** as impacted — the user-extensible counterpart to the built-in dependency-file list |
 
 All strategies are combined via `CompositeImpactStrategy`, which deduplicates and merges their results. Dependency file detection is enabled by default and can be disabled with `--no-impacted-dep-files`.

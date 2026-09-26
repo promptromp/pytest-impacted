@@ -122,11 +122,12 @@ Extends the AST analysis with pytest-specific dependency detection:
 
 Detects changes in dependency and configuration files. When these files change, any test could potentially be affected — so **all test modules are marked as impacted**.
 
-Monitored files include:
+Monitored files, matched by name at any depth:
 
-- `uv.lock`, `requirements.txt`, `pyproject.toml`
-- `Pipfile`, `Pipfile.lock`, `poetry.lock`
-- `setup.py`, `setup.cfg`
+- `uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile`, `Pipfile.lock`
+- `pyproject.toml`, `setup.py`, `setup.cfg`
+- `pytest.ini`, `tox.ini` — pytest settings such as `addopts`, `markers` and `filterwarnings` apply to every test
+- `requirements*.txt` and `requirements*.in` (`requirements-dev.txt`, pip-tools inputs, …), `constraints*.txt`
 - `requirements/*.txt` (nested requirements files)
 
 This strategy is enabled by default. To disable it, use:

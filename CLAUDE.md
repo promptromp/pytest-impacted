@@ -8,8 +8,8 @@ space on gotchas — anything discoverable by reading the code does not belong h
 A pytest plugin that selectively runs tests impacted by code changes. Git identifies
 changed files → files map to Python modules → AST parsing builds an import dependency
 graph (NetworkX) → graph traversal finds impacted test modules → tests are filtered.
-Separately, changes to dependency files (`uv.lock`, `requirements.txt`, …) mark all
-tests impacted.
+Separately, changes to dependency and test-config files (`uv.lock`, `requirements*.txt`,
+`pytest.ini`, …) mark all tests impacted.
 
 The philosophy is to **err on the side of caution**: false positives (running a test
 that did not need to run) are always preferred over false negatives.

@@ -169,3 +169,18 @@ def test_deleted_conftest_impacts_the_tests_below_it(git_project):
 
     # The unit test is selected and errors on the missing fixture; the integration test is skipped.
     result.assert_outcomes(errors=1, skipped=1)
+
+
+@pytest.mark.parametrize("rel", ["pytest.ini", "requirements-dev.txt", "backend/requirements.in", "constraints.txt"])
+def test_config_and_requirements_variants_run_every_test(git_project, rel):
+    """Test-runner config and conventionally named requirements files are dependency files too."""
+    path = git_project.path / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A pytest.ini outranks the fixture's tox.ini, so it must carry the same settings.
+    path.write_text(INI if rel == "pytest.ini" else "# initial\n")
+    git_project.git("add", rel)
+    git_project.git("commit", "-q", "-m", f"add {rel}")
+    git_project.touch(rel)
+
+    run(git_project).assert_outcomes(passed=2)
+    run(git_project, "--no-impacted-dep-files").assert_outcomes(skipped=2)

@@ -20,7 +20,9 @@ from pytest_impacted.traversal import canonical_root, clear_discovery_cache
 logger = logging.getLogger(__name__)
 
 
-# Default dependency file basenames that trigger all tests when changed
+# Default dependency and configuration file basenames that trigger all tests when changed.
+# pytest.ini and tox.ini hold pytest settings (addopts, markers, filterwarnings) that
+# apply to every test, as pyproject.toml and setup.cfg can.
 DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
     "uv.lock",
     "requirements.txt",
@@ -28,14 +30,21 @@ DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
     "Pipfile",
     "Pipfile.lock",
     "poetry.lock",
+    "pdm.lock",
     "setup.py",
     "setup.cfg",
+    "pytest.ini",
+    "tox.ini",
 )
 
-# Glob-style patterns for matching nested dependency files (e.g. requirements/*.txt)
+# Glob-style patterns (see matches_any_glob: right-anchored, so a bare-name glob matches
+# at any depth) for dependency files named by convention rather than exactly.
 DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
     "requirements/*.txt",
     "requirements/**/*.txt",
+    "requirements*.txt",  # requirements-dev.txt, requirements_test.txt, ...
+    "requirements*.in",  # pip-tools inputs
+    "constraints*.txt",
 )
 
 
