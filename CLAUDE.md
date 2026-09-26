@@ -8,8 +8,8 @@ space on gotchas — anything discoverable by reading the code does not belong h
 A pytest plugin that selectively runs tests impacted by code changes. Git identifies
 changed files → files map to Python modules → AST parsing builds an import dependency
 graph (NetworkX) → graph traversal finds impacted test modules → tests are filtered.
-Separately, changes to dependency files (`uv.lock`, `requirements.txt`, …) mark all
-tests impacted.
+Separately, changes to dependency and test-config files (`uv.lock`, `requirements*.txt`,
+`pytest.ini`, …) mark all tests impacted.
 
 The philosophy is to **err on the side of caution**: false positives (running a test
 that did not need to run) are always preferred over false negatives.
@@ -133,8 +133,9 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 `PytestImpactStrategy` (a conftest that changed *or imports something that changed*
 impacts every test in its directory and below — tests never import their conftest, so
 this is invisible to test-side import analysis), `DependencyFileImpactStrategy`
-(patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`; disable with
-`--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
+(patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config file
+pytest actually loaded, `session.config.inipath`; disable with `--no-impacted-dep-files`),
+`InvalidationFileImpactStrategy` (user globs from
 `--impacted-invalidate-all`, marking every test impacted; only added to the pipeline when
 configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
 which unions results. `get_default_strategies()` builds the default composition.
@@ -149,6 +150,10 @@ and the graph path. Every node carries its source file in the `path` attribute. 
 a node to a file with `_module_path`, never by rebuilding a path from the dotted name —
 that silently fails for src-layout, where the name drops `src/`. `is_test_module` is
 false for any `conftest`, even under `tests/`: it holds fixtures, never tests.
+
+**Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
+every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
+into the file name and match nothing.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the

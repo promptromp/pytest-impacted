@@ -187,14 +187,16 @@ def normalize_git_paths(file_paths: list[str], git_root: Path, working_dir: Path
     if git_root == working_dir:
         return file_paths  # Fast path: no conversion needed
 
+    # as_posix(): every consumer matches with PurePosixPath, which would treat a
+    # Windows path's backslashes as part of the file name.
     result: list[str] = []
     for file_path in file_paths:
         abs_path = git_root / file_path
         try:
-            result.append(str(abs_path.relative_to(working_dir)))
+            result.append(abs_path.relative_to(working_dir).as_posix())
         except ValueError:
             # File is outside the working directory — use absolute path
-            result.append(str(abs_path))
+            result.append(abs_path.as_posix())
     return result
 
 

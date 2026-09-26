@@ -107,7 +107,7 @@ def pytest_addoption(parser: Parser):
         action="store_true",
         default=None,
         dest="no_impacted_dep_files",
-        help="Disable dependency file change detection (uv.lock, requirements.txt, etc.).",
+        help="Disable dependency and test-config file change detection (uv.lock, requirements*.txt, pytest.ini, etc.).",
     )
     parser.addini(
         "no_impacted_dep_files",
