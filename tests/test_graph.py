@@ -181,7 +181,8 @@ def test_build_dep_tree_does_not_duplicate_a_conftest_inside_the_package(tmp_pat
     dep_tree = graph.build_dep_tree("src/app", tests_package="src/app/tests", root_dir=tmp_path)
 
     assert "app.conftest" in dep_tree
-    assert "src.app.conftest" not in dep_tree
+    paths = [path for _, path in dep_tree.nodes(data="path")]
+    assert len(paths) == len(set(paths)), sorted(dep_tree.nodes)
 
 
 def test_ancestor_conftest_relative_imports_resolve_in_src_layout(tmp_path):
