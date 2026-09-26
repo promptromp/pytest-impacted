@@ -14,7 +14,7 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.git import GitMode
+from pytest_impacted.git import GitMode, GitUnavailableError
 
 
 _CLICK_TYPE_MAP: dict[type, click.ParamType] = {
@@ -112,14 +112,19 @@ def impacted_tests_cli(
         ext_config=ext_kwargs,
     )
 
-    impacted_tests = get_impacted_tests(
-        impacted_git_mode=git_mode,
-        impacted_base_branch=base_branch,
-        root_dir=root_dir,
-        ns_module=module,
-        tests_dir=tests_dir,
-        strategy=strategy,
-    )
+    try:
+        impacted_tests = get_impacted_tests(
+            impacted_git_mode=git_mode,
+            impacted_base_branch=base_branch,
+            root_dir=root_dir,
+            ns_module=module,
+            tests_dir=tests_dir,
+            strategy=strategy,
+        )
+    except GitUnavailableError as err:
+        # Printing nothing would read as "no tests impacted" to a script piping
+        # this output into pytest, so fail instead.
+        raise click.ClickException(str(err)) from err
 
     if impacted_tests:
         for impacted_test in impacted_tests:

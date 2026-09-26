@@ -17,6 +17,8 @@ from pytest_impacted.plugin import (
     validate_tests_dir,
 )
 
+from .conftest import isolated_git_env
+
 
 CLI_OPTION_DESTS = {
     "impacted",
@@ -199,13 +201,14 @@ def test_plugin_imports_without_git_executable(tmp_path):
     """The pytest11 entry point loads on every pytest run, so a missing git binary must not break pytest.
 
     GitPython raises ImportError when the git executable is absent (slim
-    containers), which is why ``pytest_impacted.git`` guards its import.
+    containers), which is why ``pytest_impacted.git`` guards its import. The guard
+    must also stay silent, since it runs even without ``--impacted``.
     """
     script = "import pytest_impacted.plugin as p; print(p.GIT_AVAILABLE)"
     result = subprocess.run(
-        [sys.executable, "-W", "ignore", "-c", script],
+        [sys.executable, "-c", script],
         cwd=tmp_path,
-        env={**os.environ, "PATH": str(tmp_path / "no-git")},
+        env=_env_without_git(tmp_path),
         capture_output=True,
         text=True,
         check=False,  # assert below, so a failure reports the child's stderr
@@ -213,6 +216,7 @@ def test_plugin_imports_without_git_executable(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "False"
+    assert "git" not in result.stderr.lower(), result.stderr
 
 
 @pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files"])
@@ -223,3 +227,103 @@ def test_boolean_ini_values_are_typed(pytester, ini_name):
     config = pytester.parseconfig()
 
     assert config.getini(ini_name) is False
+
+
+def _env_without_git(tmp: Path) -> dict[str, str]:
+    """The current environment with git unreachable, and no GitPython override to find it anyway."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_PYTHON_")}
+    return {**env, "PATH": str(tmp / "no-git")}
+
+
+@pytest.mark.parametrize(
+    "pytest_ini", ["", "[pytest]\nfilterwarnings = error\n"], ids=["default", "warnings-as-errors"]
+)
+def test_runs_every_test_when_git_is_unavailable(pytester, pytest_ini):
+    """Fail open: without git the changes are unknown, so nothing may be skipped.
+
+    A real run with git missing from PATH, as in a slim CI container — the
+    case that used to skip the whole suite and exit 0.
+    """
+    pytester.makepyfile(**{"mypkg/__init__.py": "", "tests/test_a.py": "def test_a(): pass\ndef test_b(): pass\n"})
+    if pytest_ini:
+        pytester.makeini(pytest_ini)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "--impacted",
+            "--impacted-module=mypkg",
+            "--impacted-git-mode=unstaged",
+            "tests",
+        ],
+        cwd=pytester.path,
+        env=_env_without_git(pytester.path),
+        capture_output=True,
+        text=True,
+        check=False,  # assert below, so a failure reports the child's output
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "2 passed" in result.stdout
+    assert result.stdout.count("Running every test") == 1, result.stdout  # once, not per hook
+
+
+def test_fails_open_when_git_disappears_after_import(pytester):
+    """GitPython imports fine but the binary is gone at run time (e.g. ``GIT_PYTHON_REFRESH=quiet``)."""
+    pytester.makepyfile(**{"mypkg/__init__.py": "", "tests/test_a.py": "def test_a(): pass\n"})
+    git_env = {**os.environ, **isolated_git_env(pytester.path)}
+    subprocess.run(["git", "init", "-q"], cwd=pytester.path, check=True, env=git_env)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "--impacted",
+            "--impacted-module=mypkg",
+            "--impacted-git-mode=unstaged",
+            "tests",
+        ],
+        cwd=pytester.path,
+        env={**_env_without_git(pytester.path), "GIT_PYTHON_REFRESH": "quiet"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
+    assert result.stdout.count("Running every test") == 1, result.stdout  # once, not per hook
+
+
+def test_report_header_warns_when_git_is_unavailable(pytestconfig, monkeypatch):
+    """The header is written by the controller, so the notice survives pytest-xdist."""
+    monkeypatch.setattr("pytest_impacted.plugin.GIT_AVAILABLE", False)
+    monkeypatch.setattr(pytestconfig.option, "impacted", True)
+
+    header = pytest_report_header(pytestconfig)
+
+    assert "Running every test" in header[-1]
+
+
+def test_report_header_is_quiet_about_git_without_impacted(pytestconfig, monkeypatch):
+    monkeypatch.setattr("pytest_impacted.plugin.GIT_AVAILABLE", False)
+    monkeypatch.setattr(pytestconfig.option, "impacted", False)
+    monkeypatch.setitem(pytestconfig._inicache, "impacted", False)
+
+    assert len(pytest_report_header(pytestconfig)) == 1
+
+
+def test_validate_base_branch_skips_when_git_cannot_launch(monkeypatch):
+    """Branch-mode validation must not crash when the binary is gone after import; the run fails open."""
+    from git import GitCommandNotFound  # noqa: PLC0415
+
+    repo = MagicMock()
+    repo.git.rev_parse.side_effect = GitCommandNotFound("git", "not found")
+    monkeypatch.setattr("pytest_impacted.plugin.find_repo", lambda _: repo)
+
+    validate_base_branch("main", ".")  # Should not raise

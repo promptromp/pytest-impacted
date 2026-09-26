@@ -735,12 +735,38 @@ def test_bare_repo_is_a_clear_error(tmp_path, isolated_git_config, mode):
         git.find_impacted_files_in_repo(tmp_path, mode, "main")
 
 
-def test_find_impacted_files_warns_and_returns_none_without_git(monkeypatch):
-    """The runtime guard, distinct from the import-time one pinned in tests/test_plugin.py."""
+def test_git_that_cannot_launch_keeps_its_reason(monkeypatch):
+    """GitPython raises GitCommandNotFound for any launch failure, so the reason must survive."""
+    from git import GitCommandNotFound  # noqa: PLC0415
+
+    def launch_fails(*_):
+        raise GitCommandNotFound("git diff --cached", "WinError 206")
+
+    monkeypatch.setattr(git, "_find_impacted_files", launch_fails)
+
+    with pytest.raises(git.GitUnavailableError) as excinfo:
+        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+
+    assert "WinError 206" in str(excinfo.value)
+    assert "cmdline" not in str(excinfo.value)  # only the reason, not GitPython's full command line
+
+
+def test_git_unavailable_error_survives_copy():
+    """copy and pickle rebuild from ``args``; the message must not wrap itself again."""
+    import copy  # noqa: PLC0415
+    import pickle  # noqa: PLC0415
+
+    err = git.GitUnavailableError("reason")
+
+    assert str(copy.copy(err)) == str(pickle.loads(pickle.dumps(err))) == str(err)
+
+
+def test_find_impacted_files_raises_without_git(monkeypatch):
+    """Unknown changes are an error, never ``None`` — which callers read as "nothing changed"."""
     monkeypatch.setattr(git, "GIT_AVAILABLE", False)
 
-    with pytest.warns(UserWarning, match="git executable is not available"):
-        assert git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None) is None
+    with pytest.raises(git.GitUnavailableError, match="changed files cannot be determined"):
+        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
 
 
 # --- BRANCH mode against a real repository ---------------------------------------

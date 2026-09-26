@@ -36,6 +36,8 @@ impacted = get_impacted_tests(
 )
 ```
 
+`get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run".
+
 This is the right entry point for one-off integrations or for driving impact analysis from your own test runner. For reusable, auto-discovered strategies that ship as their own package, see the packaged extension system below.
 
 `changed_files` lists every path git reports as changed, relative to the project root — except files living outside it (a monorepo whose git root sits above the pytest rootdir), which arrive as absolute paths. It **includes deleted files**: a removed `conftest.py` or lockfile still matters. So resolve an entry against `root_dir` only when it is relative, and check that it exists before reading it.

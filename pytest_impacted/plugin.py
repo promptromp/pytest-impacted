@@ -8,12 +8,20 @@ from pytest import Config, Parser, UsageError
 
 from pytest_impacted._rust import RUST_AVAILABLE
 from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
+from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
     discover_extension_metadata,
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.git import GIT_AVAILABLE, GitMode, InvalidGitRefError, find_repo, rev_args
+from pytest_impacted.git import (
+    GIT_AVAILABLE,
+    GitMode,
+    GitUnavailableError,
+    InvalidGitRefError,
+    find_repo,
+    rev_args,
+)
 
 
 def pytest_addoption(parser: Parser):
@@ -189,9 +197,12 @@ def pytest_report_header(config: Config) -> list[str]:
     ]
     if ext_names:
         header.append(f"extensions={','.join(ext_names)}")
-    return [
-        "pytest-impacted: " + ", ".join(header),
-    ]
+    lines = ["pytest-impacted: " + ", ".join(header)]
+    if get_option("impacted") and not GIT_AVAILABLE:
+        # The header is written by the controller, so this survives pytest-xdist,
+        # whose workers run collection and whose terminal output is discarded.
+        lines.append(f"pytest-impacted: WARNING: {GitUnavailableError()} Running every test.")
+    return lines
 
 
 def pytest_collection_modifyitems(session, config, items):
@@ -223,15 +234,25 @@ def pytest_collection_modifyitems(session, config, items):
         ext_config=ext_config,
     )
 
-    impacted_tests = get_impacted_tests(
-        impacted_git_mode=impacted_git_mode,
-        impacted_base_branch=impacted_base_branch,
-        root_dir=root_dir,
-        ns_module=ns_module,
-        tests_dir=impacted_tests_dir,
-        session=session,
-        strategy=strategy,
-    )
+    try:
+        impacted_tests = get_impacted_tests(
+            impacted_git_mode=impacted_git_mode,
+            impacted_base_branch=impacted_base_branch,
+            root_dir=root_dir,
+            ns_module=ns_module,
+            tests_dir=impacted_tests_dir,
+            session=session,
+            strategy=strategy,
+        )
+    except GitUnavailableError as err:
+        # Fail open: with the changes unknown, every test may be impacted. Not
+        # warnings.warn — `filterwarnings = error` would turn it into a crash.
+        # When git was missing at import, pytest_report_header has already said
+        # so; only a failure discovered now needs reporting here. (Under
+        # pytest-xdist that report is lost with the workers' output.)
+        if GIT_AVAILABLE:
+            warn(f"pytest-impacted: {err} Running every test.", session)
+        return
     if not impacted_tests:
         # skip all tests
         for item in items:
@@ -341,7 +362,7 @@ def validate_base_branch(base_branch: str, root_dir: str) -> None:
         return
 
     # Importable only when GIT_AVAILABLE; see the guarded import in git.py.
-    from git import GitCommandError, InvalidGitRepositoryError  # noqa: PLC0415
+    from git import GitCommandError, GitCommandNotFound, InvalidGitRepositoryError  # noqa: PLC0415
 
     try:
         args = rev_args(base_branch)
@@ -351,6 +372,8 @@ def validate_base_branch(base_branch: str, root_dir: str) -> None:
         raise UsageError(
             f"Invalid base branch: {err} Please check the value passed to --impacted-base-branch."
         ) from err
+    except GitCommandNotFound:
+        return  # Nothing to validate against; the run itself fails open.
     except InvalidGitRepositoryError as err:
         raise UsageError(
             f"No git repository found at or above '{root_dir}'. Make sure you are running from within a git repository."

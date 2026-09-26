@@ -65,7 +65,13 @@ requires git >= 2.24, and why tests assert on the `--end-of-options` token in th
 and `plugin.py` is a `pytest11` entry point imported on every pytest run, so an
 unguarded import breaks pytest itself in containers without git. `from __future__ import
 annotations` at the top of `git.py` is what lets the module import with `Repo` unbound.
-A subprocess test pins it.
+A subprocess test pins it. At run time a missing git raises `GitUnavailableError` rather
+than returning `None`, because `None` means "nothing changed" and skips every test: the
+plugin catches it and **fails open** (runs everything), the CLI exits non-zero. Never
+collapse "unknown" into "no changes". The notice is printed exactly once: by
+`pytest_report_header` when git was missing at import (the controller writes the header,
+so it survives pytest-xdist), otherwise by the collection hook. Never via `warnings.warn`,
+which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path.
 
 **Every diff goes through `_name_status_diff` with fixed `--name-status -z --no-renames`.**
 `-z` stops git C-quoting non-ASCII paths (`core.quotePath`), which would never match a

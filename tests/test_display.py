@@ -57,3 +57,15 @@ def test_warn_without_session(caplog):
     assert record.name == "pytest_impacted.display"
     assert record.levelno == logging.WARNING
     assert record.getMessage() == "\nWARNING: Danger!\n"
+
+
+def test_messages_fall_back_to_logging_without_a_terminal(caplog):
+    """Under ``-p no:terminal`` there is no reporter; the fail-open notice must not crash."""
+    session, _ = make_mock_session()
+    session.config.pluginmanager.getplugin.return_value = None
+
+    with caplog.at_level(logging.INFO, logger=display.logger.name):
+        display.notify("Hello", session)
+        display.warn("Danger!", session)
+
+    assert [r.getMessage() for r in caplog.records] == ["\nHello\n", "\nWARNING: Danger!\n"]

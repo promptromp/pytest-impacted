@@ -1,31 +1,53 @@
 """Git related functions."""
 
 from __future__ import annotations
-import warnings
+import logging
 from enum import StrEnum
 from pathlib import Path
 
+
+logger = logging.getLogger(__name__)
 
 # GitPython raises ImportError when the **git executable** is missing, not just
 # when the package is absent — a real situation in slim containers. This module
 # is reached from the pytest11 entry point on every pytest run, so an unguarded
 # import would break pytest itself for those users. Postponed annotations above
-# are what let the module finish importing with ``Repo`` unbound.
+# are what let the module finish importing with ``Repo`` unbound. Only a debug
+# log here: this runs even without --impacted, and a run that needs git reports
+# the problem itself (see GitUnavailableError).
 try:
     from git import Repo
+    from git.exc import GitCommandNotFound
 
     GIT_AVAILABLE = True
 except ImportError:
     GIT_AVAILABLE = False
-    warnings.warn(
-        "GitPython or the git executable is not available. Git-related functionality will be disabled. "
-        "To enable git functionality, install GitPython and ensure git CLI is available.",
-        stacklevel=2,
-    )
+    logger.debug("GitPython or the git executable is not available; git functionality is disabled.")
 
 
 class InvalidGitRefError(ValueError):
     """A ref name was rejected before it could be handed to the git CLI."""
+
+
+class GitUnavailableError(RuntimeError):
+    """Git cannot be run, so the set of changed files is unknown.
+
+    Deliberately an exception rather than an empty result: "no changes" means
+    no test needs to run, whereas "unknown" means every test might, and
+    conflating the two would skip the whole suite and report success.
+
+    Only for an environment that cannot run git. When git *can* run, a
+    misconfigured project (no repository, a bare one, an unknown base branch)
+    stays a hard error so the user fixes it, rather than silently losing test
+    selection. Without git those cannot be checked, so they fail open too.
+    """
+
+    # The text is built in __str__ so ``args`` holds only the optional detail:
+    # copy and pickle rebuild an exception from its args, and would otherwise
+    # wrap the full message a second time.
+    def __str__(self) -> str:
+        message = "git could not be run, so changed files cannot be determined"
+        return f"{message}: {self.args[0]}." if self.args else f"{message} (is GitPython installed and git on PATH?)."
 
 
 def validate_rev(rev: str) -> str:
@@ -190,16 +212,23 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
     :param repo_dir: path to the project directory (may be a subdirectory of the git root).
     :param git_mode: the git mode to use.
     :param base_branch: the base branch to compare against.
+    :returns: the changed files, or ``None`` when there are none.
+    :raises GitUnavailableError: when git cannot be run at all.
 
     """
     if not GIT_AVAILABLE:
-        warnings.warn(
-            "Git functionality is disabled because GitPython or the git executable is not available. "
-            "To enable git functionality, install GitPython and ensure git CLI is available.",
-            stacklevel=2,
-        )
-        return None
+        raise GitUnavailableError()
 
+    try:
+        return _find_impacted_files(repo_dir, git_mode, base_branch)
+    except GitCommandNotFound as err:
+        # The import succeeded (e.g. GIT_PYTHON_REFRESH=quiet) but git could not be
+        # launched. GitPython uses this for any launch failure, so keep its reason —
+        # the first line; the rest is the full command line.
+        raise GitUnavailableError(str(err).strip().splitlines()[0]) from err
+
+
+def _find_impacted_files(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:
     repo = find_repo(repo_dir)
     if repo.bare:
         raise ValueError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")

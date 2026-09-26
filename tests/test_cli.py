@@ -7,7 +7,7 @@ from unittest.mock import ANY, patch
 from click.testing import CliRunner
 
 from pytest_impacted.cli import configure_logging, impacted_tests_cli
-from pytest_impacted.git import GitMode
+from pytest_impacted.git import GitMode, GitUnavailableError
 from pytest_impacted.strategies import CompositeImpactStrategy
 
 
@@ -195,6 +195,24 @@ class TestImpactedTestsCLI:
 
             assert result.exit_code == 0
             assert "No impacted tests found." in result.output
+
+    @patch("pytest_impacted.cli.get_impacted_tests")
+    @patch("pytest_impacted.cli.configure_logging")
+    def test_cli_fails_when_git_is_unavailable(self, mock_configure_logging, mock_get_impacted_tests):
+        """Unknown changes must not print as "no impacted tests" with exit code 0."""
+        mock_get_impacted_tests.side_effect = GitUnavailableError()
+
+        with self.runner.isolated_filesystem():
+            Path("test_ns").mkdir()
+
+            result = self.runner.invoke(
+                impacted_tests_cli,
+                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
+            )
+
+            assert result.exit_code == 1
+            assert "changed files cannot be determined" in result.output
+            assert "No impacted tests found." not in result.output
 
     def test_cli_missing_required_arg(self):
         """Test CLI fails when required argument is missing."""
