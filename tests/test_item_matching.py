@@ -145,7 +145,7 @@ def test_relative_impacted_entries_are_anchored_at_the_root_not_the_cwd(root, mo
 
 
 def test_a_location_matched_by_suffix_is_still_selected(root):
-    """Anything the pre-0.31.1 suffix match selected stays selected, e.g. a location
+    """Anything 0.31.0's suffix match selected stays selected, e.g. a location
     outside a symlinked rootdir, which resolves to a different physical file."""
     item = fake_item(root, "tests/test_b.py", "tests/test_a.py")
 

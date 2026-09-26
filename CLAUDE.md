@@ -122,7 +122,7 @@ holds fixtures, never tests.
 module) and a pytest-bdd scenario (location: inside `pytest_bdd`). Matching location alone
 skipped scenarios; path alone skipped inherited tests whose base changed with no graph edge
 (`from checks import Checks` in a rootless dir). The location is also still matched by
-path suffix, as before 0.31.1, so the result is a strict superset of the old selection. Keep
+path suffix, as 0.31.0 did, so the result is a strict superset of the old selection. Keep
 every half — each only adds tests. Items import analysis cannot judge always run: those
 from non-Python files (`--doctest-glob`, YAML collectors) and `DoctestItem`s — also when
 nothing at all is impacted.
