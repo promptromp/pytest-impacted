@@ -5,7 +5,6 @@ extensions, then drives it: git state -> changed files -> impacted modules ->
 impacted test files.
 """
 
-import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -25,11 +24,6 @@ from pytest_impacted.traversal import (
     resolve_files_to_modules,
     resolve_modules_to_files,
 )
-
-
-def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
-    """Check if the item path matches any of the impacted tests."""
-    return any(test == item_path or test.endswith(os.sep + item_path) for test in impacted_tests)
 
 
 def build_strategy_with_extensions(

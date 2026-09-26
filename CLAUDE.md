@@ -117,6 +117,10 @@ rebuilding a path from the dotted name — that silently fails for src-layout, w
 name drops `src/`. `is_test_module` is false for any `conftest`, even under `tests/`: it
 holds fixtures, never tests.
 
+**Collected items are matched to impacted files by `item.path`**, never `item.location`:
+location is where the test *function* lives — a base class's module for an inherited test,
+inside `pytest_bdd` for a scenario — and matching on it silently skipped those tests.
+
 **Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
 every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
 into the file name and match nothing.

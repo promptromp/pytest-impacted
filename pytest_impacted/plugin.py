@@ -7,7 +7,7 @@ import pytest
 from pytest import Config, Parser, UsageError
 
 from pytest_impacted._rust import RUST_AVAILABLE
-from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
+from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests
 from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
     discover_extension_metadata,
@@ -282,9 +282,12 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(pytest.mark.skip)
         return
 
+    # Match the file each test was collected from (item.path), not item.location: that is
+    # where the test *function* lives — the base class's module for an inherited test, and
+    # inside the pytest_bdd package for a pytest-bdd scenario — so those were always skipped.
+    impacted_paths = {Path(test).resolve() for test in impacted_tests}
     for item in items:
-        item_path = item.location[0]
-        if matches_impacted_tests(item_path, impacted_tests=impacted_tests):
+        if Path(item.path).resolve() in impacted_paths:
             item.add_marker(pytest.mark.impacted)
         else:
             item.add_marker(pytest.mark.skip)

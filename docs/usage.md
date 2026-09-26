@@ -156,6 +156,9 @@ pytest --impacted --impacted-module=my_package --impacted-tests-dir=tests \
     --impacted-invalidate-all='my_package/config/*.yaml'
 ```
 
+!!! tip "pytest-bdd feature files"
+    A `.feature` file is not Python, so an edit to one reaches no test through imports. Add `--impacted-invalidate-all='*.feature'` (or a narrower glob) to run the suite when scenarios change.
+
 Or in `pyproject.toml`:
 
 ```toml
@@ -311,7 +314,7 @@ graph LR
 5. **pytest-aware rules** — a `conftest.py` that changed, or imports changed code, selects every test in its directory and below; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects every test
 6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
 7. **Invalidation patterns** — user-declared globs for non-Python files that static analysis cannot see (see [InvalidationFileImpactStrategy](#invalidationfileimpactstrategy))
-8. **Test filtering** skips tests whose modules are not in the impact set
+8. **Test filtering** skips tests whose modules are not in the impact set — judged by the file each test was collected from, so inherited test methods and pytest-bdd scenarios are selected with their test module
 
 The philosophy is to **err on the side of caution**: false positives (running a test that didn't need to run) are preferred over false negatives (missing a test that should have run).
 
