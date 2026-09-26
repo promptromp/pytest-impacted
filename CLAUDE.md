@@ -138,8 +138,11 @@ sees a root-level `conftest.py`, so `discover_project_modules` adds them via
 aliases), named the way package discovery names modules (`conftest`, `backend.conftest`,
 and `app.conftest` for `src/app/conftest.py`) so their relative imports resolve. They are
 named around every name already in use, aliases included — taking a package file's alias
-would re-point its imports — and a contested name goes first to the conftest rooted at a
-regular package, which is where Python resolves it. A conftest with no free name gets a
+would re-point its imports. Which conftest takes a contested name (`y.conftest` for
+`y/conftest.py` and `x/y/conftest.py`) only names its node: an import of it is an edge to
+every conftest that can have it (`conftest_claims`), because which file it means depends on
+`sys.path` and the import mode — every single-winner rule loses tests in some layout. A
+conftest with no free name gets a
 leading dot (`.mysite.conftest`, which no import spells) rather than being dropped: a
 dropped conftest loses every edge from it. It is parsed under `import_base(name)`, without
 the dot, or its relative imports would lose theirs. A conftest is recognised by its file

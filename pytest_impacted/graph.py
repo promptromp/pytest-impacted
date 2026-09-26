@@ -12,7 +12,13 @@ from pytest_impacted.parsing import (
     parse_file_imports,
     parse_pytest_plugins,
 )
-from pytest_impacted.traversal import LAST_RESORT_PREFIX, discover_project_modules, import_base, modules_for_files
+from pytest_impacted.traversal import (
+    LAST_RESORT_PREFIX,
+    conftest_claims,
+    discover_project_modules,
+    import_base,
+    modules_for_files,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -158,15 +164,17 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     all_imports = _parse_all_module_imports(submodules)
 
     plugin_edges = _pytest_plugin_edges(submodules, aliases)
+    # A name several conftests can be imported under is an import of each (see conftest_claims).
+    claims = conftest_claims(submodules, root_dir)
 
     digraph = nx.DiGraph()
     for name, file_path in submodules.items():
         digraph.add_node(name, path=file_path)
         for candidate in [*all_imports.get(name, []), *plugin_edges.get(name, [])]:
-            imp = aliases.get(candidate, candidate)
-            if imp in submodules:
-                digraph.add_node(imp)
-                digraph.add_edge(name, imp)
+            for imp in {aliases.get(candidate, candidate), *claims.get(candidate, ())}:
+                if imp in submodules:
+                    digraph.add_node(imp)
+                    digraph.add_edge(name, imp)
     # pytest registers plugins for the whole session; see PytestImpactStrategy.
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
         digraph.nodes[plugin]["pytest_plugin"] = True

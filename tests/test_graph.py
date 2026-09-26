@@ -403,6 +403,30 @@ def test_a_module_in_a_regular_package_reaches_its_conftest_by_relative_import(t
     assert graph.resolve_impacted_tests(conftest, dep_tree) == ["tests.test_a"]
 
 
+CONTESTED = {
+    "y/conftest.py": "from lib.util import thing\n",
+    "y/lib/__init__.py": "",
+    "y/lib/util.py": "thing = 1\n",
+    "x/y/__init__.py": "",
+    "x/y/conftest.py": "from lib.other import other\n",
+    "y/lib/other.py": "other = 1\n",
+    "x/y/tests/test_a.py": "from y.conftest import thing\n",
+}
+
+
+@pytest.mark.parametrize("changed", ["lib.util", "lib.other"])
+def test_an_import_of_a_contested_conftest_name_depends_on_every_conftest_it_can_mean(tmp_path, changed):
+    """``y.conftest`` is ``y/conftest.py`` with the root on ``sys.path`` and ``x/y/conftest.py`` with ``x/``:
+    analysis cannot know which, so ``test_a`` depends on both, whichever took the name."""
+    for rel, source in CONTESTED.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("y/lib", tests_package="x/y/tests", root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests([changed], dep_tree) == ["tests.test_a"]
+
+
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):
     """A tests dir inside the package is walked by both discoveries; its files must not be doubled."""
     files = {

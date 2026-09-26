@@ -288,15 +288,12 @@ def import_base(module_name: str) -> str:
 
 
 class _ConftestCandidate(NamedTuple):
-    """The names a conftest can take, and whether its preferred one is rooted at a regular package."""
+    """The names a conftest can take."""
 
     #: Importable names, preferred first (see :func:`_conftest_candidate`).
     names: list[str]
     #: Its name when every one of *names* is taken: unique, and spelled by no import.
     last_resort: str
-    #: A regular package beats a namespace portion of the same name wherever both are on
-    #: ``sys.path``, so a name rooted at one is the name Python resolves.
-    in_package: bool
 
 
 def _conftest_candidate(directory: Path, root: Path) -> _ConftestCandidate:
@@ -311,12 +308,29 @@ def _conftest_candidate(directory: Path, root: Path) -> _ConftestCandidate:
     parts = directory.relative_to(root).parts
     last_resort = LAST_RESORT_PREFIX + ".".join((*parts, "conftest"))
     if not parts:
-        return _ConftestCandidate(["conftest"], last_resort, in_package=False)
-    prefix, importable = find_non_package_prefix(str(Path(*parts)), root)
+        return _ConftestCandidate(["conftest"], last_resort)
+    _, importable = find_non_package_prefix(str(Path(*parts)), root)
     preferred = f"{path_to_package_name(importable)}.conftest"
     rooted = _rooted_names(parts, (*parts, "conftest"), root, len(parts) - 1, _is_regular_package)
-    in_package = _is_regular_package(root / prefix / Path(importable).parts[0])
-    return _ConftestCandidate(list(dict.fromkeys([preferred, *rooted])), last_resort, in_package)
+    return _ConftestCandidate(list(dict.fromkeys([preferred, *rooted])), last_resort)
+
+
+def conftest_claims(modules: Mapping[str, str], root_dir: str | Path | None = None) -> dict[str, set[str]]:
+    """Each name a conftest among *modules* can be imported under -> the conftests it can mean.
+
+    Two conftests can share an importable name (``y.conftest`` for ``y/conftest.py`` and,
+    with ``x/`` on ``sys.path``, for ``x/y/conftest.py``). Which one an import means depends
+    on ``sys.path`` and the import mode, which analysis cannot know, so an import of the
+    name depends on every conftest it can mean, whichever took the name as its own.
+    """
+    root = canonical_root(root_dir)
+    claims: dict[str, set[str]] = {}
+    for name, path in modules.items():
+        file = Path(path)
+        if file.name == "conftest.py" and file.is_relative_to(root):
+            for importable in _conftest_candidate(file.parent, root).names:
+                claims.setdefault(importable, set()).add(name)
+    return claims
 
 
 def discover_ancestor_conftests(
@@ -377,17 +391,17 @@ def _discover_ancestor_conftests(
 def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterable[str]) -> ProjectModules:
     """Name each conftest path from its candidates, never with a name in *taken*.
 
-    Names are handed out by rank across all conftests, so one conftest's second choice
-    never takes another's first; within a rank, conftests whose names are rooted at a
-    regular package choose first, as Python would resolve the name to them. The free
-    names left are aliases, once every conftest has its own. A conftest with no free
-    name gets its last resort rather than being dropped, which would lose every edge from it.
+    Names are handed out by rank across all conftests, in walk order, so one conftest's
+    second choice never takes another's first; the free names left are aliases, once
+    every conftest has its own. A conftest with no free name gets its last resort rather
+    than being dropped, which would lose every edge from it. Which conftest takes a
+    contested name decides only its node's name: an import of the name depends on
+    every conftest it can mean (see :func:`conftest_claims`).
     """
     used = set(taken)
-    in_packages_first = sorted(candidates.items(), key=lambda item: not item[1].in_package)
     chosen: dict[str, str] = {}
     for rank in range(max((len(candidate.names) for candidate in candidates.values()), default=0)):
-        for path, candidate in in_packages_first:
+        for path, candidate in candidates.items():
             if path not in chosen and rank < len(candidate.names) and candidate.names[rank] not in used:
                 chosen[path] = candidate.names[rank]
                 used.add(candidate.names[rank])
