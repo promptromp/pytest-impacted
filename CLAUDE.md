@@ -157,7 +157,17 @@ that rather than re-deriving it, and put new extension-author content there.
 ## Testing
 
 `pytester` is enabled in `tests/conftest.py` (`pytest_plugins = "pytester"`) for
-plugin-level tests. The pre-commit pytest hook filters with `-m 'not slow'`, but no test
+plugin-level tests.
+
+**The suite scrubs git's repo-locating variables** (`GIT_DIR`, `GIT_INDEX_FILE`, … — read
+from `git rev-parse --local-env-vars`, with a fallback copy) in `pytest_configure`, and
+restores them in `pytest_unconfigure`. Git exports them to hooks, and
+the pre-commit hook runs this suite mid-commit; inherited, every throwaway test repository
+resolves to the real one. From a linked worktree that overwrote the index and set
+`core.bare=true` on the shared `.git`. It must stay `pytest_configure`, not an autouse
+fixture — session-scoped repo fixtures are set up before any function-scoped one.
+
+The pre-commit pytest hook filters with `-m 'not slow'`, but no test
 currently carries that marker and `slow` is registered nowhere (there is no
 `[tool.pytest.ini_options]`) — register it before using it, or the mark warns.
 
