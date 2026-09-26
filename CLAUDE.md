@@ -134,7 +134,8 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 impacts every test in its directory and below — tests never import their conftest, so
 this is invisible to test-side import analysis), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config file
-pytest actually loaded, `session.config.inipath`; disable with `--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
+pytest actually loaded, `session.config.inipath`; disable with `--no-impacted-dep-files`),
+`InvalidationFileImpactStrategy` (user globs from
 `--impacted-invalidate-all`, marking every test impacted; only added to the pipeline when
 configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
 which unions results. `get_default_strategies()` builds the default composition.

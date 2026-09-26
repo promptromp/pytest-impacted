@@ -39,6 +39,7 @@ class TestMatchesDependencyFile:
             pytest.param("requirements.in", True, id="pip_tools_in"),
             pytest.param("requirements-dev.in", True, id="pip_tools_variant_in"),
             pytest.param("constraints.txt", True, id="constraints_txt"),
+            pytest.param("test-constraints.txt", True, id="prefixed_constraints"),
             pytest.param("pdm.lock", True, id="pdm_lock"),
             pytest.param("pytest.ini.bak", False, id="pytest_ini_backup"),
             pytest.param("docs/requirements-guide.md", False, id="requirements_named_doc"),
@@ -242,3 +243,15 @@ class TestLoadedConfigFile:
         )
 
         assert result == []
+
+
+def test_a_session_without_a_real_config_is_ignored():
+    """A test double's ``config.inipath`` is not a path; that must not fail the pipeline."""
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.test_a")
+
+    result = DependencyFileImpactStrategy().find_impacted_tests(
+        changed_files=["ci/other.ini"], impacted_modules=[], ns_module="pkg", session=MagicMock(), dep_tree=dep_tree
+    )
+
+    assert result == []

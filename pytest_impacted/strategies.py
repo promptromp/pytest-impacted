@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import logging
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from functools import lru_cache
@@ -49,7 +50,7 @@ DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
     "*requirements*.txt",  # requirements.txt, requirements-dev.txt, test-requirements.txt, ...
     "*requirements*.in",  # pip-tools inputs
     "requirements*.lock",  # rye
-    "constraints*.txt",
+    "*constraints*.txt",  # constraints.txt, test-constraints.txt, ...
     "pylock*.toml",  # PEP 751
     "requirements/*.txt",
     "requirements/**/*.txt",
@@ -88,7 +89,11 @@ def has_dependency_file_changes(
     patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
     glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
 ) -> bool:
-    """Check if any changed files are dependency/configuration files."""
+    """Check if any changed files match the dependency/configuration file *name* patterns.
+
+    Name patterns only: :class:`DependencyFileImpactStrategy` also counts the
+    config file the running pytest loaded, which a name cannot identify.
+    """
     return any(matches_dependency_file(f, patterns, glob_patterns) for f in changed_files)
 
 
@@ -139,9 +144,13 @@ def clear_dep_tree_cache() -> None:
 
 
 def _loaded_config_file(session: Any) -> Path | None:
-    """The config file this pytest run loaded (``config.inipath``), or ``None``."""
+    """The config file this pytest run loaded (``config.inipath``), or ``None``.
+
+    ``None`` too when there is no real pytest session behind *session* (e.g. a
+    test double), rather than failing the whole pipeline.
+    """
     inipath = getattr(getattr(session, "config", None), "inipath", None)
-    return Path(inipath).resolve() if inipath else None
+    return Path(inipath).resolve() if isinstance(inipath, str | os.PathLike) else None
 
 
 def _resolve_changed_file(changed_file: str, root_dir: Path | None) -> Path | None:
@@ -156,13 +165,8 @@ def _resolve_changed_file(changed_file: str, root_dir: Path | None) -> Path | No
 
 def _resolve_changed_file_dir(changed_file: str, root_dir: Path) -> Path | None:
     """Return the absolute directory containing *changed_file*, or None if unresolvable."""
-    try:
-        path = normalize_path(changed_file)
-    except ValueError:
-        return None
-    if not path.is_absolute():
-        path = normalize_path(root_dir) / path
-    return path.parent
+    path = _resolve_changed_file(changed_file, root_dir)
+    return path.parent if path is not None else None
 
 
 def _test_module_path(test_module: str, root_dir: Path) -> Path | None:
@@ -447,8 +451,7 @@ class PytestImpactStrategy(ImpactStrategy):
         conftest_dirs = {
             conftest_dir
             for conftest_file in changed_files
-            # Path, not PurePosixPath: monorepo paths are OS-native (backslashes on Windows).
-            if Path(conftest_file).name == "conftest.py"
+            if PurePosixPath(conftest_file).name == "conftest.py"
             # None: the path could not be normalized
             if (conftest_dir := _resolve_changed_file_dir(conftest_file, root_dir)) is not None
         }
@@ -495,7 +498,12 @@ class DependencyFileImpactStrategy(ImpactStrategy):
             f
             for f in changed_files
             if matches_dependency_file(f, self.patterns, self.glob_patterns)
-            or (loaded_config is not None and _resolve_changed_file(f, root_dir) == loaded_config)
+            # File name first: resolving every changed path would stat each one.
+            or (
+                loaded_config is not None
+                and PurePosixPath(f).name == loaded_config.name
+                and _resolve_changed_file(f, root_dir) == loaded_config
+            )
         ]
         if not dep_files:
             return []
