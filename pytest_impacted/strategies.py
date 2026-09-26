@@ -1,6 +1,7 @@
 """Impact analysis strategies."""
 
 from __future__ import annotations
+import inspect
 import logging
 import os
 import re
@@ -12,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
 import networkx as nx
+import pytest
 
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
@@ -584,7 +586,7 @@ _NOT_YET = object()
 
 #: A test module importing from a conftest (``from conftest import make_user``) calls its
 #: helpers directly; with rootdir-relative names that edge can be missing from the graph.
-_IMPORTS_A_CONFTEST = re.compile(r"^\s*(?:from\s+[\w.]*conftest\s+import|import\s+[\w.]*conftest\b)", re.MULTILINE)
+_IMPORTS_A_CONFTEST = re.compile(r"^\s*(?:from\s+[\w.]*conftest\s+import|import\s+[^\n#]*\bconftest\b)", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -601,22 +603,24 @@ class _CollectedTests:
     def of(cls, session: Any, dep_tree: nx.DiGraph) -> _CollectedTests | None:
         """``None`` when narrowing is impossible this run.
 
-        That is when there are no collected items (no pytest session), or when any
-        non-test module — a conftest anywhere, a helper, a plugin — calls
-        ``getfixturevalue``: a lookup that ``fixturenames`` cannot show.
+        That is when there are no collected items (no pytest session); when any
+        non-test module — a conftest anywhere, a helper, a loaded plugin such as
+        pytest-django — calls ``getfixturevalue``, a lookup ``fixturenames`` cannot
+        show; or when a non-test helper imports a conftest (its callers are unknown).
         """
         items = getattr(session, "items", None)
-        if not isinstance(items, list):
+        if not isinstance(items, list) or _plugins_look_fixtures_up(session):
             return None
         always_kept = set()
         for node, path in dep_tree.nodes(data="path"):
             text = read_source(path) if path else None
             if text is None:
                 continue
+            dynamic, imports_conftest = "getfixturevalue" in text, bool(_IMPORTS_A_CONFTEST.search(text))
             if not is_test_module(node):
-                if "getfixturevalue" in text:
+                if dynamic or imports_conftest:
                     return None
-            elif "getfixturevalue" in text or _IMPORTS_A_CONFTEST.search(text):
+            elif dynamic or imports_conftest:
                 always_kept.add(node)
         return cls(requested=_fixtures_requested_by_module(items, dep_tree), always_kept=frozenset(always_kept))
 
@@ -632,8 +636,31 @@ class _CollectedTests:
         return names is None or bool(names & fixtures)
 
 
+def _plugins_look_fixtures_up(session: Any) -> bool:
+    """Whether a loaded plugin outside pytest itself calls ``getfixturevalue``.
+
+    pytest-django's autouse ``_django_db_marker``, for one, pulls ``django_db_setup``
+    in dynamically for marked tests, so ``fixturenames`` never lists it.
+    """
+    pluginmanager = getattr(getattr(session, "config", None), "pluginmanager", None)
+    if pluginmanager is None:
+        return False
+    for plugin in pluginmanager.get_plugins():
+        module = plugin if inspect.ismodule(plugin) else inspect.getmodule(type(plugin))
+        name, path = getattr(module, "__name__", ""), getattr(module, "__file__", None)
+        if not path or name.split(".")[0] in ("_pytest", "pytest", "pytest_impacted"):
+            continue
+        if "getfixturevalue" in (read_source(path) or ""):
+            return True
+    return False
+
+
 def _fixtures_requested_by_module(items: list[Any], dep_tree: nx.DiGraph) -> dict[str, set[str] | None]:
-    """``{test module: fixture names its collected tests request}``, from each item's closure."""
+    """``{test module: fixture names its collected tests request}``, from each item's closure.
+
+    Only ``pytest.Function`` items can be trusted: a doctest's ``fixturenames`` omits
+    what ``getfixture('db')`` fetches, and custom item types are unknown — ``None``.
+    """
     module_by_path = {Path(path).resolve(): node for node, path in dep_tree.nodes(data="path") if path}
     requested: dict[str, set[str] | None] = {}
     for item in items:
@@ -641,7 +668,7 @@ def _fixtures_requested_by_module(items: list[Any], dep_tree: nx.DiGraph) -> dic
         if module is None:
             continue
         names = getattr(item, "fixturenames", None)
-        if not isinstance(names, list):
+        if not isinstance(item, pytest.Function) or not isinstance(names, list):
             requested[module] = None
         elif (known := requested.setdefault(module, set())) is not None:
             known.update(names)

@@ -125,34 +125,40 @@ Extends the AST analysis with pytest-specific dependency detection:
 
 #### Narrowing conftests to their fixtures
 
-A conftest that imports changed code selects every test beneath it — for a top-level `tests/conftest.py` that imports your app factory, that is most changes becoming a full run. With `--impacted-narrow-conftests` (ini `impacted_narrow_conftests = true`), pytest-impacted reads that conftest's source (it never imports it) to find which of its fixtures may be built on the changed code — following module-level variables, helper functions and classes, imports inside functions, fixtures re-exported by import or built by a factory — and keeps only the tests whose fixtures request one of them, as pytest resolves them: fixtures requested by other fixtures, `usefixtures` and `autouse` fixtures all count.
+A conftest that imports changed code selects every test beneath it — for a top-level `tests/conftest.py` that imports your app factory, that is most changes becoming a full run. With `--impacted-narrow-conftests` (ini `impacted_narrow_conftests = true`), pytest-impacted reads that conftest's source (it never imports it) to find which of its fixtures may be built on the changed code — following helper functions and classes, plain module-level variables, and imports inside function bodies — and keeps only the tests whose fixtures request one of them, as pytest resolves them: fixtures requested by other fixtures, `usefixtures` and `autouse` fixtures all count.
 
 ```python
 # tests/conftest.py
-from app.db import connect
+from app.factory import create_app
+from app.models import User
 
 
 @pytest.fixture
-def db():  # built on app.db
-    return connect()
+def app():  # built on app.factory
+    return create_app()
 
 
 @pytest.fixture
-def user():  # not
-    return "alice"
+def user():  # built on app.models
+    return User("alice")
 ```
 
-A change to `app/db.py` then runs the tests that use `db` (directly or through another fixture), not the ones that only use `user`.
+A change to `app/factory.py` (or anything it imports) then runs the tests that use `app` — directly or through another fixture — not the ones that only use `user`.
 
-It stays on the safe side, keeping **every** test under the conftest, whenever it cannot be sure:
+Narrowing only applies when the conftest is simple enough to be sure. It keeps **every** test under the conftest when:
 
 - the conftest was itself edited (only conftests *reached through imports* are narrowed)
-- it does `from … import *` from changed code, runs changed code at import time (a module-level call, an `if` on it, `os.environ[...] = …`), or a hook uses it (a `pytest_*` function, or `@pytest.hookimpl(specname=…)`)
+- changed code **runs while the conftest is imported**: a module-level call (`ENGINE = connect()`, `setup()`), a decorator or default argument built from it, a class body using it, an `if` on it, `from … import *`
+- changed code is bound to a hook or collection setting (`pytest_*`, `collect_ignore`), however it gets there
+- a name imported from changed code is never used in the conftest itself — most likely a re-exported fixture or hook, whose registered name cannot be seen
 - an affected fixture's `name=` is computed rather than a string literal
-- any module other than a test module — a conftest anywhere, a helper, a plugin — calls `request.getfixturevalue(...)`, a dynamic lookup pytest's fixture list cannot show; a *test module* doing so is kept on its own, as is one importing from a conftest (`from conftest import helper`)
-- there are no collected tests to inspect, as with the standalone `impacted-tests` CLI, which therefore does not narrow
+- anything besides a test module — a conftest anywhere, a helper module, a loaded plugin such as pytest-django — calls `request.getfixturevalue(...)`, a lookup pytest's fixture list cannot show; or a helper module imports a conftest (`from conftest import …`)
+- there are no collected tests to inspect, as with the standalone `impacted-tests` CLI, which therefore never narrows
 
-One assumption is made: importing a changed module has no side effects that reach tests other than through the fixtures using it. Tests that import changed code themselves are always selected through the import graph. Enable the option when that assumption holds for your project.
+A *test module* that calls `getfixturevalue`, imports from a conftest, or holds a doctest or other non-standard test item is always kept.
+
+!!! warning "The one assumption"
+    Narrowing assumes that **importing a changed module has no side effects that reach tests other than through the fixtures using it**. It cannot see a changed `settings.py` that sets environment variables, configures logging or monkeypatches a library when imported: every test under the conftest is affected, yet only the users of the affected fixtures run. Tests that import the changed code themselves are always selected through the import graph. Enable the option only when that assumption holds for your project.
 
 ### DependencyFileImpactStrategy
 

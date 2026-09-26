@@ -96,22 +96,37 @@ def _names(node: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
 
 
+#: Names pytest reads from a conftest module besides fixtures and ``pytest_*`` hooks.
+_COLLECTION_SETTINGS = frozenset({"collect_ignore", "collect_ignore_glob"})
+
+
 def _propagate(statements: list[ast.stmt], tainted: set[str]) -> None:
-    """Spread taint through module-level definitions and assignments, to a fixed point."""
+    """Spread taint through module-level definitions and assignments, to a fixed point.
+
+    An allowlist: changed names may flow into function and class *definitions* and
+    into plain assignments (``URL = settings.URL``), which run nothing. Anything that
+    would *call* changed code while the conftest is imported — an assignment's value,
+    a decorator, a default argument, a class body — or any other statement touching
+    changed names is undecidable: its effects are not confined to fixtures.
+    """
+    names = {id(stmt): _names(stmt) for stmt in statements}
     changed = True
     while changed:
         changed = False
         for stmt in statements:
-            if isinstance(stmt, ast.Import | ast.ImportFrom) or not (_names(stmt) & tainted):
+            if isinstance(stmt, ast.Import | ast.ImportFrom) or not (names[id(stmt)] & tainted):
                 continue
             if isinstance(stmt, _DEFINITIONS):
+                if _runs_at_import(stmt, tainted):
+                    raise _Undecidable
                 # A function also taints the module globals it assigns (`global ENGINE`).
                 new = {stmt.name} | {n for g in ast.walk(stmt) if isinstance(g, ast.Global) for n in g.names}
             elif isinstance(stmt, ast.Assign | ast.AnnAssign | ast.AugAssign):
                 targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
-                if not all(isinstance(t, ast.Name) for t in targets):
-                    raise _Undecidable  # `os.environ[...] = f()`: a side effect at import time
-                new = {t.id for t in targets if isinstance(t, ast.Name)}
+                if not all(isinstance(t, ast.Name) for t in targets) or _calls_changed_code(stmt.value, tainted):
+                    raise _Undecidable
+                walrus = {n.target.id for n in ast.walk(stmt) if isinstance(n, ast.NamedExpr)}
+                new = {t.id for t in targets if isinstance(t, ast.Name)} | walrus
             else:
                 raise _Undecidable  # code that runs at import time with the changed names
             if not new <= tainted:
@@ -119,13 +134,47 @@ def _propagate(statements: list[ast.stmt], tainted: set[str]) -> None:
                 changed = True
 
 
+def _calls_changed_code(node: ast.AST | None, tainted: set[str]) -> bool:
+    """Whether evaluating *node* calls something, or passes something, that is changed code."""
+    return node is not None and any(isinstance(n, ast.Call) and _names(n) & tainted for n in ast.walk(node))
+
+
+def _runs_at_import(definition: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef, tainted: set[str]) -> bool:
+    """Whether defining a function or class evaluates changed code: decorators, defaults, class bodies."""
+    if any(_calls_changed_code(d, tainted) or _names(d) & tainted for d in definition.decorator_list):
+        return True  # applying a decorator is a call, even when written without parentheses
+    if isinstance(definition, ast.ClassDef):
+        header = [*definition.bases, *(k.value for k in definition.keywords)]
+        body = [s for s in definition.body if not isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef)]
+        methods = [s for s in definition.body if isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef)]
+        return (
+            any(_calls_changed_code(h, tainted) for h in header)
+            or any(_names(s) & tainted for s in body)
+            or any(_runs_at_import(m, tainted) for m in methods)
+        )
+    arguments = definition.args
+    defaults = [*arguments.defaults, *(d for d in arguments.kw_defaults if d is not None)]
+    return any(_calls_changed_code(d, tainted) for d in defaults)
+
+
 def _candidate_names(statements: list[ast.stmt], tainted: set[str]) -> Iterator[str]:
     """Every tainted name, plus the ``name=`` a tainted fixture is registered under."""
+    if any(name.startswith("pytest_") or name in _COLLECTION_SETTINGS for name in tainted):
+        raise _Undecidable  # a hook or collection setting, however it is bound, can affect any test
+    used = set().union(*(_names(s) for s in statements if not isinstance(s, ast.Import | ast.ImportFrom)))
+    imported = {
+        alias.asname or alias.name.split(".")[0]
+        for s in statements
+        if isinstance(s, ast.Import | ast.ImportFrom)
+        for alias in s.names
+    }
+    if (tainted & imported) - used:
+        # Imported and never used here: re-exported, most likely as a fixture or hook
+        # whose registered name (a `name=` in the other module) cannot be seen from here.
+        raise _Undecidable
     yield from tainted
     for stmt in statements:
         if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef) and stmt.name in tainted:
-            if stmt.name.startswith("pytest_"):
-                raise _Undecidable  # a hook can change any test's collection or run
             for decorator in stmt.decorator_list:
                 yield from _registered_names(decorator)
         elif isinstance(stmt, ast.Assign | ast.AnnAssign) and _names(stmt) & tainted and stmt.value is not None:

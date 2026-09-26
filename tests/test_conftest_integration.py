@@ -346,16 +346,71 @@ def test_a_test_module_importing_from_a_conftest_is_kept(make_project):
     narrow(project).assert_outcomes(passed=2, skipped=2)
 
 
-def test_fixtures_re_exported_by_a_conftest_are_narrowed_to_their_users(make_project):
-    fixtures = "import pytest\nfrom app.db import connect\n\n@pytest.fixture\ndef db():\n    return connect()\n"
+def test_fixtures_re_exported_by_a_conftest_keep_the_whole_directory(make_project):
+    """A re-exported fixture may be registered under a ``name=`` set elsewhere: undecidable."""
+    fixtures = NARROW_CONFTEST
     project = make_project(
         {
             **APP,
             **NARROW_TESTS,
             "suite/fixtures_db.py": fixtures,
-            "suite/conftest.py": "from suite.fixtures_db import db  # noqa: F401\n",
+            "suite/conftest.py": "from suite.fixtures_db import db, user  # noqa: F401\n",
         }
     )
     edit(project, "app/db.py")
 
-    narrow(project).assert_outcomes(passed=1, skipped=2)
+    narrow(project).assert_outcomes(passed=3)
+
+
+def test_a_plugin_looking_fixtures_up_dynamically_prevents_narrowing(make_project):
+    """Like pytest-django's db marker: the plugin pulls ``db`` in, ``fixturenames`` never lists it."""
+    plugin = (
+        "import pytest\n\n@pytest.fixture(autouse=True)\ndef _pull(request):\n"
+        "    if request.node.get_closest_marker('needs_db'):\n        request.getfixturevalue('db')\n"
+    )
+    marked = "import pytest\n\n@pytest.mark.needs_db\ndef test_plain():\n    assert True\n"
+    project = make_project(
+        {**APP, **NARROW_TESTS, "suite/conftest.py": NARROW_CONFTEST, "suite/c/test_plain.py": marked},
+        ini=INI + "markers = needs_db\n",
+    )
+    (project.path / "db_puller.py").write_text(plugin)  # outside the analysed package and tests dir
+    edit(project, "app/db.py")
+
+    project.runpytest(
+        "--impacted", "-p", "no:cacheprovider", "--impacted-narrow-conftests", "-p", "db_puller"
+    ).assert_outcomes(passed=3)
+
+
+def test_a_doctest_fetching_a_fixture_keeps_its_module(make_project):
+    """``getfixture('db')`` in a doctest is invisible to its ``fixturenames``."""
+    doctested = (
+        'def helper():\n    """\n    >>> getfixture("db") is not None\n    True\n    """\n\n'
+        "def test_plain():\n    assert True\n"
+    )
+    project = make_project(
+        {**APP, **NARROW_TESTS, "suite/conftest.py": NARROW_CONFTEST, "suite/c/test_plain.py": doctested}
+    )
+    edit(project, "app/db.py")
+
+    result = project.runpytest(
+        "--impacted", "-p", "no:cacheprovider", "--impacted-narrow-conftests", "--doctest-modules"
+    )
+
+    result.assert_outcomes(passed=3, skipped=1)  # test_db, test_plain and its doctest; test_user skipped
+
+
+def test_a_helper_importing_a_conftest_prevents_narrowing(make_project):
+    """Tests calling the helper reach the conftest's affected code with no fixture in sight."""
+    conftest = NARROW_CONFTEST + "\ndef make_conn():\n    return connect()\n"
+    project = make_project(
+        {
+            **APP,
+            **NARROW_TESTS,
+            "suite/conftest.py": conftest,
+            "suite/helpers.py": "from conftest import make_conn\n\ndef build():\n    return make_conn()\n",
+            "suite/b/test_user.py": "from suite.helpers import build\n\ndef test_user():\n    assert build()\n",
+        }
+    )
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=3)

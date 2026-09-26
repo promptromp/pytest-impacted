@@ -199,14 +199,19 @@ reached through imports**, never an edited one, by overriding
 taints names from the conftest's AST (imports of reached modules or their ancestors, and
 imports inside function bodies → module-level variables, functions, classes, to a fixed
 point) and returns **every tainted name** as a candidate fixture name, or `None` for
-"undecidable". Reporting only decorated `def`s missed re-exported, factory-made and
-alias-decorated fixtures: a candidate that is not a fixture just matches no test, so err
-towards more names. Every doubt must become `None` (whole directory), never a smaller set.
+"undecidable". It is an **allowlist**: changed names may only flow into definitions and
+call-free assignments; any import-time call of changed code (assignment value, decorator,
+default, class body), a tainted `pytest_*`/`collect_ignore*` name, or a tainted import
+never used locally (a re-export) is `None`. Two review rounds found nine false negatives
+in a denylist version — do not loosen this back. Every doubt must become `None` (whole
+directory), never a smaller set.
 Items come from `session.items` — the same list pytest hands to
 `pytest_collection_modifyitems`, already filled — and their public `fixturenames` (the
 full closure, autouse included). `getfixturevalue` is invisible to that closure, which is
-why any mention of it outside test modules forces the fallback (`_CollectedTests.of` scans
-the graph once per run — never walk the filesystem for it). The whole mode rests on one
+why any mention of it outside test modules — or in a loaded plugin module (pytest-django) —
+forces the fallback (`_CollectedTests.of` scans the graph once per run — never walk the
+filesystem for it). Only `pytest.Function` items are inspected; doctests fetch fixtures
+with `getfixture()`, which their `fixturenames` omit. The whole mode rests on one
 stated assumption — importing a changed module has no side effects reaching tests except
 through fixtures using it — so it stays opt-in.
 
