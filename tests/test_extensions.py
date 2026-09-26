@@ -27,6 +27,7 @@ from pytest_impacted.strategies import (
     ImpactStrategy,
     InvalidationFileImpactStrategy,
     PytestImpactStrategy,
+    get_default_strategies,
 )
 
 
@@ -465,47 +466,51 @@ class TestBuildStrategyWithExtensions:
         mock_entry_points.return_value = []
         strategy = build_strategy_with_extensions()
         assert isinstance(strategy, CompositeImpactStrategy)
-        assert len(strategy.strategies) == 3
-        assert isinstance(strategy.strategies[0], ASTImpactStrategy)
-        assert isinstance(strategy.strategies[1], PytestImpactStrategy)
-        assert isinstance(strategy.strategies[2], DependencyFileImpactStrategy)
+        assert [type(s) for s in strategy.strategies] == [
+            ASTImpactStrategy,
+            PytestImpactStrategy,
+            ConftestImportImpactStrategy,
+            DependencyFileImpactStrategy,
+        ]
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_no_extensions_no_dep_files(self, mock_entry_points):
         mock_entry_points.return_value = []
         strategy = build_strategy_with_extensions(watch_dep_files=False)
-        assert len(strategy.strategies) == 2
+        assert len(strategy.strategies) == 3
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_invalidation_patterns_reach_builtin_strategy(self, mock_entry_points):
         mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions(invalidate_all_patterns=("*.json",))
-        # Built-ins (now 4) still precede extensions.
-        assert isinstance(strategy.strategies[3], InvalidationFileImpactStrategy)
-        assert strategy.strategies[3].patterns == ("*.json",)
-        assert isinstance(strategy.strategies[4], SimpleStrategy)
+        # Built-ins (now 5) still precede extensions.
+        assert isinstance(strategy.strategies[4], InvalidationFileImpactStrategy)
+        assert strategy.strategies[4].patterns == ("*.json",)
+        assert isinstance(strategy.strategies[5], SimpleStrategy)
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_conftest_imports_reaches_builtin_strategies(self, mock_entry_points):
         mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions(conftest_imports=True)
-        # The opt-in built-in joins the other built-ins, ahead of extensions.
+        # The option reaches the built-in, which stays ahead of extensions.
         assert isinstance(strategy.strategies[2], ConftestImportImpactStrategy)
+        assert strategy.strategies[2].report_only is False
+        assert build_strategy_with_extensions().strategies[2].report_only is True
         assert isinstance(strategy.strategies[-1], SimpleStrategy)
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_with_extension(self, mock_entry_points):
         mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions()
-        assert len(strategy.strategies) == 4
+        assert len(strategy.strategies) == 5
         # Last strategy is the extension
-        assert isinstance(strategy.strategies[3], SimpleStrategy)
+        assert isinstance(strategy.strategies[4], SimpleStrategy)
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_with_disabled_extension(self, mock_entry_points):
         mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions(disabled=("simple",))
-        assert len(strategy.strategies) == 3  # Only built-ins
+        assert len(strategy.strategies) == 4  # Only built-ins
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_extension_priority_ordering(self, mock_entry_points):
@@ -515,7 +520,7 @@ class TestBuildStrategyWithExtensions:
         ]
         strategy = build_strategy_with_extensions()
         # Built-ins come first (3), then extensions sorted by priority
-        ext_strategies = strategy.strategies[3:]
+        ext_strategies = strategy.strategies[len(get_default_strategies()) :]
         assert isinstance(ext_strategies[0], HighPriorityStrategy)  # priority=10
         assert isinstance(ext_strategies[1], LowPriorityStrategy)  # priority=200
 
@@ -525,7 +530,7 @@ class TestBuildStrategyWithExtensions:
         strategy = build_strategy_with_extensions(
             ext_config={"impacted_ext_conf_threshold": "95"},
         )
-        ext = strategy.strategies[3]
+        ext = strategy.strategies[-1]
         assert isinstance(ext, ConfigurableStrategy)
         assert ext.threshold == 95
 

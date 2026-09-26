@@ -139,8 +139,17 @@ def test_test_code_reaching_a_conftest_selects_its_directory(make_project, files
     assert_selected(run(project, *args), passed=passed, skipped=skipped)
 
 
-def test_a_fixture_module_in_a_tests_directory_inside_the_package_is_test_code(make_project):
-    """Tests kept inside the package, no ``--impacted-tests-dir``: ``app/tests`` is still test code."""
+@pytest.mark.parametrize(
+    ("tests_dir", "passed", "skipped"),
+    [
+        pytest.param(
+            "impacted_tests_dir = app/tests\n", ["test_db.py"], ["test_other.py"], id="named_as_the_tests_dir"
+        ),
+        pytest.param("", [], ["test_db.py", "test_other.py"], id="counted_as_application_code"),
+    ],
+)
+def test_a_fixture_module_of_tests_kept_inside_the_package(make_project, tests_dir, passed, skipped):
+    """Test code is what ``--impacted-tests-dir`` names; without it, the package is all application code."""
     files = {
         **APP,
         "app/tests/__init__.py": "",
@@ -149,10 +158,10 @@ def test_a_fixture_module_in_a_tests_directory_inside_the_package_is_test_code(m
         "app/tests/db/test_db.py": "def test_db(db):\n    assert db\n",
         "app/tests/other/test_other.py": "def test_other():\n    assert True\n",
     }
-    project = make_project(files, ini="[pytest]\npythonpath = .\nimpacted_module = app\n")
+    project = make_project(files, ini="[pytest]\npythonpath = .\nimpacted_module = app\n" + tests_dir)
     edit(project, "app/tests/fixtures.py")
 
-    assert_selected(run(project), passed=["test_db.py"], skipped=["test_other.py"])
+    assert_selected(run(project), passed=passed, skipped=skipped)
 
 
 @pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])

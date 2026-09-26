@@ -105,7 +105,7 @@ Run pytest from the `backend/` directory as usual. The plugin will:
 
 ## Impact Analysis Strategies
 
-The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines the built-in strategies below (the last one only when configured).
+The plugin uses a modular, strategy-based architecture to determine which tests are affected by code changes. Strategies are composable — the default pipeline combines the built-in strategies below (InvalidationFileImpactStrategy only when configured).
 
 ### ASTImpactStrategy
 
@@ -121,8 +121,8 @@ The core strategy. It uses static analysis to:
 Extends the AST analysis with pytest-specific dependency detection:
 
 - **`conftest.py` handling**: When a `conftest.py` file is modified, all tests in the same directory and subdirectories are considered impacted. This is critical because `conftest.py` files are implicitly loaded by pytest at runtime and **are not captured through static import analysis**.
-- **Test code a conftest imports**: The same applies when a conftest imports changed *test code*, directly or through other modules: another conftest (conftests above your package and tests directory, up to the pytest rootdir, count too), or a fixture module or helper in `--impacted-tests-dir` or in a `tests`, `test` or `testing` directory inside `--impacted-module`. As everywhere in the graph, a helper outside both `--impacted-module` and `--impacted-tests-dir` is invisible.
-- **Application code a conftest imports** — everything else in `--impacted-module` — is *not* followed into the conftest's directory by default; a notice names the conftests whose tests are left out (printed during collection, so not shown under pytest-xdist). See [ConftestImportImpactStrategy](#conftestimportimpactstrategy-opt-in).
+- **Test code a conftest imports**: The same applies when a conftest imports changed *test code*, directly or through other modules: another conftest (conftests above your package and tests directory, up to the pytest rootdir, count too), or a fixture module or helper in `--impacted-tests-dir`. As everywhere in the graph, a helper outside both `--impacted-module` and `--impacted-tests-dir` is invisible.
+- **Application code a conftest imports** — the rest of `--impacted-module` — is *not* followed into the conftest's directory by default. See [ConftestImportImpactStrategy](#conftestimportimpactstrategy-opt-in).
 - **`pytest_plugins` modules**: A module named in a `pytest_plugins` declaration is loaded by pytest, not imported by your tests, and pytest registers it for the whole session — its fixtures and hooks reach every test, wherever it was declared. So a change to a plugin module, or to anything it imports, impacts **every test** — as does a change to a plugin loaded with `-p` (on the command line or in `addopts`) or through `PYTEST_PLUGINS`. Declarations are read from conftests, test modules and (transitively) the plugins themselves, in any form pytest accepts: a comma-separated string or a list/tuple, assigned, `+=`, `.append`/`.extend`, concatenated, including inside module-level `if`/`try`/`match`/loop blocks. Only literal strings are followed; names computed at runtime, and plugins outside the analysed package and tests directory, are not.
 
     Two limitations. Editing the *declaration* in a test module (rather than the root `conftest.py`, where any edit already selects every test) selects only that module, even though pytest registers the plugin session-wide — declare plugins in the root conftest. And the standalone `impacted-tests` CLI has no pytest session, so it knows `PYTEST_PLUGINS` but not `-p` options.
@@ -130,9 +130,9 @@ Extends the AST analysis with pytest-specific dependency detection:
 
 ### ConftestImportImpactStrategy (opt-in)
 
-Enabled with `--impacted-conftest-imports` (ini: `impacted_conftest_imports = true`; `impacted-tests` CLI: `--conftest-imports`). A conftest that imports changed *application* code, directly or through other modules, then impacts every test in its directory and below, exactly as an edited conftest does. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir` are followed; a helper package outside both is invisible.
+Always in the default pipeline, but by default it only *reports*: a notice names the conftests that import changed application code (it is printed during collection, so not shown under pytest-xdist). Enabled with `--impacted-conftest-imports` (ini: `impacted_conftest_imports = true`; `impacted-tests` CLI: `--conftest-imports`), it selects too: a conftest that imports changed *application* code, directly or through other modules, then impacts every test in its directory and below, exactly as an edited conftest does. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir` are followed; a helper package outside both is invisible.
 
-Fixture modules kept inside the package but outside a `tests`, `test` or `testing` directory (say `my_package/fixtures.py`) count as application code; point `--impacted-tests-dir` at them, or use this option, if conftests import them.
+*Application code* is what discovering `--impacted-module` finds, less conftests and anything `--impacted-tests-dir` finds too. So if your tests live inside the package, pass `--impacted-tests-dir` (e.g. `my_package/tests`): without it their fixture modules count as application code, and a conftest importing them is only followed with this option. (A tests dir holding the whole package cannot tell the two apart and is ignored for this.)
 
 !!! warning "The trade-off"
     Tests never import their conftest — pytest injects its fixtures by name — so **without this option, a test that uses changed application code only through a conftest fixture is not selected**. This is a deliberate exception to erring on the side of caution, like the `pytest_plugins` limitations above. The option closes the gap, but coarsely: a top-level `tests/conftest.py` that imports your application (an app factory, a database session) makes almost every change select almost every test. It was the default in 0.31.0 and turned typical edits into full runs, which is why it is now opt-in.
@@ -206,8 +206,8 @@ CompositeImpactStrategy(
     [
         ASTImpactStrategy(),
         PytestImpactStrategy(),
-        # Only present with --impacted-conftest-imports
-        ConftestImportImpactStrategy(),
+        # Selects only with --impacted-conftest-imports; otherwise it reports
+        ConftestImportImpactStrategy(report_only=True),
         DependencyFileImpactStrategy(),
         # Only present when --impacted-invalidate-all is set
         InvalidationFileImpactStrategy([...]),

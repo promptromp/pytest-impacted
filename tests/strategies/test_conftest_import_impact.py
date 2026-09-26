@@ -1,11 +1,15 @@
-"""Unit tests for conftests that import changed code: test code by default, application code opt-in."""
+"""Unit tests for conftests that import changed code: test code always, application code opt-in.
+
+Each test builds a real project and graph, so node paths and discovery agree as they do in a run.
+"""
 
 import logging
+import os
 from pathlib import Path
 
-import networkx as nx
 import pytest
 
+from pytest_impacted.graph import build_dep_tree
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ConftestImportImpactStrategy,
@@ -16,47 +20,53 @@ from pytest_impacted.strategies import (
 )
 
 
-@pytest.fixture
-def project(tmp_path: Path) -> nx.DiGraph:
-    """``app.db`` → ``app.helpers`` → ``suite/db/conftest.py``, beside an unrelated ``suite/other``.
-
-    Edges run from the imported module to its importer, as in the graph ``build_dep_tree`` returns.
-    """
-    files = {
-        "app.db": "app/db.py",
-        "app.utils": "app/utils.py",
-        "app.helpers": "app/helpers.py",
-        "suite.db.conftest": "suite/db/conftest.py",
-        "suite.db.test_db": "suite/db/test_db.py",
-        "suite.db.deep.test_deep": "suite/db/deep/test_deep.py",
-        "suite.other.test_other": "suite/other/test_other.py",
-    }
-    dep_tree = nx.DiGraph()
-    for module, rel in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).touch()
-        dep_tree.add_node(module, path=str(tmp_path / rel))
-    dep_tree.add_edges_from(
-        [("app.db", "app.helpers"), ("app.helpers", "suite.db.conftest"), ("app.utils", "suite.other.test_other")]
-    )
-    return dep_tree
+FIXTURE = "import pytest\nfrom app.helpers import make\n\n@pytest.fixture\ndef db():\n    return make()\n"
+APP = {
+    "app/__init__.py": "",
+    "app/db.py": "def connect():\n    return 'conn'\n",
+    "app/utils.py": "def add(a, b):\n    return a + b\n",
+    "app/helpers.py": "from app.db import connect\n\ndef make():\n    return connect()\n",
+}
+SUITE = {
+    "suite/db/conftest.py": FIXTURE,
+    "suite/db/test_db.py": "def test_db(db):\n    assert db\n",
+    "suite/db/deep/test_deep.py": "def test_deep(db):\n    assert db\n",
+    "suite/other/test_other.py": "from app.utils import add\n\ndef test_other():\n    assert add(1, 1) == 2\n",
+}
 
 
-def find(strategy, dep_tree: nx.DiGraph, changed: str) -> list[str]:
-    root = Path(dep_tree.nodes["app.db"]["path"]).parents[1]
-    module = changed.removesuffix(".py").replace("/", ".")
+def make(root: Path, files: dict[str, str]) -> Path:
+    for rel, content in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(content)
+    return root
+
+
+def find(strategy, root: Path, changed: str, *, tests_package: str | None = "suite", ns_module: str = "app"):
     return strategy.find_impacted_tests(
         changed_files=[changed],
-        impacted_modules=[module],
-        ns_module="app",
-        tests_package="suite",
+        impacted_modules=[changed.removesuffix(".py").replace("/", ".")],
+        ns_module=ns_module,
+        tests_package=tests_package,
         root_dir=root,
-        dep_tree=dep_tree,
+        dep_tree=build_dep_tree(ns_module, tests_package, root_dir=root),
     )
+
+
+def notices(strategies, root: Path, changed: str, caplog) -> str:
+    with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
+        find(CompositeImpactStrategy(strategies), root, changed)
+    return caplog.text
+
+
+@pytest.fixture
+def project(tmp_path: Path) -> Path:
+    """``app.db`` → ``app.helpers`` → ``suite/db/conftest.py``, beside an unrelated ``suite/other``."""
+    return make(tmp_path, {**APP, **SUITE})
 
 
 class TestConftestImportImpactStrategy:
-    def test_a_conftest_importing_changed_code_impacts_its_directory_and_below(self, project):
+    def test_a_conftest_importing_changed_application_code_impacts_its_directory_and_below(self, project):
         """Through a helper module too: the conftest imports ``app.db`` only transitively."""
         assert find(ConftestImportImpactStrategy(), project, "app/db.py") == [
             "suite.db.deep.test_deep",
@@ -67,181 +77,142 @@ class TestConftestImportImpactStrategy:
         """Test modules reached by imports are the AST strategy's business, not this one's."""
         assert find(ConftestImportImpactStrategy(), project, "app/utils.py") == []
 
+    def test_report_only_names_the_conftests_and_selects_nothing(self, project, caplog):
+        """Both spellings of the option: the pytest flag, and the ``impacted-tests`` CLI's."""
+        with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
+            assert find(ConftestImportImpactStrategy(report_only=True), project, "app/db.py") == []
+
+        assert "suite/db/conftest.py" in caplog.text
+        assert "--impacted-conftest-imports" in caplog.text
+        assert "--conftest-imports" in caplog.text.replace("--impacted-conftest-imports", "")
+
+    def test_report_only_is_silent_when_no_conftest_is_reached(self, project, caplog):
+        with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
+            find(ConftestImportImpactStrategy(report_only=True), project, "app/utils.py")
+
+        assert "conftest" not in caplog.text
+
     def test_a_package_named_conftest_is_not_a_conftest(self, tmp_path):
         """pytest loads only files named ``conftest.py``; ``app/conftest/__init__.py`` is an ordinary package."""
-        (tmp_path / "app/conftest").mkdir(parents=True)
-        (tmp_path / "app/conftest/__init__.py").touch()
-        (tmp_path / "app/conftest/test_inner.py").touch()
-        dep_tree = nx.DiGraph()
-        dep_tree.add_node("app.db", path=str(tmp_path / "app/db.py"))
-        dep_tree.add_node("app.conftest", path=str(tmp_path / "app/conftest/__init__.py"))
-        dep_tree.add_node("app.conftest.test_inner", path=str(tmp_path / "app/conftest/test_inner.py"))
-        dep_tree.add_edge("app.db", "app.conftest")
-
-        assert find(ConftestImportImpactStrategy(), dep_tree, "app/db.py") == []
-
-
-def test_by_default_application_code_reaching_a_conftest_impacts_nothing_beyond_its_imports(project):
-    """The default pipeline leaves the conftest's directory alone: application code is the opt-in rule."""
-    assert find(PytestImpactStrategy(), project, "app/db.py") == []
-
-
-def notices(strategies, dep_tree: nx.DiGraph, changed: str, caplog) -> str:
-    with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
-        find(CompositeImpactStrategy(strategies), dep_tree, changed)
-    return caplog.text
-
-
-def test_by_default_it_says_which_conftests_application_code_reaches(project, caplog):
-    """Both spellings: the pytest flag, and the ``impacted-tests`` CLI's."""
-    text = notices(get_default_strategies(), project, "app/db.py", caplog)
-
-    assert "suite/db/conftest.py" in text
-    assert "--impacted-conftest-imports" in text
-    assert "--conftest-imports" in text.replace("--impacted-conftest-imports", "")
-
-
-def test_opted_in_nothing_is_said_about_conftests(project, caplog):
-    """The opt-in strategy selects those tests; telling the user to enable it would be wrong."""
-    assert "conftest" not in notices(get_default_strategies(conftest_imports=True), project, "app/db.py", caplog)
-
-
-def test_by_default_nothing_is_said_when_every_test_beneath_already_imports_the_change(project, caplog):
-    """The notice is about tests left out; here imports alone select them all."""
-    project.add_edge("app.db", "suite.db.test_db")
-    project.add_edge("app.db", "suite.db.deep.test_deep")
-
-    assert "conftest" not in notices(get_default_strategies(), project, "app/db.py", caplog)
-
-
-def test_by_default_a_conftest_inside_a_selected_directory_is_not_reported(project, caplog):
-    """Its tests already run: an edited conftest above it selected them."""
-    root = Path(project.nodes["app.db"]["path"]).parents[1]
-    (root / "suite/conftest.py").touch()
-    with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
-        result = PytestImpactStrategy().find_impacted_tests(
-            changed_files=["suite/conftest.py", "app/db.py"],
-            impacted_modules=["app.db"],
-            ns_module="app",
-            tests_package="suite",
-            root_dir=root,
-            dep_tree=project,
+        root = make(
+            tmp_path,
+            {
+                **APP,
+                "app/conftest/__init__.py": "from app.db import connect\n",
+                "app/conftest/test_inner.py": "def test_inner():\n    assert True\n",
+            },
         )
 
-    assert "suite.db.test_db" in result
-    assert "--impacted-conftest-imports" not in caplog.text
-
-
-def test_by_default_nothing_is_said_when_no_conftest_is_reached(project, caplog):
-    with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
-        find(PytestImpactStrategy(), project, "app/utils.py")
-
-    assert "--impacted-conftest-imports" not in caplog.text
+        assert find(ConftestImportImpactStrategy(), root, "app/db.py", tests_package=None) == []
 
 
 @pytest.mark.parametrize(
-    ("helper", "tests_package"),
+    ("files", "changed", "tests_package"),
     [
-        pytest.param("suite/db/fixtures.py", "suite", id="in_the_tests_dir"),
-        pytest.param("testing/fixtures.py", None, id="outside_the_analysed_package"),
-        pytest.param("app/checks/fixtures.py", "app.checks", id="tests_dir_inside_the_package"),
-        pytest.param("suite/shared/conftest.py", "suite", id="another_conftest"),
-        pytest.param("app/shared/conftest.py", None, id="a_conftest_inside_the_package"),
-        pytest.param("app/tests/fixtures.py", None, id="a_tests_directory_inside_the_package"),
-        pytest.param("app/users/test/factories.py", None, id="a_test_directory_of_one_app"),
-        pytest.param("app/testing/fixtures.py", None, id="a_testing_directory_inside_the_package"),
+        pytest.param(
+            {"suite/fixtures.py": FIXTURE, "suite/db/conftest.py": "from suite.fixtures import *  # noqa: F403\n"},
+            "suite/fixtures.py",
+            "suite",
+            id="a_fixture_module_in_the_tests_dir",
+        ),
+        pytest.param(
+            {
+                "suite/shared/conftest.py": FIXTURE,
+                "suite/db/conftest.py": "from suite.shared.conftest import db  # noqa: F401\n",
+            },
+            "suite/shared/conftest.py",
+            "suite",
+            id="another_conftest",
+        ),
+        pytest.param(
+            {
+                "app/shared/__init__.py": "",
+                "app/shared/conftest.py": FIXTURE,
+                "suite/db/conftest.py": "from app.shared.conftest import db  # noqa: F401\n",
+            },
+            "app/shared/conftest.py",
+            "suite",
+            id="a_conftest_inside_the_package",
+        ),
+        pytest.param(
+            {
+                "app/checks/__init__.py": "",
+                "app/checks/fixtures.py": FIXTURE,
+                "app/checks/db/conftest.py": "from app.checks.fixtures import *  # noqa: F403\n",
+                "app/checks/db/test_db.py": "def test_db(db):\n    assert db\n",
+            },
+            "app/checks/fixtures.py",
+            "app/checks",
+            id="a_tests_dir_inside_the_package",
+        ),
     ],
 )
-def test_by_default_test_code_reaching_a_conftest_impacts_its_directory(tmp_path, helper, tests_package):
-    """Fixture modules and other conftests are test code, not the application: they reach by default."""
-    files = {
-        "app.db": "app/db.py",
-        "helper": helper,
-        "suite.db.conftest": "suite/db/conftest.py",
-        "suite.db.test_db": "suite/db/test_db.py",
-        "suite.other.test_other": "suite/other/test_other.py",
-    }
-    dep_tree = nx.DiGraph()
-    for module, rel in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).touch()
-        dep_tree.add_node(module, path=str(tmp_path / rel))
-    dep_tree.add_edge("helper", "suite.db.conftest")
+def test_by_default_a_conftest_importing_changed_test_code_impacts_its_directory(
+    tmp_path, files, changed, tests_package
+):
+    """Fixture modules and other conftests are test code, not the application: they are always followed."""
+    root = make(tmp_path, {**APP, **SUITE, **files})
 
-    result = PytestImpactStrategy().find_impacted_tests(
-        changed_files=[helper],
-        impacted_modules=["helper"],
-        ns_module="app",
-        tests_package=tests_package,
-        root_dir=tmp_path,
-        dep_tree=dep_tree,
+    result = find(PytestImpactStrategy(), root, changed, tests_package=tests_package)
+
+    assert [module for module in result if module.endswith("test_db")], result
+    assert not [module for module in result if module.endswith("test_other")], result
+
+
+def test_by_default_a_conftest_importing_changed_application_code_is_left_to_the_opt_in(project):
+    assert find(PytestImpactStrategy(), project, "app/db.py") == []
+
+
+def test_code_under_a_symlinked_subpackage_is_still_application_code(tmp_path):
+    """``app/shared`` links to ``libs/shared``: the file lives outside the package, its module inside it."""
+    root = make(
+        tmp_path,
+        {
+            **APP,
+            **SUITE,
+            "libs/shared/__init__.py": "",
+            "libs/shared/x.py": "def value():\n    return 1\n",
+            "suite/db/conftest.py": FIXTURE.replace("app.helpers import make", "app.shared.x import value as make"),
+        },
+    )
+    os.symlink(root / "libs/shared", root / "app/shared", target_is_directory=True)
+
+    assert find(PytestImpactStrategy(), root, "app/shared/x.py") == []
+
+
+def test_a_tests_dir_holding_the_whole_package_does_not_make_the_application_test_code(tmp_path):
+    """``--impacted-tests-dir=app`` cannot tell tests from application code, so it is ignored for this."""
+    root = make(
+        tmp_path,
+        {
+            **APP,
+            "app/conftest.py": FIXTURE,
+            "app/test_db.py": "def test_db(db):\n    assert db\n",
+        },
     )
 
-    assert result == ["suite.db.test_db"]
+    assert find(PytestImpactStrategy(), root, "app/db.py", tests_package="app") == []
 
 
-def test_by_default_an_edited_conftest_above_the_packages_reaches_the_conftests_importing_it(tmp_path):
-    """``backend/conftest.py`` is no package module, so it never becomes an impacted module; its node still seeds."""
-    files = {
-        "backend.conftest": "backend/conftest.py",
-        "suite.other.conftest": "suite/other/conftest.py",
-        "suite.other.test_other": "suite/other/test_other.py",
-        "suite.db.test_db": "suite/db/test_db.py",
-    }
-    dep_tree = nx.DiGraph()
-    for module, rel in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).touch()
-        dep_tree.add_node(module, path=str(tmp_path / rel))
-    dep_tree.add_edge("backend.conftest", "suite.other.conftest")
+def test_a_subclass_need_not_call_the_base_initialiser(project):
+    """``PytestImpactStrategy`` takes no configuration, so subclasses that never call ``super().__init__`` work."""
 
-    result = PytestImpactStrategy().find_impacted_tests(
-        changed_files=["backend/conftest.py"],
-        impacted_modules=[],
-        ns_module="backend/app",
-        tests_package="suite",
-        root_dir=tmp_path,
-        dep_tree=dep_tree,
-    )
+    class Custom(PytestImpactStrategy):
+        def __init__(self, extra: int = 1):
+            self.extra = extra
 
-    assert result == ["suite.other.test_other"]
-
-
-def test_by_default_test_code_reaching_a_package_named_conftest_selects_nothing_there(tmp_path):
-    """pytest loads only files named ``conftest.py``: the test-code path must not treat a package as one."""
-    files = {
-        "suite.fixtures": "suite/fixtures.py",
-        "app.conftest": "app/conftest/__init__.py",
-        "app.conftest.test_inner": "app/conftest/test_inner.py",
-    }
-    dep_tree = nx.DiGraph()
-    for module, rel in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).touch()
-        dep_tree.add_node(module, path=str(tmp_path / rel))
-    dep_tree.add_edge("suite.fixtures", "app.conftest")
-
-    result = PytestImpactStrategy().find_impacted_tests(
-        changed_files=["suite/fixtures.py"],
-        impacted_modules=["suite.fixtures"],
-        ns_module="app",
-        tests_package="suite",
-        root_dir=tmp_path,
-        dep_tree=dep_tree,
-    )
-
-    assert result == []
+    assert find(Custom(), project, "app/utils.py") == ["suite.other.test_other"]
 
 
 class TestGetDefaultStrategiesWithConftestImports:
-    def test_not_included_by_default(self):
-        assert not any(isinstance(s, ConftestImportImpactStrategy) for s in get_default_strategies())
-
-    def test_included_right_after_the_pytest_strategy_when_configured(self):
-        strategies = get_default_strategies(conftest_imports=True)
+    @pytest.mark.parametrize("conftest_imports", [False, True])
+    def test_always_present_right_after_the_pytest_strategy(self, conftest_imports):
+        strategies = get_default_strategies(conftest_imports=conftest_imports)
 
         kinds = [type(s) for s in strategies]
+        opt_in = strategies[kinds.index(ConftestImportImpactStrategy)]
         assert kinds.index(ConftestImportImpactStrategy) == kinds.index(PytestImpactStrategy) + 1
+        assert opt_in.report_only is not conftest_imports
 
     @pytest.mark.parametrize("watch_dep_files", [True, False])
     def test_independent_of_the_other_switches(self, watch_dep_files):
@@ -252,3 +223,10 @@ class TestGetDefaultStrategiesWithConftestImports:
         kinds = {type(s) for s in strategies}
         assert {ConftestImportImpactStrategy, InvalidationFileImpactStrategy} <= kinds
         assert (DependencyFileImpactStrategy in kinds) is watch_dep_files
+
+    def test_the_default_pipeline_names_the_conftests(self, project, caplog):
+        assert "suite/db/conftest.py" in notices(get_default_strategies(), project, "app/db.py", caplog)
+
+    def test_opted_in_nothing_is_said_about_conftests(self, project, caplog):
+        """The strategy selects those tests; telling the user to enable it would be wrong."""
+        assert "conftest" not in notices(get_default_strategies(conftest_imports=True), project, "app/db.py", caplog)

@@ -215,12 +215,12 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 fixture module, another conftest — impacts every test in its directory and below; tests
 never import their conftest, so this is invisible to test-side import analysis),
 `ConftestImportImpactStrategy` (the same for a conftest importing changed *application*
-code — `_CodeRoles`: in `--impacted-module`, not a conftest, not in `--impacted-tests-dir`
-or a `tests`/`test`/`testing` directory; opt-in via `--impacted-conftest-imports`, because a
-root conftest importing the app turned 0.31.0's every edit into a full run — keep it out
-of the default until narrowing can make it selective. `get_default_strategies` tells
-`PytestImpactStrategy` whether it is present: when absent, that strategy names the
-conftests whose tests are left out), `DependencyFileImpactStrategy`
+code — `_CodeRoles`: files the `--impacted-module` walk found, less conftests and the
+`--impacted-tests-dir` walk's; by discovery, never by path, which a symlinked subpackage
+resolves elsewhere. Always in the default pipeline, but `report_only` — naming those
+conftests — unless `--impacted-conftest-imports`: a root conftest importing the app turned
+0.31.0's every edit into a full run, so keep it selecting only on request until narrowing
+can make it selective), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config
 file pytest actually loaded, `session.config.inipath`; disable with
 `--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
