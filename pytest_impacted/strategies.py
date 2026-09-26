@@ -1,20 +1,25 @@
 """Impact analysis strategies."""
 
 from __future__ import annotations
+import inspect
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
 import networkx as nx
+import pytest
 
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
+from pytest_impacted.fixture_impact import affected_fixtures
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
-from pytest_impacted.parsing import is_conftest_module, is_test_module, normalize_path
+from pytest_impacted.parsing import is_conftest_module, is_test_module, normalize_path, read_source
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache
 
 
@@ -235,16 +240,16 @@ def _reached(impacted_modules: list[str], dep_tree: nx.DiGraph) -> set[str]:
     return set().union(*nx.bfs_layers(dep_tree, sources))
 
 
-def _conftest_dirs(nodes: set[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
-    """Directories of the conftests among *nodes*."""
-    return {
-        path.parent
-        for node in nodes
-        # The name is a cheap pre-filter; the file name decides, as for changed
-        # files, so a package named ``conftest`` is not one.
-        if is_conftest_module(node)
-        if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
-    }
+def _conftest_file(node: str, dep_tree: nx.DiGraph, root_dir: Path) -> Path | None:
+    """The ``conftest.py`` a graph node is, or ``None`` if it is not one.
+
+    The name is a cheap pre-filter; the file name decides, as for changed files,
+    so a package named ``conftest`` is not one.
+    """
+    if not is_conftest_module(node):
+        return None
+    path = _module_path(node, dep_tree, root_dir)
+    return path if path is not None and path.name == "conftest.py" else None
 
 
 def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
@@ -465,7 +470,9 @@ class PytestImpactStrategy(ImpactStrategy):
         impacted_tests += resolve_impacted_tests([m for m in impacted_modules if m not in dep_tree], dep_tree)
 
         # Add conftest.py impact analysis
-        conftest_impacted_tests = self._find_conftest_impacted_tests(changed_files, reached, root_dir, dep_tree)
+        conftest_impacted_tests = self._find_conftest_impacted_tests(
+            changed_files, reached, root_dir, dep_tree, session
+        )
 
         # Combine and deduplicate
         all_impacted = list(set(impacted_tests + conftest_impacted_tests))
@@ -477,29 +484,195 @@ class PytestImpactStrategy(ImpactStrategy):
         reached: set[str],
         root_dir: Path | None,
         dep_tree: nx.DiGraph,
+        session: Any = None,
     ) -> list[str]:
         """Find tests under every conftest.py that changed or depends on a change.
 
         Tests never import their conftest — pytest injects its fixtures — so a
         conftest reached through the import graph (it imports a changed module)
-        impacts its directory exactly as an edit to the conftest itself does.
+        impacts its directory exactly as an edit to the conftest itself does;
+        :meth:`_tests_under_reached_conftest` is where a subclass may narrow that.
         """
         if not root_dir:
             return []
 
-        conftest_dirs = {
+        edited_dirs = {
             conftest_dir
             for conftest_file in changed_files
             if PurePosixPath(conftest_file).name == "conftest.py"
             # None: the path could not be normalized
             if (conftest_dir := _resolve_changed_file_dir(conftest_file, root_dir)) is not None
         }
-        conftest_dirs.update(_conftest_dirs(reached, dep_tree, root_dir))
-
+        whole_dirs = _outermost(edited_dirs)
         impacted_tests: list[str] = []
-        for conftest_dir in _outermost(conftest_dirs):
+        for conftest_dir in whole_dirs:
             impacted_tests.extend(find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir))
+
+        for node in sorted(reached):
+            path = _conftest_file(node, dep_tree, root_dir)
+            if path is None or any(path.parent.resolve().is_relative_to(d) for d in whole_dirs):
+                continue  # not a conftest, or its directory is already selected whole
+            impacted_tests.extend(self._tests_under_reached_conftest(node, path, reached, dep_tree, root_dir, session))
         return impacted_tests
+
+    def _tests_under_reached_conftest(
+        self,
+        conftest: str,
+        path: Path,
+        reached: set[str],
+        dep_tree: nx.DiGraph,
+        root_dir: Path,
+        session: Any,
+    ) -> list[str]:
+        """Tests impacted by a conftest that was not edited but imports changed code: its whole directory."""
+        return find_test_modules_under(path.parent, dep_tree, root_dir=root_dir)
+
+
+class NarrowConftestImpactStrategy(PytestImpactStrategy):
+    """:class:`PytestImpactStrategy`, narrowing conftests reached through imports to their fixtures' users.
+
+    A conftest that imports changed code — often a root ``tests/conftest.py``
+    importing the app factory — would otherwise select every test beneath it.
+    Here only the tests whose fixture closure (``item.fixturenames``) requests
+    a fixture built on the change are kept; which fixtures those may be comes
+    from :func:`~pytest_impacted.fixture_impact.affected_fixtures`.
+
+    Anything uncertain keeps the whole directory: an undecidable conftest, a
+    ``getfixturevalue`` lookup in any non-test module (invisible to
+    ``fixturenames``), or no collected items to inspect (the ``impacted-tests``
+    CLI). An *edited* conftest always selects its whole directory. Enabled with
+    ``--impacted-narrow-conftests``.
+    """
+
+    def _find_conftest_impacted_tests(self, *args: Any, **kwargs: Any) -> list[str]:
+        # The collected tests are the same for every conftest in this call: look once.
+        self._collected: _CollectedTests | None | object = _NOT_YET
+        try:
+            return super()._find_conftest_impacted_tests(*args, **kwargs)
+        finally:
+            self._collected = _NOT_YET
+
+    def _tests_under_reached_conftest(
+        self,
+        conftest: str,
+        path: Path,
+        reached: set[str],
+        dep_tree: nx.DiGraph,
+        root_dir: Path,
+        session: Any,
+    ) -> list[str]:
+        whole = super()._tests_under_reached_conftest(conftest, path, reached, dep_tree, root_dir, session)
+        if getattr(self, "_collected", _NOT_YET) is _NOT_YET:
+            self._collected = _CollectedTests.of(session, dep_tree)
+        collected = self._collected
+        source = read_source(str(path))
+        if not isinstance(collected, _CollectedTests) or source is None:
+            return whole
+        fixtures = affected_fixtures(source, conftest, reached)
+        if fixtures is None:
+            return whole
+
+        selected = [module for module in whole if collected.may_need(module, fixtures)]
+        notify(
+            f"{conftest} imports changed code; narrowed to the tests requesting an affected fixture: "
+            f"{sum(module in collected.requested for module in selected)} of "
+            f"{sum(module in collected.requested for module in whole)} test modules under it.",
+            session,
+        )
+        return selected
+
+
+_NOT_YET = object()
+
+#: A test module importing from a conftest (``from conftest import make_user``) calls its
+#: helpers directly; with rootdir-relative names that edge can be missing from the graph.
+_IMPORTS_A_CONFTEST = re.compile(r"^\s*(?:from\s+[\w.]*conftest\s+import|import\s+[^\n#]*\bconftest\b)", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class _CollectedTests:
+    """What this run's collected tests request, and which test modules must be kept regardless."""
+
+    #: ``{test module: fixture names its tests request}``; ``None`` when an item cannot
+    #: be inspected (a doctest, a custom item type) and must be assumed to need everything.
+    requested: dict[str, set[str] | None]
+    #: Test modules that look fixtures up dynamically or import from a conftest.
+    always_kept: frozenset[str]
+
+    @classmethod
+    def of(cls, session: Any, dep_tree: nx.DiGraph) -> _CollectedTests | None:
+        """``None`` when narrowing is impossible this run.
+
+        That is when there are no collected items (no pytest session); when any
+        non-test module — a conftest anywhere, a helper, a loaded plugin such as
+        pytest-django — calls ``getfixturevalue``, a lookup ``fixturenames`` cannot
+        show; or when a non-test helper imports a conftest (its callers are unknown).
+        """
+        items = getattr(session, "items", None)
+        if not isinstance(items, list) or _plugins_look_fixtures_up(session):
+            return None
+        always_kept = set()
+        for node, path in dep_tree.nodes(data="path"):
+            text = read_source(path) if path else None
+            if text is None:
+                continue
+            dynamic, imports_conftest = "getfixturevalue" in text, bool(_IMPORTS_A_CONFTEST.search(text))
+            if not is_test_module(node):
+                if dynamic or imports_conftest:
+                    return None
+            elif dynamic or imports_conftest:
+                always_kept.add(node)
+        return cls(requested=_fixtures_requested_by_module(items, dep_tree), always_kept=frozenset(always_kept))
+
+    def may_need(self, module: str, fixtures: frozenset[str]) -> bool:
+        """Whether *module* may request one of *fixtures*.
+
+        True when it was not collected this run (nothing to inspect; it will not
+        run anyway), when it cannot be inspected, or when it is always kept.
+        """
+        if module not in self.requested or module in self.always_kept:
+            return True
+        names = self.requested[module]
+        return names is None or bool(names & fixtures)
+
+
+def _plugins_look_fixtures_up(session: Any) -> bool:
+    """Whether a loaded plugin outside pytest itself calls ``getfixturevalue``.
+
+    pytest-django's autouse ``_django_db_marker``, for one, pulls ``django_db_setup``
+    in dynamically for marked tests, so ``fixturenames`` never lists it.
+    """
+    pluginmanager = getattr(getattr(session, "config", None), "pluginmanager", None)
+    if pluginmanager is None:
+        return False
+    for plugin in pluginmanager.get_plugins():
+        module = plugin if inspect.ismodule(plugin) else inspect.getmodule(type(plugin))
+        name, path = getattr(module, "__name__", ""), getattr(module, "__file__", None)
+        if not path or name.split(".")[0] in ("_pytest", "pytest", "pytest_impacted"):
+            continue
+        if "getfixturevalue" in (read_source(path) or ""):
+            return True
+    return False
+
+
+def _fixtures_requested_by_module(items: list[Any], dep_tree: nx.DiGraph) -> dict[str, set[str] | None]:
+    """``{test module: fixture names its collected tests request}``, from each item's closure.
+
+    Only ``pytest.Function`` items can be trusted: a doctest's ``fixturenames`` omits
+    what ``getfixture('db')`` fetches, and custom item types are unknown — ``None``.
+    """
+    module_by_path = {Path(path).resolve(): node for node, path in dep_tree.nodes(data="path") if path}
+    requested: dict[str, set[str] | None] = {}
+    for item in items:
+        module = module_by_path.get(Path(str(getattr(item, "path", ""))).resolve())
+        if module is None:
+            continue
+        names = getattr(item, "fixturenames", None)
+        if not isinstance(item, pytest.Function) or not isinstance(names, list):
+            requested[module] = None
+        elif (known := requested.setdefault(module, set())) is not None:
+            known.update(names)
+    return requested
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):
@@ -594,6 +767,7 @@ def get_default_strategies(
     *,
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
+    narrow_conftests: bool = False,
 ) -> list[ImpactStrategy]:
     """Return the default (built-in) strategy list for impact analysis.
 
@@ -606,10 +780,12 @@ def get_default_strategies(
         invalidate_all_patterns: Globs for :class:`InvalidationFileImpactStrategy`,
             whose matches impact every test. The strategy is only added to the
             pipeline when at least one pattern is given.
+        narrow_conftests: Use :class:`NarrowConftestImpactStrategy` in place of
+            :class:`PytestImpactStrategy`.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),
-        PytestImpactStrategy(),
+        NarrowConftestImpactStrategy() if narrow_conftests else PytestImpactStrategy(),
     ]
     if watch_dep_files:
         strategies.append(DependencyFileImpactStrategy())

@@ -123,6 +123,43 @@ Extends the AST analysis with pytest-specific dependency detection:
     Two limitations. Editing the *declaration* in a test module (rather than the root `conftest.py`, where any edit already selects every test) selects only that module, even though pytest registers the plugin session-wide — declare plugins in the root conftest. And the standalone `impacted-tests` CLI has no pytest session, so it knows `PYTEST_PLUGINS` but not `-p` options.
 - Designed to be extended with additional pytest-specific heuristics in the future.
 
+#### Narrowing conftests to their fixtures
+
+A conftest that imports changed code selects every test beneath it — for a top-level `tests/conftest.py` that imports your app factory, that is most changes becoming a full run. With `--impacted-narrow-conftests` (ini `impacted_narrow_conftests = true`), pytest-impacted reads that conftest's source (it never imports it) to find which of its fixtures may be built on the changed code — following helper functions and classes, plain module-level variables, and imports inside function bodies — and keeps only the tests whose fixtures request one of them, as pytest resolves them: fixtures requested by other fixtures, `usefixtures` and `autouse` fixtures all count.
+
+```python
+# tests/conftest.py
+from app.factory import create_app
+from app.models import User
+
+
+@pytest.fixture
+def app():  # built on app.factory
+    return create_app()
+
+
+@pytest.fixture
+def user():  # built on app.models
+    return User("alice")
+```
+
+A change to `app/factory.py` (or anything it imports) then runs the tests that use `app` — directly or through another fixture — not the ones that only use `user`.
+
+Narrowing only applies when the conftest is simple enough to be sure. It keeps **every** test under the conftest when:
+
+- the conftest was itself edited (only conftests *reached through imports* are narrowed)
+- changed code **runs while the conftest is imported**: a module-level call (`ENGINE = connect()`, `setup()`), a decorator or default argument built from it, a class body using it, an `if` on it, `from … import *`
+- changed code is bound to a hook or collection setting (`pytest_*`, `collect_ignore`), however it gets there
+- a name imported from changed code is never used in the conftest itself — most likely a re-exported fixture or hook, whose registered name cannot be seen
+- an affected fixture's `name=` is computed rather than a string literal
+- anything besides a test module — a conftest anywhere, a helper module, a loaded plugin such as pytest-django — calls `request.getfixturevalue(...)`, a lookup pytest's fixture list cannot show; or a helper module imports a conftest (`from conftest import …`)
+- there are no collected tests to inspect, as with the standalone `impacted-tests` CLI, which therefore never narrows
+
+A *test module* that calls `getfixturevalue`, imports from a conftest, or holds a doctest or other non-standard test item is always kept.
+
+!!! warning "The one assumption"
+    Narrowing assumes that **importing a changed module has no side effects that reach tests other than through the fixtures using it**. It cannot see a changed `settings.py` that sets environment variables, configures logging or monkeypatches a library when imported: every test under the conftest is affected, yet only the users of the affected fixtures run. Tests that import the changed code themselves are always selected through the import graph. Enable the option only when that assumption holds for your project.
+
 ### DependencyFileImpactStrategy
 
 Detects changes in dependency and configuration files. When these files change, any test could potentially be affected — so **all test modules are marked as impacted**.
@@ -251,6 +288,7 @@ impacted_tests_dir = "tests"
 no_impacted_dep_files = false  # set to true to disable dep file detection
 impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 impacted_no_merge_base = false  # true: branch mode diffs against the base tip
+impacted_narrow_conftests = false  # true: narrow conftests importing changed code to their fixtures' users
 impacted_disable_ext = []  # extension names to disable
 ```
 
@@ -281,6 +319,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
+| `--impacted-narrow-conftests` | `false` | When a conftest imports changed code, select only the tests under it that request an affected fixture (see [Narrowing conftests](#narrowing-conftests-to-their-fixtures)) |
 | `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
