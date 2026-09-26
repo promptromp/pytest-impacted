@@ -42,9 +42,10 @@ That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
 modules (never raise — it would be an INTERNALERROR), and a symlinked portion is followed
 only while it stays inside the project and does not point back up the tree.
 
-**One file is one graph node, under one canonical name.** `discover_project_modules` is the
-only place the package walk, the tests-dir walk and the ancestor conftests are merged —
-`build_dep_tree` and both `resolve_*` functions go through it. The package walk's name is canonical (for a file the
+**One file is one graph node, under one canonical name.** `_discover_project` (behind the
+public `discover_project_modules`) is the only place the package walk, the tests-dir walk
+and the ancestor conftests are merged — `build_dep_tree` and both `resolve_*` functions go
+through it. The package walk's name is canonical (for a file the
 walk reaches twice through a symlinked directory, the name not through the link); every
 other name the file imports under is an *alias*: `tests.x` for `app/tests/x.py`, and a name
 rooted at any directory above the module's first regular package (`company.app.x`,
@@ -138,10 +139,12 @@ sees a root-level `conftest.py`, so `discover_project_modules` adds them via
 aliases), named the way package discovery names modules (`conftest`, `backend.conftest`,
 and `app.conftest` for `src/app/conftest.py`) so their relative imports resolve. They are
 named around every name already in use, aliases included — taking a package file's alias
-would re-point its imports. Which conftest takes a contested name (`y.conftest` for
+would re-point its imports. Which file takes a contested name (`y.conftest` for
 `y/conftest.py` and `x/y/conftest.py`) only names its node: an import of it is an edge to
-every conftest that can have it (`conftest_claims`), because which file it means depends on
-`sys.path` and the import mode — every single-winner rule loses tests in some layout. A
+every conftest above the package that wanted it too (`_Discovered.contested`), because which
+file it means depends on `sys.path` and the import mode — every single-winner rule loses
+tests in some layout. Only those conftests contest names: every service's
+`tests/conftest.py` could be `tests.conftest`, and tying them together selects them all. A
 conftest with no free name gets a
 leading dot (`.mysite.conftest`, which no import spells) rather than being dropped: a
 dropped conftest loses every edge from it. It is parsed under `import_base(name)`, without

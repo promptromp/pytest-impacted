@@ -11,7 +11,6 @@ import pytest
 from pytest_impacted import traversal
 from pytest_impacted.traversal import (
     clear_discovery_cache,
-    conftest_claims,
     discover_ancestor_conftests,
     discover_application_files,
     discover_project_modules,
@@ -537,18 +536,17 @@ def test_a_conftest_keeps_its_own_name_before_another_takes_it_as_an_alias(tmp_p
 
 def test_two_conftests_that_can_take_one_name_are_both_modules(tmp_path):
     """``y.conftest`` can mean ``y/conftest.py`` or, with ``x/`` on ``sys.path``, ``x/y/conftest.py``:
-    one takes it, the other its next name or its last resort, and both are claimants of it."""
+    one takes it, the other its next name or its last resort, and contests it."""
     for rel in ("x/y/__init__.py", "x/y/conftest.py", "x/y/pkg/__init__.py", "y/conftest.py", "y/tests/test_a.py"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
 
-    project = discover_project_modules("x/y/pkg", "y/tests", root_dir=tmp_path)
-    claims = conftest_claims(project.modules, root_dir=tmp_path)
+    discovered = traversal._discover_project("x/y/pkg", "y/tests", root_dir=tmp_path)
 
-    names = {path: name for name, path in project.modules.items()}
-    conftests = [str((tmp_path / rel).resolve()) for rel in ("x/y/conftest.py", "y/conftest.py")]
-    assert all(path in names for path in conftests)
-    assert claims["y.conftest"] == {names[path] for path in conftests}
+    names = {path: name for name, path in discovered.modules.items()}
+    conftests = {names[str((tmp_path / rel).resolve())] for rel in ("x/y/conftest.py", "y/conftest.py")}
+    owner = discovered.aliases.get("y.conftest", "y.conftest")
+    assert {owner, *discovered.contested["y.conftest"]} == conftests
 
 
 def test_conftests_above_the_packages_are_project_modules_and_resolve(tmp_path, caplog):

@@ -12,13 +12,7 @@ from pytest_impacted.parsing import (
     parse_file_imports,
     parse_pytest_plugins,
 )
-from pytest_impacted.traversal import (
-    LAST_RESORT_PREFIX,
-    conftest_claims,
-    discover_project_modules,
-    import_base,
-    modules_for_files,
-)
+from pytest_impacted.traversal import LAST_RESORT_PREFIX, _discover_project, import_base, modules_for_files
 
 
 logger = logging.getLogger(__name__)
@@ -156,7 +150,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are flagged with
     the ``pytest_plugin`` attribute.
     """
-    submodules, aliases = discover_project_modules(package, tests_package, root_dir=root_dir)
+    submodules, aliases, contested = _discover_project(package, tests_package, root_dir)
 
     logger.debug("Building dependency tree for %d submodules", len(submodules))
 
@@ -164,14 +158,13 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     all_imports = _parse_all_module_imports(submodules)
 
     plugin_edges = _pytest_plugin_edges(submodules, aliases)
-    # A name several conftests can be imported under is an import of each (see conftest_claims).
-    claims = conftest_claims(submodules, root_dir)
 
     digraph = nx.DiGraph()
     for name, file_path in submodules.items():
         digraph.add_node(name, path=file_path)
         for candidate in [*all_imports.get(name, []), *plugin_edges.get(name, [])]:
-            for imp in {aliases.get(candidate, candidate), *claims.get(candidate, ())}:
+            # A name conftests above the package contest is an import of each of them too.
+            for imp in (aliases.get(candidate, candidate), *contested.get(candidate, ())):
                 if imp in submodules:
                     digraph.add_node(imp)
                     digraph.add_edge(name, imp)

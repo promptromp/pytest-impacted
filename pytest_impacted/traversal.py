@@ -55,7 +55,7 @@ def find_non_package_prefix(fs_path: str, root: Path) -> tuple[str, str]:
     parts = Path(fs_path).parts
     for i in range(len(parts)):
         candidate = Path(*parts[: i + 1])
-        if (root / candidate / "__init__.py").exists():
+        if _is_regular_package(root / candidate):
             if i == 0:
                 return "", fs_path
             prefix = str(Path(*parts[:i]))
@@ -278,6 +278,16 @@ class ProjectModules(NamedTuple):
     aliases: dict[str, str]
 
 
+class _Discovered(NamedTuple):
+    """:class:`ProjectModules`, plus the importable names that more than one file can have."""
+
+    modules: dict[str, str]
+    aliases: dict[str, str]
+    #: A name some conftests above the package wanted but did not get -> those conftests'
+    #: canonical names: an import of it may mean any of them (see :func:`_name_conftests`).
+    contested: dict[str, set[str]]
+
+
 #: Starts the name of a conftest with no free importable name: no import spells one so.
 LAST_RESORT_PREFIX = "."
 
@@ -315,24 +325,6 @@ def _conftest_candidate(directory: Path, root: Path) -> _ConftestCandidate:
     return _ConftestCandidate(list(dict.fromkeys([preferred, *rooted])), last_resort)
 
 
-def conftest_claims(modules: Mapping[str, str], root_dir: str | Path | None = None) -> dict[str, set[str]]:
-    """Each name a conftest among *modules* can be imported under -> the conftests it can mean.
-
-    Two conftests can share an importable name (``y.conftest`` for ``y/conftest.py`` and,
-    with ``x/`` on ``sys.path``, for ``x/y/conftest.py``). Which one an import means depends
-    on ``sys.path`` and the import mode, which analysis cannot know, so an import of the
-    name depends on every conftest it can mean, whichever took the name as its own.
-    """
-    root = canonical_root(root_dir)
-    claims: dict[str, set[str]] = {}
-    for name, path in modules.items():
-        file = Path(path)
-        if file.name == "conftest.py" and file.is_relative_to(root):
-            for importable in _conftest_candidate(file.parent, root).names:
-                claims.setdefault(importable, set()).add(name)
-    return claims
-
-
 def discover_ancestor_conftests(
     packages: Iterable[str], root_dir: str | Path | None = None, *, taken: Iterable[str] = ()
 ) -> dict[str, str]:
@@ -353,7 +345,7 @@ def _discover_ancestor_conftests(
     *,
     taken: Iterable[str] = (),
     known_paths: Iterable[str] = (),
-) -> ProjectModules:
+) -> _Discovered:
     """Find the ``conftest.py`` files between *root_dir* and each package directory, and name them.
 
     pytest loads every conftest from the rootdir down to a test file, so one
@@ -370,7 +362,8 @@ def _discover_ancestor_conftests(
 
     Returns:
         The conftests (``conftest``, ``backend.conftest``; a non-package prefix such
-        as ``src/`` is dropped, as package discovery does) and their aliases.
+        as ``src/`` is dropped, as package discovery does), their aliases, and the
+        names they contest.
     """
     root = canonical_root(root_dir)
     seen = set(known_paths)
@@ -388,15 +381,18 @@ def _discover_ancestor_conftests(
     return _name_conftests(candidates, taken=taken)
 
 
-def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterable[str]) -> ProjectModules:
+def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterable[str]) -> _Discovered:
     """Name each conftest path from its candidates, never with a name in *taken*.
 
     Names are handed out by rank across all conftests, in walk order, so one conftest's
     second choice never takes another's first; the free names left are aliases, once
     every conftest has its own. A conftest with no free name gets its last resort rather
-    than being dropped, which would lose every edge from it. Which conftest takes a
-    contested name decides only its node's name: an import of the name depends on
-    every conftest it can mean (see :func:`conftest_claims`).
+    than being dropped, which would lose every edge from it.
+
+    Which file a name two files can have means depends on ``sys.path`` and the import
+    mode, which analysis cannot know, so each name a conftest wanted but did not get is
+    *contested*: an import of it is an import of that conftest too. Every rule that picks
+    one winner loses tests in some layout.
     """
     used = set(taken)
     chosen: dict[str, str] = {}
@@ -412,7 +408,12 @@ def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterabl
             if alias not in used:
                 aliases[alias] = name
                 used.add(alias)
-    return ProjectModules(modules, aliases)
+    contested: dict[str, set[str]] = {}
+    for name, path in modules.items():
+        for wanted in candidates[path].names:
+            if wanted != name and aliases.get(wanted) != name:
+                contested.setdefault(wanted, set()).add(name)
+    return _Discovered(modules, aliases, contested)
 
 
 def discover_project_modules(
@@ -438,6 +439,14 @@ def discover_project_modules(
     and an edit to one must resolve to its node like any other module. They are named
     last, around every name already in use.
     """
+    modules, aliases, _ = _discover_project(package, tests_package, root_dir)
+    return ProjectModules(modules, aliases)
+
+
+def _discover_project(
+    package: str, tests_package: str | None = None, root_dir: str | Path | None = None
+) -> _Discovered:
+    """:func:`discover_project_modules`, with the names the conftests above the package contest."""
     root = canonical_root(root_dir)
     walked = discover_submodules(package, require_init=True, root_dir=root)
     names_by_path: dict[str, list[str]] = {}
@@ -467,7 +476,8 @@ def discover_project_modules(
     )
     modules = {**ancestors.modules, **modules}
     aliases = {**ancestors.aliases, **aliases}
-    return ProjectModules(modules, {alias: name for alias, name in aliases.items() if alias not in modules})
+    aliases = {alias: name for alias, name in aliases.items() if alias not in modules}
+    return _Discovered(modules, aliases, ancestors.contested)
 
 
 def discover_application_files(
