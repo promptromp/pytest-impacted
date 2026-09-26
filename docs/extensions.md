@@ -131,7 +131,7 @@ class MyLightweightStrategy:
         return [...]
 ```
 
-When the entry point is loaded, `validate_strategy_class` checks that it resolves to a class whose `find_impacted_tests` accepts `changed_files`, `impacted_modules`, `ns_module` and `dep_tree` (or `**kwargs`). `StrategyProtocol` is a runtime-checkable `typing.Protocol` describing the same shape, handy for `isinstance` assertions in your own tests.
+When the entry point is loaded, `validate_strategy_class` checks that it resolves to a class whose `find_impacted_tests` accepts `changed_files`, `impacted_modules` and `ns_module` (or `**kwargs`). The pipeline also passes `tests_package`, `root_dir`, `session` and `dep_tree` by keyword, so accept those too (or `**kwargs`) — a missing one fails the run with a `TypeError`, deliberately loudly. `StrategyProtocol` is a runtime-checkable `typing.Protocol` describing the same shape, handy for `isinstance` assertions in your own tests.
 
 ## Using extensions
 
@@ -428,6 +428,8 @@ The extension system is designed to be fault-tolerant:
 - **Invalid classes**: If an entry point resolves to a class without `find_impacted_tests`, it is skipped with a warning.
 - **Missing required options**: A `ConfigOption(required=True)` with no value skips the extension with a warning.
 - **Lifecycle hooks**: Exceptions from `enrich_dep_tree`, `setup` or `teardown` are logged and that phase is skipped for the strategy; the others carry on.
+
+These warnings are log records on the `pytest_impacted.extensions` / `pytest_impacted.strategies` loggers — not shown in pytest's terminal output by default (use `--log-cli-level=WARNING` to see them).
 
 An exception from `find_impacted_tests` is **not** caught: it propagates and fails the run, because silently dropping a strategy's answer could skip tests that should run. Handle your own errors there.
 

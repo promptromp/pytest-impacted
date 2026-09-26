@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 import networkx as nx
 
 from pytest_impacted.display import notify
-from pytest_impacted.extensions import ConfigOption
+from pytest_impacted.extensions import ConfigOption, StrategyProtocol
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_conftest_module, is_test_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache
@@ -148,8 +148,8 @@ def clear_dep_tree_cache() -> None:
 def _loaded_config_file(session: Any) -> Path | None:
     """The config file this pytest run loaded (``config.inipath``), or ``None``.
 
-    ``None`` too when there is no real pytest session behind *session* (e.g. a
-    test double), rather than failing the whole pipeline.
+    ``None`` too when pytest found no config file, or when there is no pytest
+    session at all (the standalone CLI).
     """
     inipath = getattr(getattr(session, "config", None), "inipath", None)
     return Path(inipath).resolve() if isinstance(inipath, str | os.PathLike) else None
@@ -618,20 +618,10 @@ def get_default_strategies(
     return strategies
 
 
-def _lifecycle_hook(strategy: Any, name: str) -> Any:
-    """A strategy's optional lifecycle hook, or ``None``.
-
-    Duck-typed extensions (see ``StrategyProtocol``) need only
-    ``find_impacted_tests``; the lifecycle hooks are optional for them, and
-    calling a missing one would log a warning with a traceback on every run.
-    """
-    return getattr(strategy, name, None)
-
-
 class CompositeImpactStrategy(ImpactStrategy):
     """Strategy that combines multiple strategies."""
 
-    def __init__(self, strategies: list[ImpactStrategy]):
+    def __init__(self, strategies: Sequence[ImpactStrategy | StrategyProtocol]):
         """Initialize with a list of strategies to apply."""
         self.strategies = strategies
 
@@ -658,7 +648,8 @@ class CompositeImpactStrategy(ImpactStrategy):
         and :meth:`find_impacted_tests`.
         """
         for strategy in self.strategies:
-            if (enrich := _lifecycle_hook(strategy, "enrich_dep_tree")) is None:
+            # Duck-typed extensions need only find_impacted_tests; the hooks are optional.
+            if (enrich := getattr(strategy, "enrich_dep_tree", None)) is None:
                 continue
             try:
                 enrich(
@@ -693,10 +684,10 @@ class CompositeImpactStrategy(ImpactStrategy):
         entry-point discovery in :mod:`pytest_impacted.extensions`.
         """
         for strategy in self.strategies:
-            if (setup := _lifecycle_hook(strategy, "setup")) is None:
+            if (strategy_setup := getattr(strategy, "setup", None)) is None:
                 continue
             try:
-                setup(
+                strategy_setup(
                     ns_module=ns_module,
                     tests_package=tests_package,
                     root_dir=root_dir,
@@ -720,10 +711,10 @@ class CompositeImpactStrategy(ImpactStrategy):
         reason as :meth:`setup`.
         """
         for strategy in reversed(self.strategies):
-            if (teardown := _lifecycle_hook(strategy, "teardown")) is None:
+            if (strategy_teardown := getattr(strategy, "teardown", None)) is None:
                 continue
             try:
-                teardown()
+                strategy_teardown()
             except Exception:
                 logger.warning(
                     "Strategy %s.%s raised in teardown(); continuing with remaining strategies.",

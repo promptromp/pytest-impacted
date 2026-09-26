@@ -131,7 +131,7 @@ For CI pipelines where git access and test execution happen in separate stages, 
 ```bash
 # Stage 1: identify impacted tests. Stop if it fails (e.g. exit 1 when git is
 # unavailable) — an empty file must mean "nothing impacted", never "unknown".
-impacted-tests --module=my_package --git-mode=branch --base-branch=main > impacted_tests.txt || exit 1
+impacted-tests --module=my_package --git-mode=branch --base-branch=origin/main > impacted_tests.txt || exit 1
 
 # Stage 2: run only those tests. An empty list means nothing was impacted —
 # guard it, or a bare `pytest` would run the whole suite.
@@ -146,7 +146,7 @@ The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `-
 `--verbose`, `--no-dep-files`, `--invalidate-all` and `--disable-ext`. If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
-In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit.
+In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit — and name it as the remote-tracking ref (`origin/main`): a PR checkout has no local `main`.
 
 ### Configuration via `pyproject.toml`
 

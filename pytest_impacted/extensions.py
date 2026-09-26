@@ -118,9 +118,7 @@ def get_ext_cli_flag(ext_name: str, opt_name: str) -> str:
     return f"--impacted-ext-{ext_name.replace('_', '-')}-{opt_name.replace('_', '-')}"
 
 
-#: The pipeline passes ``dep_tree`` by keyword to every strategy, so a strategy that
-#: cannot take it would pass validation and then fail the whole run with a TypeError.
-_REQUIRED_PARAMS = {"changed_files", "impacted_modules", "ns_module", "dep_tree"}
+_REQUIRED_PARAMS = {"changed_files", "impacted_modules", "ns_module"}
 
 
 def validate_strategy_class(name: str, cls: Any) -> bool:

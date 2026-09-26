@@ -189,8 +189,8 @@ file pytest actually loaded, `session.config.inipath`; disable with
 `--impacted-invalidate-all`, marking every test impacted; only added to the pipeline when
 configured, and independent of `--no-impacted-dep-files`), and `CompositeImpactStrategy`,
 which unions results. `get_default_strategies()` builds the default composition.
-Duck-typed extensions need only `find_impacted_tests`; the composite skips the lifecycle
-hooks they lack (`_lifecycle_hook`).
+Duck-typed strategies need only `find_impacted_tests`: the composite skips the lifecycle
+hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for the same reason.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the

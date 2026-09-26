@@ -229,6 +229,22 @@ class TestLoadedConfigFile:
 
         assert result == ["tests.test_a"]
 
+    def test_a_same_named_file_elsewhere_does_not_count(self, tmp_path):
+        """Only the loaded file itself: the name matching is just a shortcut before the path check."""
+        dep_tree = nx.DiGraph()
+        dep_tree.add_node("tests.test_a")
+
+        result = DependencyFileImpactStrategy().find_impacted_tests(
+            changed_files=["other/pytest-ci.ini"],
+            impacted_modules=[],
+            ns_module="pkg",
+            root_dir=tmp_path,
+            session=self.session_with_inipath(tmp_path / "ci/pytest-ci.ini"),
+            dep_tree=dep_tree,
+        )
+
+        assert result == []
+
     def test_other_ini_files_do_not_count(self, tmp_path):
         dep_tree = nx.DiGraph()
         dep_tree.add_node("tests.test_a")
@@ -245,13 +261,15 @@ class TestLoadedConfigFile:
         assert result == []
 
 
-def test_a_session_without_a_real_config_is_ignored():
-    """A test double's ``config.inipath`` is not a path; that must not fail the pipeline."""
+def test_a_run_without_a_config_file_matches_names_only():
+    """pytest found no config file (``config.inipath is None``): only the name patterns apply."""
+    session = MagicMock()
+    session.config.inipath = None
     dep_tree = nx.DiGraph()
     dep_tree.add_node("tests.test_a")
 
     result = DependencyFileImpactStrategy().find_impacted_tests(
-        changed_files=["ci/other.ini"], impacted_modules=[], ns_module="pkg", session=MagicMock(), dep_tree=dep_tree
+        changed_files=["ci/other.ini"], impacted_modules=[], ns_module="pkg", session=session, dep_tree=dep_tree
     )
 
     assert result == []

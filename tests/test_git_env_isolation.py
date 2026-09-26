@@ -27,7 +27,8 @@ def test_suite_ignores_repo_locating_git_variables(tmp_path):
     index_before = (decoy / ".git/index").read_bytes()
 
     hook_env = {
-        **os.environ,
+        # PYTEST_ADDOPTS: a developer's own options (e.g. --impacted, -n) must not change the inner run.
+        **{k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"},
         "GIT_DIR": str(decoy / ".git"),
         "GIT_INDEX_FILE": str(decoy / ".git/index"),
         "GIT_WORK_TREE": str(decoy),
@@ -59,3 +60,11 @@ def test_suite_ignores_repo_locating_git_variables(tmp_path):
     )
     assert bare.stdout.strip() == "false"
     assert (decoy / ".git/index").read_bytes() == index_before
+
+
+def test_isolated_git_env_switches_off_auto_maintenance(tmp_path):
+    """Recent git detaches maintenance after a commit, racing copies of the repo (a real CI flake)."""
+    env = {**os.environ, **isolated_git_env(tmp_path)}
+    for key, expected in (("maintenance.auto", "false"), ("gc.auto", "0")):
+        value = subprocess.run(["git", "config", "--get", key], env=env, capture_output=True, text=True, check=True)
+        assert value.stdout.strip() == expected

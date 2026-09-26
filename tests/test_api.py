@@ -538,3 +538,24 @@ def test_get_impacted_tests_enrich_receives_full_context(
     assert spy.enrich_kwargs_seen["root_dir"] == root
     # session is None in this test because we didn't pass one
     assert spy.enrich_kwargs_seen["session"] is None
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/a.py"])
+@patch("pytest_impacted.api.cached_build_dep_tree", return_value=nx.DiGraph())
+def test_duck_typed_strategy_passed_directly(mock_tree, mock_files):
+    """A strategy with only find_impacted_tests works through the API, lifecycle hooks and all."""
+
+    class DuckTyped:
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    assert (
+        get_impacted_tests(
+            impacted_git_mode=GitMode.UNSTAGED,
+            impacted_base_branch="main",
+            root_dir=Path("."),
+            ns_module="pkg",
+            strategy=DuckTyped(),
+        )
+        is None
+    )
