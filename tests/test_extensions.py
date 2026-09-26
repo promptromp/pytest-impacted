@@ -208,6 +208,15 @@ class TestValidateStrategyClass:
 
         assert validate_strategy_class("test", KwargsOnly) is True
 
+    def test_strategy_that_cannot_take_dep_tree_is_rejected(self):
+        """The pipeline always passes ``dep_tree``; accepting this class would crash the run later."""
+
+        class NoDepTree:
+            def find_impacted_tests(self, changed_files, impacted_modules, ns_module):
+                return []
+
+        assert validate_strategy_class("test", NoDepTree) is False
+
 
 class TestCoerceValue:
     """Test config value coercion."""

@@ -113,7 +113,10 @@ class GitStatus(StrEnum):
 
     @classmethod
     def from_git_diff_name_status(cls, status: str) -> GitStatus:
-        """Create a GitStatus from a ``--name-status`` token; ``R100``/``C85`` carry a similarity score."""
+        """Create a GitStatus from a ``--name-status`` token.
+
+        ``R100``/``C85`` carry a similarity score; unreachable under ``--no-renames``, kept defensively.
+        """
         return cls(status[:1])
 
 
@@ -217,7 +220,8 @@ def find_impacted_files_in_repo(
 
     BRANCH:
         - All files that have been modified in the current branch since it forked from the base
-          branch (``git diff base...HEAD``, as a pull request shows it), or relative to the base
+          branch (like ``git diff base...HEAD``, as a pull request shows it, but unioned over every
+          merge base), or relative to the base
           branch's tip when *use_merge_base* is false or there is no fork point.
         - This does *not* include untracked files as the expectation is that this is used for committed changes.
 

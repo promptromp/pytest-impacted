@@ -346,3 +346,22 @@ class TestCompositeLifecycle:
             "root_dir": root_dir,
             "session": session,
         }
+
+
+def test_duck_typed_strategy_without_lifecycle_hooks_runs_quietly(caplog):
+    """Only ``find_impacted_tests`` is required; missing hooks are skipped, not logged as failures."""
+
+    class DuckTyped:
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return ["tests.test_duck"]
+
+    composite = CompositeImpactStrategy([DuckTyped()])
+    dep_tree = nx.DiGraph()
+
+    composite.enrich_dep_tree(dep_tree, ns_module="pkg")
+    composite.setup(ns_module="pkg", dep_tree=dep_tree)
+    result = composite.find_impacted_tests([], [], "pkg", dep_tree=dep_tree)
+    composite.teardown()
+
+    assert result == ["tests.test_duck"]
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
