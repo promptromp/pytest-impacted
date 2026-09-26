@@ -32,17 +32,24 @@ def test_suite_ignores_repo_locating_git_variables(tmp_path):
         "GIT_INDEX_FILE": str(decoy / ".git/index"),
         "GIT_WORK_TREE": str(decoy),
     }
-    # The tests that create repositories, including a bare one.
+    # A bare ``git init``, and a test built on the session-scoped repository template —
+    # set up before any function-scoped fixture, which is why the scrub is in pytest_configure.
+    targets = [
+        "tests/test_git.py::test_bare_repo_is_a_clear_error",
+        "tests/test_git.py::test_unstaged_mode_clean_real_repo_returns_none",
+    ]
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_git.py", "-k", "bare or real"],
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets],
         cwd=REPO_ROOT,
         env=hook_env,
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "3 passed" in result.stdout, result.stdout  # the bare test is parametrized over both git modes
     bare = subprocess.run(
         ["git", "-C", str(decoy), "config", "--get", "core.bare"],
         capture_output=True,

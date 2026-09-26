@@ -1,6 +1,7 @@
 """pytest fixtures used by unit-tests."""
 
 import os
+import subprocess
 
 import pytest
 
@@ -8,10 +9,7 @@ import pytest
 pytest_plugins = "pytester"
 
 
-#: Variables that tell git which repository to use (``git rev-parse --local-env-vars``).
-#: Git exports them to hooks, and the pre-commit hook runs this suite from inside a
-#: commit, so every throwaway repository the tests create would otherwise resolve to
-#: the repository being committed — overwriting its index, or re-initialising it as bare.
+#: Fallback for :func:`_git_repo_locating_vars` when git cannot be asked.
 _GIT_REPO_LOCATING_VARS = (
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
@@ -29,12 +27,36 @@ _GIT_REPO_LOCATING_VARS = (
     "GIT_SHALLOW_FILE",
     "GIT_COMMON_DIR",
 )
+_scrubbed_git_env: dict[str, str] = {}
+
+
+def _git_repo_locating_vars() -> list[str]:
+    """The variables that tell git which repository to use, as this git defines them."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return list(_GIT_REPO_LOCATING_VARS)
+    return result.stdout.split() or list(_GIT_REPO_LOCATING_VARS)
 
 
 def pytest_configure(config):
-    """Scrub repo-locating git variables before any fixture — session-scoped ones included — runs."""
-    for name in _GIT_REPO_LOCATING_VARS:
-        os.environ.pop(name, None)
+    """Scrub repo-locating git variables before any fixture — session-scoped ones included — runs.
+
+    Git exports them to hooks, and the pre-commit hook runs this suite from inside a
+    commit, so every throwaway repository the tests create would otherwise resolve to
+    the repository being committed — overwriting its index, or re-initialising it as bare.
+    """
+    for name in _git_repo_locating_vars():
+        if name in os.environ:
+            _scrubbed_git_env[name] = os.environ.pop(name)
+
+
+def pytest_unconfigure(config):
+    """Restore what :func:`pytest_configure` removed, for callers of ``pytest.main()`` in-process."""
+    os.environ.update(_scrubbed_git_env)
+    _scrubbed_git_env.clear()
 
 
 def isolated_git_env(home) -> dict[str, str]:
