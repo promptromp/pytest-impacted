@@ -495,10 +495,10 @@ def test_discover_ancestor_conftests_without_any(tmp_path):
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "Implicit namespace sub-packages (a directory without __init__.py) are never walked, so a "
-        "change there resolves to no module and selects no tests. ROADMAP P0; seen in real projects "
-        "(pdfalive 7/37 package files, glo-ai 223/1658). Remove this mark with the fix."
+        "change there resolves to no module and selects no tests (ROADMAP P0). Remove with the fix."
     ),
 )
 @pytest.mark.parametrize("layout", ["flat", "src"])

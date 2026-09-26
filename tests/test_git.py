@@ -13,7 +13,7 @@ from git import GitCommandError, Repo
 from pytest_impacted import git
 from pytest_impacted.git import find_repo, normalize_git_paths
 
-from .conftest import isolated_git_env
+from .git_helpers import isolated_git_env
 
 
 def name_status_z(*records: tuple[str, ...]) -> str:

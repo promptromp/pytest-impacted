@@ -4,10 +4,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pytest import Config, Parser, UsageError
+from pytest import Config, DoctestItem, Parser, UsageError
 
 from pytest_impacted._rust import RUST_AVAILABLE
-from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests
+from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
     discover_extension_metadata,
@@ -276,13 +276,7 @@ def pytest_collection_modifyitems(session, config, items):
         if GIT_AVAILABLE:
             warn(f"pytest-impacted: {err} Running every test.", session)
         return
-    if not impacted_tests:
-        # skip all tests
-        for item in items:
-            item.add_marker(pytest.mark.skip)
-        return
-
-    impacted_items = _impacted_items(items, impacted_tests, root_dir)
+    impacted_items = _impacted_items(items, impacted_tests or [], root_dir)
     for item in items:
         if item in impacted_items:
             item.add_marker(pytest.mark.impacted)
@@ -291,14 +285,18 @@ def pytest_collection_modifyitems(session, config, items):
 
 
 def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_dir: Path) -> set[pytest.Item]:
-    """The collected items that belong to an impacted test file.
+    """The collected items that belong to an impacted test file — or that cannot be judged.
 
     An item belongs to both the file it was collected from (``item.path``) and the
-    file its test function is defined in (``item.location``) — they differ for an
+    file its test function is defined in (``item.location``). They differ for an
     inherited test (the base class's module) and a pytest-bdd scenario (inside
-    ``pytest_bdd``), and either being impacted selects it: matching only one of
-    them skipped tests. An item from a non-Python file (a ``--doctest-glob`` text
-    file, a YAML collector) cannot be judged by import analysis, so it runs.
+    ``pytest_bdd``); matching only one of them skipped tests, so either selects it.
+    The location is also matched the way it always was, by path suffix, so nothing
+    selected before is lost (e.g. a location outside a symlinked rootdir).
+
+    Import analysis only ranks *test modules*, so two kinds of item always run:
+    items from non-Python files (a ``--doctest-glob`` text file, a YAML collector)
+    and doctests (``--doctest-modules`` collects them from source modules too).
     """
     impacted = {(root_dir / test).resolve() for test in impacted_tests}
     resolved: dict[Path, Path] = {}
@@ -311,7 +309,11 @@ def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_di
     return {
         item
         for item in items
-        if item.path.suffix != ".py" or is_impacted(item.path) or is_impacted(root_dir / item.location[0])
+        if item.path.suffix != ".py"
+        or isinstance(item, DoctestItem)
+        or is_impacted(item.path)
+        or is_impacted(root_dir / item.location[0])
+        or matches_impacted_tests(item.location[0], impacted_tests=impacted_tests)
     }
 
 

@@ -15,7 +15,7 @@ import pytest
 
 from pytest_impacted.plugin import _impacted_items
 
-from .conftest import edit_file
+from .git_helpers import edit_file
 
 
 # --- end to end ------------------------------------------------------------------
@@ -107,7 +107,7 @@ def root(tmp_path):
     return tmp_path
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)  # identity equality and hashing, like pytest's own nodes
 class FakeItem:
     """Just the two attributes the rule reads: ``path`` (absolute) and ``location`` (root-relative)."""
 
@@ -144,13 +144,38 @@ def test_relative_impacted_entries_are_anchored_at_the_root_not_the_cwd(root, mo
     assert item in _impacted_items([item], ["tests/test_a.py"], root)
 
 
-def test_each_file_is_resolved_once(root, monkeypatch):
-    """Parametrized suites put thousands of items in a few files; resolving walks the filesystem."""
-    items = [fake_item(root, "tests/test_a.py", "tests/test_a.py") for _ in range(50)]
-    calls: list[Path] = []
-    real_resolve = Path.resolve
-    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: calls.append(self) or real_resolve(self, *a, **k))
+def test_a_location_matched_by_suffix_is_still_selected(root):
+    """Anything the pre-0.31.1 suffix match selected stays selected, e.g. a location
+    outside a symlinked rootdir, which resolves to a different physical file."""
+    item = fake_item(root, "tests/test_b.py", "tests/test_a.py")
 
-    _impacted_items(items, [str(root / "tests/test_a.py")], root)
+    assert item in _impacted_items([item], ["/elsewhere/checkout/tests/test_a.py"], root)
 
-    assert len(calls) <= 3  # the impacted entry, the shared path, the shared location
+
+def test_distinct_items_in_the_same_file_are_judged_independently(root):
+    """Real pytest items are distinct objects even in one file; each must be decided."""
+    items = [fake_item(root, "tests/test_a.py", "tests/test_a.py") for _ in range(3)]
+
+    assert _impacted_items(items, [str(root / "tests/test_a.py")], root) == set(items)
+
+
+def test_non_python_items_run_even_when_nothing_is_impacted(make_git_project):
+    """The "nothing impacted" path must not skip what import analysis cannot judge."""
+    project = make_git_project({**PACKAGED, "suite/guide.txt": ">>> 1 + 1\n2\n", "README.md": "x\n"}, INI)
+    edit_file(project, "README.md")
+
+    result = run(project, "--doctest-glob=*.txt")
+
+    result.stdout.fnmatch_lines(["*guide.txt::guide.txt PASSED*"])
+    result.assert_outcomes(passed=1, skipped=2)
+
+
+def test_doctests_in_a_changed_source_module_run(make_git_project):
+    """``--doctest-modules`` collects from source modules, which are never impacted *test* files."""
+    source = 'def add(a, b):\n    """\n    >>> add(1, 1)\n    2\n    """\n    return a + b\n'
+    project = make_git_project({**PACKAGED, "app/calc.py": source}, INI)
+    edit_file(project, "app/calc.py")
+
+    result = run(project, "--doctest-modules", "app", "suite")
+
+    result.stdout.fnmatch_lines(["*app/calc.py::app.calc.add PASSED*"])

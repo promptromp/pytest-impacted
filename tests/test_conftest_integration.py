@@ -7,7 +7,7 @@ that conftest's directory, exactly as editing the conftest itself does.
 
 import pytest
 
-from .conftest import edit_file as edit
+from .git_helpers import edit_file as edit
 
 
 APP = {

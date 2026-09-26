@@ -17,7 +17,7 @@ from pytest_impacted.plugin import (
     validate_tests_dir,
 )
 
-from .conftest import isolated_git_env
+from .git_helpers import isolated_git_env
 
 
 CLI_OPTION_DESTS = {

@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .conftest import isolated_git_env
+from .git_helpers import isolated_git_env
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
