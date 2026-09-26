@@ -300,3 +300,14 @@ def test_narrowing_to_nothing_when_no_fixture_uses_the_change(make_project):
     edit(project, "app/db.py")
 
     narrow(project).assert_outcomes(skipped=3)
+
+
+def test_narrowing_sees_an_import_inside_a_fixture(make_project):
+    """The graph follows ``def db(): from app.db import connect``; the narrowing must too."""
+    nested = NARROW_CONFTEST.replace("from app.db import connect\n", "").replace(
+        "    return connect()", "    from app.db import connect\n\n    return connect()"
+    )
+    project = make_project({**APP, **NARROW_TESTS, "suite/conftest.py": nested})
+    edit(project, "app/db.py")
+
+    narrow(project).assert_outcomes(passed=1, skipped=2)
