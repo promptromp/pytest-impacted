@@ -144,7 +144,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
 
     # Other names each module imports under (see discover_project_modules), for names
     # that come from outside the source, such as ``-p`` plugins.
-    digraph.graph["aliases"] = aliases
+    digraph.graph["aliases"] = dict(aliases)  # a copy: the discovery result is cached and shared
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     return digraph.reverse()

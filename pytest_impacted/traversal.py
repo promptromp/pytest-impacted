@@ -259,62 +259,14 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
 
 
 def clear_discovery_cache() -> None:
-    """Drop every cached discovery result (see :func:`discover_submodules`)."""
+    """Drop every cached discovery result (see :func:`discover_submodules` and :func:`discover_project_modules`)."""
     _discover_submodules.cache_clear()
+    _discover_project_modules.cache_clear()
 
 
 # The cache moved to the private inner function when ``root_dir`` was added, but
 # ``discover_submodules`` is part of the public surface — keep the old call working.
 discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: ignore[attr-defined]
-
-
-def _conftest_module_name(directory: Path, root: Path, taken: Collection[str]) -> str:
-    """Dotted name for ``directory/conftest.py`` that is not already in *taken*.
-
-    Preferably named the way package discovery names modules, dropping a
-    non-package prefix like ``src/``, so the conftest's relative imports resolve
-    to the modules they refer to. Dropping the prefix can clash with another
-    module, and a clash would drop the conftest from the graph, so the full
-    path from the root — unique among conftests — is the fallback.
-    """
-    relative = directory.relative_to(root)
-    if not relative.parts:
-        return "conftest"
-    _, importable = find_non_package_prefix(str(relative), root)
-    preferred = f"{path_to_package_name(importable)}.conftest"
-    return preferred if preferred not in taken else ".".join((*relative.parts, "conftest"))
-
-
-def discover_ancestor_conftests(
-    packages: Iterable[str], root_dir: str | Path | None = None, *, taken: Collection[str] = ()
-) -> dict[str, str]:
-    """Find the ``conftest.py`` files between *root_dir* and each package directory.
-
-    pytest loads every conftest from the rootdir down to a test file, so one
-    above the analysed packages — most often at the repository root — still
-    provides fixtures to their tests. Package discovery never sees it, so
-    without this its imports would be invisible to the dependency graph.
-
-    Args:
-        taken: Module names already in use (see :func:`_conftest_module_name`).
-
-    Returns:
-        Dict mapping a dotted name (``conftest``, ``backend.conftest``; a non-package
-        prefix such as ``src/`` is dropped, as package discovery does) -> absolute
-        file path, like :func:`discover_submodules`.
-    """
-    root = canonical_root(root_dir)
-    found: dict[str, str] = {}
-    for package in packages:
-        directory = (root / package_name_to_path(package)).parent
-        while directory.is_relative_to(root):
-            conftest = directory / "conftest.py"
-            if conftest.is_file() and (path := str(conftest.resolve())) not in found.values():
-                found[_conftest_module_name(directory, root, taken={*taken, *found})] = path
-            if directory == root:
-                break
-            directory = directory.parent
-    return found
 
 
 class ProjectModules(NamedTuple):
@@ -324,6 +276,69 @@ class ProjectModules(NamedTuple):
     modules: dict[str, str]
     #: Another importable name -> the canonical name of the same file.
     aliases: dict[str, str]
+
+
+def _conftest_names(directory: Path, root: Path) -> list[str]:
+    """The names ``directory/conftest.py`` can be imported under, preferred first.
+
+    Preferably the way package discovery names modules, dropping a non-package
+    prefix like ``src/``, so the conftest's relative imports resolve to the modules
+    they refer to; then the full path from the root, for ``sys.path`` holding the root.
+    """
+    relative = directory.relative_to(root)
+    if not relative.parts:
+        return ["conftest"]
+    _, importable = find_non_package_prefix(str(relative), root)
+    preferred = f"{path_to_package_name(importable)}.conftest"
+    return list(dict.fromkeys([preferred, ".".join((*relative.parts, "conftest"))]))
+
+
+def discover_ancestor_conftests(
+    packages: Iterable[str],
+    root_dir: str | Path | None = None,
+    *,
+    taken: Collection[str] = (),
+    known_paths: Collection[str] = (),
+) -> ProjectModules:
+    """Find the ``conftest.py`` files between *root_dir* and each package directory.
+
+    pytest loads every conftest from the rootdir down to a test file, so one
+    above the analysed packages — most often at the repository root — still
+    provides fixtures to their tests. Package discovery never sees it, so
+    without this its imports would be invisible to the dependency graph.
+
+    Each conftest is named by the first of :func:`_conftest_names` not in *taken*,
+    and its other free names are its aliases. With none free, it is named with a
+    leading dot (``.mysite.conftest``): no absolute import is spelled that way, so none
+    reaches it by mistake, but it stays a node — dropping it would lose every edge from it.
+
+    Args:
+        taken: Names already in use, aliases included: a conftest never takes one.
+        known_paths: Files already named by another walk, which are skipped.
+
+    Returns:
+        The conftests (``conftest``, ``backend.conftest``; a non-package prefix such
+        as ``src/`` is dropped, as package discovery does) and their aliases.
+    """
+    root = canonical_root(root_dir)
+    used, seen = set(taken), set(known_paths)
+    modules: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    for package in packages:
+        directory = (root / package_name_to_path(package)).parent
+        while directory.is_relative_to(root):
+            conftest = directory / "conftest.py"
+            if os.path.isfile(conftest) and (path := str(conftest.resolve())) not in seen:
+                seen.add(path)
+                names = _conftest_names(directory, root)
+                name, *others = [free for free in names if free not in used] or [f".{names[-1]}"]
+                modules[name] = path
+                aliases.update(dict.fromkeys(others, name))
+                used.update((name, *others))
+            if directory == root:
+                break
+            directory = directory.parent
+    return ProjectModules(modules, aliases)
 
 
 def discover_project_modules(
@@ -346,9 +361,18 @@ def discover_project_modules(
 
     Conftests above the two directories are modules too (see
     :func:`discover_ancestor_conftests`): pytest loads them, so they are graph nodes,
-    and an edit to one must resolve to its node like any other module.
+    and an edit to one must resolve to its node like any other module. They are named
+    last, around every name already in use.
+
+    The result is cached, like :func:`discover_submodules`, so the graph and the
+    resolvers always see the same modules; do not mutate it.
     """
-    root = canonical_root(root_dir)
+    return _discover_project_modules(package, tests_package, canonical_root(root_dir))
+
+
+@lru_cache
+def _discover_project_modules(package: str, tests_package: str | None, root: Path) -> ProjectModules:
+    """Cached :func:`discover_project_modules`, keyed on the canonical *root*."""
     walked = discover_submodules(package, require_init=True, root_dir=root)
     names_by_path: dict[str, list[str]] = {}
     for name, path in walked.items():
@@ -370,11 +394,13 @@ def discover_project_modules(
                 modules[name] = path
             else:
                 aliases.setdefault(name, canonical_of[path])
-    # Skip any a walk already found: the walk up from a tests dir inside the package passes through it.
+    # The walk up from a tests dir inside the package passes conftests the walks already named.
     packages = [package, tests_package] if tests_package else [package]
-    known_paths = set(modules.values())
-    ancestors = discover_ancestor_conftests(packages, root_dir=root, taken=modules.keys())
-    modules = {**{name: path for name, path in ancestors.items() if path not in known_paths}, **modules}
+    ancestors = discover_ancestor_conftests(
+        packages, root_dir=root, taken={*modules, *aliases}, known_paths=set(modules.values())
+    )
+    modules = {**ancestors.modules, **modules}
+    aliases = {**ancestors.aliases, **aliases}
     return ProjectModules(modules, {alias: name for alias, name in aliases.items() if alias not in modules})
 
 

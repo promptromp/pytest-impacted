@@ -465,15 +465,55 @@ def test_discover_ancestor_conftests(tmp_path):
 
     found = discover_ancestor_conftests(["backend/tests"], root_dir=tmp_path)
 
-    assert found == {
+    assert found.modules == {
         "conftest": str((tmp_path / "conftest.py").resolve()),
         "backend.conftest": str((tmp_path / "backend/conftest.py").resolve()),
     }
+    assert found.aliases == {}
 
 
 def test_discover_ancestor_conftests_without_any(tmp_path):
     (tmp_path / "pkg").mkdir()
-    assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}
+    assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == ({}, {})
+
+
+@pytest.mark.parametrize(
+    ("files", "package", "aliases"),
+    [
+        pytest.param(
+            ["mysite/conftest.py", "mysite/mysite/__init__.py", "mysite/mysite/conftest.py"],
+            "mysite/mysite",
+            {},
+            id="named_like_a_conftest_in_the_package",
+        ),
+        pytest.param(
+            ["x/conftest.py", "x/x/conftest.py", "x/x/mod.py"],
+            "x/x",
+            {"x.conftest": "x.x.conftest"},
+            id="named_like_an_alias_of_a_package_file",
+        ),
+        pytest.param(
+            ["src/app/__init__.py", "src/app/conftest.py", "src/app/core/__init__.py"],
+            "src/app/core",
+            {"src.app.conftest": "app.conftest"},
+            id="importable_under_its_full_path_too",
+        ),
+    ],
+)
+def test_every_conftest_is_one_module_under_its_own_name(tmp_path, files, package, aliases):
+    """An ancestor conftest never takes a name already in use, nor is it dropped for lack of one."""
+    for rel in files:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    project = discover_project_modules(package, root_dir=tmp_path)
+    names = [
+        resolve_files_to_modules([rel], package, root_dir=tmp_path) for rel in files if rel.endswith("conftest.py")
+    ]
+
+    assert all(len(found) == 1 for found in names), names
+    assert len({found[0] for found in names}) == len(names), names
+    assert {alias: project.aliases[alias] for alias in aliases} == aliases
 
 
 def test_conftests_above_the_packages_are_project_modules_and_resolve(tmp_path, caplog):

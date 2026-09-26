@@ -7,6 +7,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted import graph
+from pytest_impacted.strategies import cached_build_dep_tree
 from pytest_impacted.traversal import ProjectModules, resolve_files_to_modules
 
 
@@ -321,6 +322,20 @@ def test_every_node_resolves_back_to_itself(tmp_path):
     for node, path in dep_tree.nodes(data="path"):
         changed = str(Path(path).relative_to(root))
         assert resolve_files_to_modules([changed], "backend/app", "suite", root_dir=tmp_path) == [node], changed
+
+
+def test_the_resolvers_never_name_a_module_the_cached_graph_lacks(tmp_path):
+    """A conftest created after the graph was built must not resolve to a missing node, which
+    would read as a production module outside the graph and select every test."""
+    for rel in ("backend/app/__init__.py", "suite/test_a.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    dep_tree = cached_build_dep_tree("backend/app", "suite", root_dir=tmp_path)
+    (tmp_path / "backend/conftest.py").touch()
+
+    resolved = resolve_files_to_modules(["backend/conftest.py"], "backend/app", "suite", root_dir=tmp_path)
+
+    assert set(resolved) <= set(dep_tree.nodes)
 
 
 def test_a_file_reached_under_two_names_is_one_node(tmp_path):

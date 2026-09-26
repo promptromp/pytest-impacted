@@ -72,11 +72,14 @@ strategy decide. This is why `DependencyFileImpactStrategy`, which operates on
 non-Python files, needs no special-casing. Keep it that way.
 
 **The dependency graph is built once** and passed to every strategy as a required
-keyword-only `dep_tree`. Both caches live on *private* inner functions —
-`_cached_build_dep_tree` (maxsize=8) and `_discover_submodules` — because the public
-wrappers must canonicalize `root_dir` before the lookup. `clear_dep_tree_cache()`
-clears both (via `traversal.clear_discovery_cache()`); `discover_submodules.cache_clear`
-is a back-compat alias onto the inner cache.
+keyword-only `dep_tree`. The caches live on *private* inner functions —
+`_cached_build_dep_tree` (maxsize=8), `_discover_submodules` and
+`_discover_project_modules` — because the public wrappers must canonicalize `root_dir`
+before the lookup. `clear_dep_tree_cache()` clears them all (via
+`traversal.clear_discovery_cache()`); `discover_submodules.cache_clear` is a back-compat
+alias onto the inner cache. Project discovery is cached so the graph and the changed-file
+resolvers see one snapshot: a file the resolver names but the cached graph lacks reads as
+a production module outside the graph, which selects every test.
 
 **Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref
 straight to `repo.git.<cmd>(...)`. It validates each ref with `validate_rev` (rejecting
@@ -135,8 +138,11 @@ sees a root-level `conftest.py`, so `discover_project_modules` adds them via
 them, an edit to `backend/conftest.py` resolved to nothing and reached no conftest
 importing it. They are named the way package discovery names modules (`conftest`,
 `backend.conftest`, and `app.conftest` for `src/app/conftest.py`) so their relative imports
-resolve — unless that name is taken, when the full path name is used instead: a clash
-would silently drop the conftest from the graph. A conftest is recognised by its file
+resolve; the full path name (`src.app.conftest`) is the next choice, and an alias when
+free. They are named around every name in use, aliases included — taking an alias would
+re-point imports of a package file — and with no name free a conftest is named with a
+leading dot (`.mysite.conftest`, which no import spells) rather than dropped: a dropped
+conftest loses every edge from it. A conftest is recognised by its file
 name, `conftest.py`, on both the changed-file and the graph path. Every node carries its
 source file in the `path` attribute. Resolve a node to a file with `_module_path`, never by
 rebuilding a path from the dotted name — that silently fails for src-layout, where the
