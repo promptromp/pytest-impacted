@@ -15,7 +15,7 @@ from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
 from pytest_impacted.parsing import is_conftest_module, is_test_module, normalize_path
-from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_submodules
+from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_application_files
 
 
 logger = logging.getLogger(__name__)
@@ -269,22 +269,15 @@ def _tests_under_conftests(conftest_dirs: set[Path], dep_tree: nx.DiGraph, root_
 
 
 class _CodeRoles:
-    """Tells application code (the code under test) from test code, by which walk found a file.
+    """Tells application code (the code under test) from test code.
 
-    Application code is what discovering ``--impacted-module`` finds, less conftests and
-    anything discovering ``--impacted-tests-dir`` finds too (a tests dir inside the
-    package). Everything else in the graph — conftests, the tests dir — is test code. A
-    tests dir holding the whole package cannot tell the two apart, so it is ignored.
+    Application code is what :func:`~pytest_impacted.traversal.discover_application_files`
+    finds — the ``--impacted-module`` walk, less the ``--impacted-tests-dir`` walk — and
+    is never a conftest. Everything else in the graph is test code.
     """
 
     def __init__(self, *, ns_module: str, tests_package: str | None, root_dir: Path):
-        package = set(discover_submodules(ns_module, require_init=True, root_dir=root_dir).values())
-        tests = (
-            set(discover_submodules(tests_package, require_init=False, root_dir=root_dir).values())
-            if tests_package
-            else set()
-        )
-        self.application = package if package <= tests else package - tests
+        self.application = discover_application_files(ns_module, tests_package, root_dir=root_dir)
 
     def is_application_code(self, path: Path) -> bool:
         return path.name != "conftest.py" and str(path) in self.application

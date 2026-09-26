@@ -215,9 +215,9 @@ and maturin (or `uv sync`) to build. Lint it from the repo root with
 fixture module, another conftest — impacts every test in its directory and below; tests
 never import their conftest, so this is invisible to test-side import analysis),
 `ConftestImportImpactStrategy` (the same for a conftest importing changed *application*
-code — `_CodeRoles`: files the `--impacted-module` walk found, less conftests and the
-`--impacted-tests-dir` walk's; by discovery, never by path, which a symlinked subpackage
-resolves elsewhere. Always in the default pipeline, but `report_only` — naming those
+code — `traversal.discover_application_files`: the `--impacted-module` walk's files less
+the `--impacted-tests-dir` walk's, conftests excluded; by discovery, never by path, which a
+symlinked subpackage resolves elsewhere. Always in the default pipeline, but `report_only` — naming those
 conftests — unless `--impacted-conftest-imports`: a root conftest importing the app turned
 0.31.0's every edit into a full run, so keep it selecting only on request until narrowing
 can make it selective), `DependencyFileImpactStrategy`

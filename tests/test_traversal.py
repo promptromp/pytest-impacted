@@ -12,6 +12,7 @@ from pytest_impacted import traversal
 from pytest_impacted.traversal import (
     clear_discovery_cache,
     discover_ancestor_conftests,
+    discover_application_files,
     discover_project_modules,
     discover_submodules,
     find_non_package_prefix,
@@ -654,3 +655,35 @@ def test_an_alias_resolves_to_its_file(tmp_path):
     files = resolve_modules_to_files(["tests.test_x", "pkg.tests.test_x"], "pkg", "pkg/tests", root_dir=tmp_path)
 
     assert files == [str((tmp_path / "pkg/tests/test_x.py").resolve())] * 2
+
+
+@pytest.mark.parametrize(
+    ("tests_package", "application"),
+    [
+        pytest.param(None, {"app/db.py", "app/checks/test_db.py"}, id="no_tests_dir"),
+        pytest.param("suite", {"app/db.py", "app/checks/test_db.py"}, id="tests_dir_beside"),
+        pytest.param("app/checks", {"app/db.py"}, id="tests_dir_inside"),
+        pytest.param("app", {"app/db.py", "app/checks/test_db.py"}, id="tests_dir_is_the_package"),
+    ],
+)
+def test_discover_application_files(tmp_path, tests_package, application):
+    """The package walk's files, less the tests dir's — unless the tests dir holds the whole package."""
+    for rel in ("app/__init__.py", "app/db.py", "app/checks/test_db.py", "suite/test_x.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    found = discover_application_files("app", tests_package, root_dir=tmp_path)
+
+    assert found == {str((tmp_path / rel).resolve()) for rel in application}
+
+
+def test_discover_application_files_ignores_a_tests_dir_holding_the_package_despite_symlinks(tmp_path):
+    """The tests walk never follows a symlinked directory the package walk does; that must not matter."""
+    for rel in ("app/__init__.py", "app/db.py", "libs/shared/__init__.py", "libs/shared/x.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    os.symlink(tmp_path / "libs/shared", tmp_path / "app/shared", target_is_directory=True)
+
+    found = discover_application_files("app", "app", root_dir=tmp_path)
+
+    assert str((tmp_path / "app/db.py").resolve()) in found

@@ -361,6 +361,25 @@ def discover_project_modules(
     return ProjectModules(modules, {alias: name for alias, name in aliases.items() if alias not in modules})
 
 
+def discover_application_files(
+    package: str, tests_package: str | None = None, root_dir: str | Path | None = None
+) -> frozenset[str]:
+    """The files of *package* that are code under test: the package walk's, less the tests dir's.
+
+    A tests dir inside the package (``app/tests``) holds test code, so its files are
+    left out. A tests dir holding the whole package cannot tell tests from the
+    application and is ignored — decided on the configured directories, not on the two
+    walks' results, which differ wherever the package walk follows a symlink the tests
+    walk does not.
+    """
+    root = canonical_root(root_dir)
+    application = set(discover_submodules(package, require_init=True, root_dir=root).values())
+    package_dir = Path(package_name_to_path(package))
+    if tests_package and not package_dir.is_relative_to(package_name_to_path(tests_package)):
+        application -= set(discover_submodules(tests_package, require_init=False, root_dir=root).values())
+    return frozenset(application)
+
+
 def _reached_through_symlink(name: str, prefix_parts: tuple[str, ...], root: Path) -> bool:
     """Whether the walk reached module *name* through a symlinked directory."""
     parts = (*prefix_parts, *name.split("."))
