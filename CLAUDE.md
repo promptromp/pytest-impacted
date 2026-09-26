@@ -25,10 +25,13 @@ in particular, which imports every parent package to answer.
 **`parsing.py` imports node classes from `astroid.nodes`**, not `astroid` — required
 since astroid v4.
 
-**`discover_submodules(..., require_init=)` has two distinct modes.** `True` uses
-`pkgutil.iter_modules` for real packages; `False` uses `Path.rglob` for test
+**`discover_submodules(..., require_init=)` has two distinct modes.** `True` names
+modules the way the import system does (a non-package prefix like `src/` is dropped)
+and uses `pkgutil.iter_modules` for real packages; `False` uses `Path.rglob` for test
 directories, which frequently lack `__init__.py`. Picking the wrong one silently
-finds nothing.
+finds nothing. Despite the name, `True` still walks sub-directories *without*
+`__init__.py` (`_namespace_portions`): since PEP 420 they import as namespace
+packages, and `pkgutil` skips them — which hid 10–20% of real projects' modules.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`

@@ -79,11 +79,12 @@ def iter_namespace(ns_package: str, *, scan_path: str) -> list[pkgutil.ModuleInf
 
 
 def _discover_via_pkgutil(package: str, root: Path) -> dict[str, str]:
-    """Discover submodules using pkgutil (requires __init__.py in directories).
+    """Discover the modules importable under *package*, the way the import system names them.
 
-    Handles src-layout projects by detecting non-package prefix directories
-    (e.g. ``src/``) and stripping them from module names while keeping them
-    in filesystem paths.
+    ``pkgutil`` lists modules and regular packages; :func:`_namespace_portions` adds
+    the sub-directories without ``__init__.py`` it skips. Handles src-layout
+    projects by detecting non-package prefix directories (e.g. ``src/``) and
+    stripping them from module names while keeping them in filesystem paths.
     """
     fs_path = package_name_to_path(package)
     non_pkg_prefix, importable_path = find_non_package_prefix(fs_path, root)
@@ -122,7 +123,28 @@ def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str
                 sub_scan_path = os.path.join(scan_path, module_parts[-1])
                 results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root))
 
+    for portion in _namespace_portions(root / scan_path):
+        sub_scan_path = os.path.join(scan_path, portion)
+        results.update(_discover_pkgutil_impl(f"{module_name}.{portion}", sub_scan_path, non_pkg_prefix, root))
+
     return results
+
+
+def _namespace_portions(directory: Path) -> list[str]:
+    """Sub-directories of *directory* that ``pkgutil`` skips but the import system resolves.
+
+    ``pkgutil.iter_modules`` lists only regular packages, those with an ``__init__.py``.
+    Since PEP 420, any directory inside a package whose name is an identifier imports
+    as an implicit namespace package — ``import pkg.processors.ocr`` works when
+    ``processors/`` has no ``__init__.py`` — so its modules are part of the package.
+    """
+    if not directory.is_dir():  # a package that does not exist has no modules, as pkgutil reports
+        return []
+    return sorted(
+        entry.name
+        for entry in directory.iterdir()
+        if entry.is_dir() and entry.name.isidentifier() and not (entry / "__init__.py").exists()
+    )
 
 
 def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
@@ -168,8 +190,9 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
         package: Dotted package name (or path-style name like ``"src.predicated"``)
             to scan.  For src-layout projects, non-package prefix directories
             are automatically detected and stripped from module names.
-        require_init: If True, use pkgutil-based discovery which requires
-            __init__.py in directories (correct for importable Python packages).
+        require_init: If True, discover an importable package: module names follow
+            the import system, so a non-package prefix such as ``src/`` is dropped,
+            and sub-directories without __init__.py count as namespace packages.
             If False, use filesystem walking which finds all .py files
             regardless of __init__.py (matching pytest's discovery behavior).
         root_dir: Project root *package* is relative to. Defaults to the current

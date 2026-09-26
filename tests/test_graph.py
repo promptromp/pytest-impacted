@@ -258,3 +258,22 @@ def test_pytest_plugin_targets_are_flagged(tmp_path):
 
     assert dep_tree.nodes["tests.fixtures"].get("pytest_plugin") is True
     assert not dep_tree.nodes["tests.test_a"].get("pytest_plugin")
+
+
+def test_namespace_subpackage_modules_are_linked_by_absolute_and_relative_imports(tmp_path):
+    """``processors/`` has no ``__init__.py``; its modules still import and are imported."""
+    files = {
+        "app/__init__.py": "",
+        "app/processors/ocr.py": "from . import util\n",
+        "app/processors/util.py": "",
+        "tests/test_ocr.py": "from app.processors.ocr import run\n",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("app.processors.util", "app.processors.ocr")
+    assert dep_tree.has_edge("app.processors.ocr", "tests.test_ocr")
+    assert graph.resolve_impacted_tests(["app.processors.util"], dep_tree) == ["tests.test_ocr"]

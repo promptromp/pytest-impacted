@@ -249,29 +249,10 @@ def test_discover_submodules_without_init_in_ancestor_directory(tmp_path, monkey
     assert "tests.app.unit.test_core" in modules
 
 
-def test_discover_submodules_require_init_skips_no_init_dirs(tmp_path, monkeypatch):
-    """With require_init=True, directories without __init__.py should be skipped."""
-    (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "__init__.py").touch()
-    (tmp_path / "pkg" / "visible.py").write_text("x = 1\n")
-    (tmp_path / "pkg" / "no_init_dir").mkdir()
-    (tmp_path / "pkg" / "no_init_dir" / "hidden.py").write_text("y = 2\n")
-
-    monkeypatch.chdir(tmp_path)
-    clear_discovery_cache()
-
-    modules = discover_submodules("pkg", require_init=True)
-    assert "pkg.visible" in modules
-    assert "pkg.no_init_dir.hidden" not in modules
-
-
-def test_discover_submodules_filesystem_nonexistent_dir(tmp_path, monkeypatch):
-    """Filesystem discovery should return empty dict for a nonexistent directory."""
-    monkeypatch.chdir(tmp_path)
-    clear_discovery_cache()
-
-    modules = discover_submodules("nonexistent_pkg", require_init=False)
-    assert modules == {}
+@pytest.mark.parametrize("require_init", [True, False])
+def test_discover_submodules_nonexistent_dir(tmp_path, require_init):
+    """Either mode returns an empty dict for a package that does not exist, rather than raising."""
+    assert discover_submodules("nonexistent_pkg", require_init=require_init, root_dir=tmp_path) == {}
 
 
 # --- Tests for find_non_package_prefix (src-layout support) ---
@@ -493,20 +474,49 @@ def test_discover_ancestor_conftests_without_any(tmp_path):
     assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Implicit namespace sub-packages (a directory without __init__.py) are never walked, so a "
-        "change there resolves to no module and selects no tests (ROADMAP P0). Remove with the fix."
-    ),
+# --- implicit namespace sub-packages (PEP 420) -----------------------------------------
+
+
+@pytest.fixture(params=["flat", "src"])
+def prefix(request):
+    """The package at the root, or under a non-package ``src/``: module names must not differ."""
+    return "src/" if request.param == "src" else ""
+
+
+def make_package(root: Path, prefix: str, *rels: str) -> None:
+    for rel in ("pkg/__init__.py", *rels):
+        (root / prefix / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / prefix / rel).touch()
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(["pkg/processors/ocr.py"], {"pkg.processors.ocr"}, id="module_in_a_namespace_subpackage"),
+        pytest.param(["pkg/a/b/deep.py"], {"pkg.a.b.deep"}, id="namespace_inside_a_namespace"),
+        pytest.param(
+            ["pkg/ns/regular/__init__.py", "pkg/ns/regular/mod.py"],
+            {"pkg.ns.regular", "pkg.ns.regular.mod"},
+            id="regular_package_inside_a_namespace",
+        ),
+        pytest.param(
+            ["pkg/regular/__init__.py", "pkg/regular/ns/mod.py"],
+            {"pkg.regular", "pkg.regular.ns.mod"},
+            id="namespace_inside_a_regular_subpackage",
+        ),
+        pytest.param(["pkg/my-data/x.py", "pkg/.cache/y.py"], set(), id="non_identifier_directories_cannot_import"),
+    ],
 )
-@pytest.mark.parametrize("layout", ["flat", "src"])
-def test_a_module_in_a_namespace_subpackage_resolves(tmp_path, layout):
-    prefix = "src/" if layout == "src" else ""
-    for rel in ("pkg/__init__.py", "pkg/processors/ocr.py"):
-        (tmp_path / prefix / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / prefix / rel).touch()
+def test_namespace_subpackages_are_discovered(tmp_path, prefix, files, expected):
+    """A directory without ``__init__.py`` inside a package still imports, so its modules are found."""
+    make_package(tmp_path, prefix, *files)
+
+    assert set(discover_submodules(f"{prefix}pkg", root_dir=tmp_path)) == expected
+
+
+def test_a_module_in_a_namespace_subpackage_resolves(tmp_path, prefix):
+    """The changed-file path resolves to the name imports use, so the change reaches its dependents."""
+    make_package(tmp_path, prefix, "pkg/processors/ocr.py")
 
     modules = resolve_files_to_modules([f"{prefix}pkg/processors/ocr.py"], f"{prefix}pkg", root_dir=tmp_path)
 
