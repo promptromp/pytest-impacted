@@ -7,7 +7,6 @@ import networkx as nx
 
 from pytest_impacted._rust import RUST_AVAILABLE, rust_parse_all_imports
 from pytest_impacted.parsing import (
-    declares_pytest_plugins,
     is_conftest_module,
     is_test_module,
     parse_file_imports,
@@ -84,34 +83,27 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     return impacted_tests
 
 
-def _pytest_plugin_edges(submodules: dict[str, str]) -> tuple[dict[str, list[str]], set[str]]:
-    """Every ``pytest_plugins`` declaration in scope.
-
-    Returns ``({declaring module: [plugin modules]}, declaring modules)``. The second
-    also holds modules whose declaration names nothing in the graph — a third-party
-    plugin, or a computed name — since editing it still changes what pytest loads.
+def _pytest_plugin_edges(submodules: dict[str, str]) -> dict[str, list[str]]:
+    """``{declaring module: [plugin modules]}`` for every ``pytest_plugins`` declaration in scope.
 
     pytest reads the declaration from conftests and test modules, and again from
-    every plugin it loads that way, so plugins are followed transitively.
+    every plugin it loads that way, so plugins are followed transitively. Names
+    outside the graph — usually third-party plugins such as ``pytester`` — are skipped.
     """
     pending = [name for name in submodules if is_conftest_module(name) or is_test_module(name)]
     edges: dict[str, list[str]] = {}
-    declaring: set[str] = set()
     while pending:
         name = pending.pop()
         if name in edges:
             continue
         edges[name] = []
-        plugins = parse_pytest_plugins(submodules[name])
-        if plugins or declares_pytest_plugins(submodules[name]):
-            declaring.add(name)
-        for plugin in plugins:
+        for plugin in parse_pytest_plugins(submodules[name]):
             if plugin not in submodules:
                 logger.debug("pytest_plugins entry %r in %s is not an analysed module; not followed", plugin, name)
                 continue
             edges[name].append(plugin)
             pending.append(plugin)
-    return {name: plugins for name, plugins in edges.items() if plugins}, declaring
+    return {name: plugins for name, plugins in edges.items() if plugins}
 
 
 def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str | Path | None = None) -> nx.DiGraph:
@@ -126,8 +118,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     discovered node carries its absolute file in the ``path`` attribute. Modules
     named in a ``pytest_plugins`` declaration count as imports (see
     :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are flagged with
-    the ``pytest_plugin`` attribute; the declaring modules carry
-    ``declares_pytest_plugins``.
+    the ``pytest_plugin`` attribute.
     """
     submodules = discover_submodules(package, require_init=True, root_dir=root_dir)
 
@@ -148,7 +139,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     # Parse imports — Rust parallel path or Python sequential fallback
     all_imports = _parse_all_module_imports(submodules)
 
-    plugin_edges, declaring = _pytest_plugin_edges(submodules)
+    plugin_edges = _pytest_plugin_edges(submodules)
 
     digraph = nx.DiGraph()
     for name, file_path in submodules.items():
@@ -160,8 +151,6 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     # pytest registers plugins for the whole session; see PytestImpactStrategy.
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
         digraph.nodes[plugin]["pytest_plugin"] = True
-    for name in declaring:
-        digraph.nodes[name]["declares_pytest_plugins"] = True
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     return digraph.reverse()

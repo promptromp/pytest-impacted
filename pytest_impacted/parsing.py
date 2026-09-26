@@ -150,7 +150,7 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
     try:
         with _quiet_parse():
             tree = astroid.parse(source)
-    except (astroid.exceptions.AstroidSyntaxError, RecursionError):
+    except astroid.exceptions.AstroidSyntaxError:
         logger.warning("Syntax error while parsing %s", file_path)
         return []
 
@@ -159,11 +159,6 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         imports.update(_extract_imports_from_node(node, package))
 
     return sorted(imports)
-
-
-def declares_pytest_plugins(file_path: str) -> bool:
-    """Whether a file assigns or extends ``pytest_plugins`` at module level, whatever it names."""
-    return bool(_plugin_declarations(file_path))
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:
@@ -179,34 +174,15 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
     Parsed with the stdlib ``ast`` and independent of the parsing backend, so both
     backends see the same edges.
     """
-    return [name for stmt in _plugin_declarations(file_path) for name in _declared_plugins(stmt)]
-
-
-def _plugin_declarations(file_path: str) -> list[ast.stmt]:
-    """The module-level statements of a file that assign or extend ``pytest_plugins``."""
     source = read_source(file_path)
     if source is None or "pytest_plugins" not in source:  # cheap pre-filter
         return []
     try:
         with _quiet_parse():
             tree = ast.parse(source)
-    except (SyntaxError, ValueError, RecursionError):
+        return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
+    except (SyntaxError, ValueError, RecursionError):  # RecursionError: e.g. a 3000-term `+` chain
         return []
-    return [stmt for stmt in _module_level_statements(tree.body) if _touches_plugins(stmt)]
-
-
-def _touches_plugins(stmt: ast.stmt) -> bool:
-    if isinstance(stmt, ast.Assign):
-        return any(_is_plugins_name(t) for t in stmt.targets)
-    if isinstance(stmt, ast.AnnAssign | ast.AugAssign):
-        return _is_plugins_name(stmt.target)
-    return (
-        isinstance(stmt, ast.Expr)
-        and isinstance(call := stmt.value, ast.Call)
-        and isinstance(call.func, ast.Attribute)
-        and _is_plugins_name(call.func.value)
-        and call.func.attr in ("append", "extend")
-    )
 
 
 _BLOCK_FIELDS = ("body", "cases", "handlers", "orelse", "finalbody")  # source order
@@ -224,7 +200,7 @@ def _module_level_statements(body: list) -> Iterator[ast.stmt]:
 
 
 def _declared_plugins(stmt: ast.stmt) -> list[str]:
-    """Plugin names one statement adds to ``pytest_plugins``."""
+    """Plugin names one statement adds to ``pytest_plugins`` (the single matcher for every form)."""
     if isinstance(stmt, ast.Assign) and any(_is_plugins_name(t) for t in stmt.targets):
         return _plugin_specs(stmt.value)
     if isinstance(stmt, ast.AnnAssign | ast.AugAssign) and _is_plugins_name(stmt.target) and stmt.value:

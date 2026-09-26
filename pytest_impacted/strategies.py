@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 # filterwarnings apply to every test. (The file pytest actually loaded — including one
 # passed with ``-c`` — is matched as well; see DependencyFileImpactStrategy.)
 DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
-    # Lockfiles and project metadata
+    # Lockfiles and project metadata. requirements.txt is also matched by a glob below,
+    # but stays here so callers passing their own glob_patterns keep it.
     "uv.lock",
+    "requirements.txt",
     "poetry.lock",
     "pdm.lock",
     "pixi.lock",
@@ -251,28 +253,23 @@ def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
     return all_test_modules
 
 
-def _session_wide_changes(
-    impacted_modules: list[str], reached: set[str], dep_tree: nx.DiGraph, session: Any
-) -> list[str]:
-    """Changed or reached modules that alter pytest's plugins for the whole session.
+def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any) -> list[str]:
+    """Reached modules that pytest loads as plugins, whose fixtures and hooks reach every test.
 
-    - a ``pytest_plugins`` module, or anything it imports
-    - a plugin loaded with ``-p`` (on the command line or in ``addopts``)
-    - an edited module that declares ``pytest_plugins``: the declaration itself may be the edit
+    - a ``pytest_plugins`` module (flagged in the graph), or anything it imports
+    - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
     """
     return sorted(
-        {node for node in reached if dep_tree.nodes[node].get("pytest_plugin")}
-        | (_command_line_plugins(session) & reached)
-        | {m for m in impacted_modules if m in dep_tree and dep_tree.nodes[m].get("declares_pytest_plugins")}
+        {node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (_session_plugins(session) & reached)
     )
 
 
-def _command_line_plugins(session: Any) -> set[str]:
-    """Modules loaded with ``-p``; ``-p no:name`` disables a plugin and loads nothing."""
+def _session_plugins(session: Any) -> set[str]:
+    """Modules loaded with ``-p`` or ``PYTEST_PLUGINS``; ``-p no:name`` disables one and loads nothing."""
     names = getattr(getattr(getattr(session, "config", None), "option", None), "plugins", None)
-    if not isinstance(names, list):
-        return set()
-    return {name for name in names if isinstance(name, str) and not name.startswith("no:")}
+    from_options = [name for name in names if isinstance(name, str)] if isinstance(names, list) else []
+    from_env = os.environ.get("PYTEST_PLUGINS", "").split(",")
+    return {name.strip() for name in [*from_options, *from_env] if name.strip() and not name.startswith("no:")}
 
 
 class ImpactStrategy(ABC):
@@ -456,7 +453,7 @@ class PytestImpactStrategy(ImpactStrategy):
     ) -> list[str]:
         """Find impacted tests including pytest-specific dependencies."""
         reached = _reached(impacted_modules, dep_tree)
-        if session_wide := _session_wide_changes(impacted_modules, reached, dep_tree, session):
+        if session_wide := _session_wide_changes(reached, dep_tree, session):
             # pytest registers plugins for the whole session: their fixtures and
             # hooks are visible to every test, wherever they were declared.
             return _every_test(dep_tree, f"pytest plugin changes detected: {session_wide}", session)

@@ -93,14 +93,16 @@ in traversal, graph or strategy code.
 **`pytest_plugins` declarations are edges, and their targets are global.** `build_dep_tree`
 adds an edge from each conftest, test module or (transitively) plugin to the modules its
 `pytest_plugins` names, and flags those with the `pytest_plugin` node attribute.
-`PytestImpactStrategy` marks *every* test impacted when a change reaches a flagged node, a
-`-p` plugin (`session.config.option.plugins`), or edits a module flagged
-`declares_pytest_plugins` — pytest registers plugins session-wide, not for the declaring
-module's directory (`_session_wide_changes`).
+`PytestImpactStrategy` marks *every* test impacted when a change reaches a flagged node or a
+`-p` / `PYTEST_PLUGINS` plugin (`_session_wide_changes`) — pytest registers plugins
+session-wide, not for the declaring module's directory. Editing a module that merely
+*declares* plugins is deliberately not session-wide: it over-selected every edit to a test
+module using `pytest_plugins = "pytester"`, and still could not see a removed declaration.
 `parse_pytest_plugins` uses stdlib `ast`, outside the backend on purpose (it cannot break
 Rust/Python parity), behind a text pre-filter, with warnings silenced so `-W error` cannot
 turn a `SyntaxWarning` into a lost declaration — `_quiet_parse` does the same for the astroid
-import parser. `read_source` and `is_conftest_module` are the
+import parser. Do not catch `RecursionError` in `parse_file_imports`: ruff would still return
+the imports, and a silent `[]` there breaks backend parity. `read_source` and `is_conftest_module` are the
 shared reader and conftest-name check — don't re-implement either.
 
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`

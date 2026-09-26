@@ -168,19 +168,18 @@ def test_plugins_declared_by_a_plugin_are_followed(make_project):
     run(project).assert_outcomes(passed=2)
 
 
-def test_editing_a_module_that_declares_pytest_plugins_runs_every_test(make_project):
-    """The edit may be to the declaration itself, which changes plugins for the whole session."""
+def test_editing_a_test_module_that_loads_a_third_party_plugin_selects_only_it(make_project):
+    """A body edit in a module declaring ``pytest_plugins = "pytester"`` must not run the whole suite."""
     project = make_project(
         {
             **APP,
             **TESTS,
-            "suite/plugin_fixtures.py": PLUGIN_FIXTURES,
-            "suite/db/test_db.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n\ndef test_db(db):\n    assert db\n',
+            "suite/db/test_db.py": 'pytest_plugins = "pytester"\n\ndef test_db():\n    assert True\n',
         }
     )
     edit(project, "suite/db/test_db.py")
 
-    run(project).assert_outcomes(passed=2)
+    run(project).assert_outcomes(passed=1, skipped=1)
 
 
 def test_plugins_loaded_with_dash_p_are_session_wide(make_project):
@@ -188,6 +187,14 @@ def test_plugins_loaded_with_dash_p_are_session_wide(make_project):
         {**APP, **TESTS, "suite/plugin_fixtures.py": PLUGIN_FIXTURES},
         ini=INI + "addopts = -p suite.plugin_fixtures\n",
     )
+    edit(project, "suite/plugin_fixtures.py")
+
+    run(project).assert_outcomes(passed=2)
+
+
+def test_plugins_loaded_through_the_environment_are_session_wide(make_project, monkeypatch):
+    monkeypatch.setenv("PYTEST_PLUGINS", "suite.plugin_fixtures")
+    project = make_project({**APP, **TESTS, "suite/plugin_fixtures.py": PLUGIN_FIXTURES})
     edit(project, "suite/plugin_fixtures.py")
 
     run(project).assert_outcomes(passed=2)

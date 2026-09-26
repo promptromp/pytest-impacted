@@ -419,15 +419,6 @@ def test_parse_pytest_plugins_survives_warnings_as_errors(tmp_path):
         assert parsing.parse_pytest_plugins(str(path)) == ["a"]
 
 
-def test_declares_pytest_plugins_counts_computed_names(tmp_path):
-    """Editing a computed declaration still changes what pytest loads."""
-    path = tmp_path / "conftest.py"
-    path.write_text("pytest_plugins = discover()\n")
-
-    assert parsing.parse_pytest_plugins(str(path)) == []
-    assert parsing.declares_pytest_plugins(str(path)) is True
-
-
 def test_parse_pytest_plugins_survives_pathological_nesting(tmp_path):
     path = tmp_path / "conftest.py"
     path.write_text("pytest_plugins = " + "[" * 5000 + "]" * 5000 + "\n")
@@ -443,3 +434,11 @@ def test_parse_file_imports_survives_warnings_as_errors(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert parsing.parse_file_imports(str(path), "mod") == ["os"]
+
+
+def test_parse_pytest_plugins_survives_a_long_concatenation(tmp_path):
+    """ast.parse accepts it, but walking a 3000-term ``+`` chain recurses past the limit."""
+    path = tmp_path / "conftest.py"
+    path.write_text("pytest_plugins = " + " + ".join(['["a"]'] * 3000) + "\n")
+
+    assert parsing.parse_pytest_plugins(str(path)) == []
