@@ -3,6 +3,7 @@
 import ast
 import logging
 import os
+import warnings
 from pathlib import Path
 
 import astroid
@@ -24,6 +25,23 @@ def normalize_path(path_like: str | os.PathLike[str]) -> Path:
         return Path(os.fspath(path_like))
     except TypeError as e:
         raise ValueError(f"Cannot normalize path-like object {path_like!r} of type {type(path_like)}") from e
+
+
+def read_source(file_path: str) -> str | None:
+    """A source file's text, or ``None`` if it cannot be read.
+
+    ``utf-8-sig`` drops a BOM, as ruff does — a parity point with the Rust backend.
+    """
+    try:
+        return Path(file_path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        logger.error("Error reading file %s", file_path)
+        return None
+
+
+def is_conftest_module(module_name: str) -> bool:
+    """Whether a dotted module name names a ``conftest`` (by name; callers check the file where it matters)."""
+    return module_name.rpartition(".")[2] == "conftest"
 
 
 def _package_of(module_name: str, is_package: bool) -> str:
@@ -105,13 +123,8 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         callers filter against :func:`~pytest_impacted.traversal.discover_submodules`
         as :func:`~pytest_impacted.graph.build_dep_tree` does.
     """
-    try:
-        source = Path(file_path).read_text(encoding="utf-8-sig")  # -sig: drop a BOM, as ruff does
-    except (OSError, UnicodeDecodeError):
-        logger.error("Error reading file %s", file_path)
-        return []
-
-    if not source.strip():
+    source = read_source(file_path)
+    if source is None or not source.strip():
         return []
 
     package = _package_of(module_name, is_package)
@@ -130,38 +143,78 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:
-    """Module names a file loads through a module-level ``pytest_plugins`` assignment.
+    """Module names a file loads through a module-level ``pytest_plugins`` declaration.
 
     ``pytest_plugins = ["pkg.fixtures"]`` makes pytest import ``pkg.fixtures`` and
     register its fixtures and hooks, so it is a dependency exactly like an import —
-    but as strings, which import parsing never sees. Accepts a string, or a list or
-    tuple of strings; anything computed is ignored. Parsed with the stdlib ``ast``
-    and independent of the parsing backend, so both backends see the same edges.
+    but as strings, which import parsing never sees. Follows what pytest accepts:
+    a comma-separated string or a list/tuple of strings, assigned, annotated,
+    extended with ``+=``, ``.append`` or ``.extend``, including inside
+    module-level ``if``/``try``/``with`` blocks. Computed entries are ignored.
+
+    Parsed with the stdlib ``ast`` and independent of the parsing backend, so both
+    backends see the same edges.
     """
-    try:
-        source = Path(file_path).read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError):
-        return []
-    if "pytest_plugins" not in source:  # cheap pre-filter: most files never declare it
+    source = read_source(file_path)
+    if source is None or "pytest_plugins" not in source:  # cheap pre-filter
         return []
     try:
-        tree = ast.parse(source)
+        with warnings.catch_warnings():
+            # e.g. an invalid escape: a SyntaxWarning that `-W error` would turn into
+            # a SyntaxError, silently dropping every declaration in the file.
+            warnings.simplefilter("ignore")
+            tree = ast.parse(source)
     except (SyntaxError, ValueError):
         return []
+    return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
 
-    plugins: list[str] = []
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets, value = [node.target], node.value
-        else:
-            continue
-        if not any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets):
-            continue
-        items = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
-        plugins.extend(item.value for item in items if isinstance(item, ast.Constant) and isinstance(item.value, str))
-    return plugins
+
+_BLOCK_FIELDS = ("body", "handlers", "orelse", "finalbody")  # source order
+
+
+def _module_level_statements(body: list[ast.stmt]):
+    """Statements that run at import: nested ``if``/``try``/``with`` blocks, but not functions or classes."""
+    for stmt in body:
+        yield stmt
+        if isinstance(stmt, ast.If | ast.Try | ast.TryStar | ast.With | ast.ExceptHandler):
+            for field in _BLOCK_FIELDS:
+                yield from _module_level_statements(getattr(stmt, field, []))
+
+
+def _declared_plugins(stmt: ast.stmt) -> list[str]:
+    """Plugin names one statement adds to ``pytest_plugins``."""
+    if isinstance(stmt, ast.Assign) and any(_is_plugins_name(t) for t in stmt.targets):
+        return _plugin_specs(stmt.value)
+    if isinstance(stmt, ast.AnnAssign | ast.AugAssign) and _is_plugins_name(stmt.target) and stmt.value:
+        return _plugin_specs(stmt.value)
+    if (
+        isinstance(stmt, ast.Expr)
+        and isinstance(call := stmt.value, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and _is_plugins_name(call.func.value)
+        and call.func.attr in ("append", "extend")
+        and call.args
+    ):
+        # append takes one name (never comma-split); extend takes a sequence.
+        return _plugin_specs(call.args[0]) if call.func.attr == "extend" else _string_items([call.args[0]])
+    return []
+
+
+def _is_plugins_name(node: ast.expr) -> bool:
+    return isinstance(node, ast.Name) and node.id == "pytest_plugins"
+
+
+def _plugin_specs(value: ast.expr) -> list[str]:
+    """What pytest makes of a ``pytest_plugins`` value: a string splits on commas, a sequence does not."""
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return [spec.strip() for spec in value.value.split(",") if spec.strip()]
+    if isinstance(value, ast.List | ast.Tuple):
+        return _string_items(value.elts)
+    return []
+
+
+def _string_items(nodes: list[ast.expr]) -> list[str]:
+    return [node.value for node in nodes if isinstance(node, ast.Constant) and isinstance(node.value, str)]
 
 
 def is_test_module(module_name: str) -> bool:
@@ -184,7 +237,7 @@ def is_test_module(module_name: str) -> bool:
     last_part = module_parts[-1] if module_parts else ""
 
     # Check naming patterns
-    is_test = last_part != "conftest" and (
+    is_test = not is_conftest_module(module_name) and (
         last_part.startswith("test_")
         or last_part.endswith("_test")
         or "test" in module_parts

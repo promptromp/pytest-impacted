@@ -1,6 +1,7 @@
 """Unit tests for the parsing module."""
 
 import sys
+import warnings
 
 import pytest
 
@@ -370,6 +371,23 @@ def test_parse_file_imports_matches_rust_backend_with_bom(tmp_path):
         pytest.param('pytest_plugins = ["a.fixtures", "b"]\n', ["a.fixtures", "b"], id="list"),
         pytest.param('pytest_plugins = ("a.fixtures",)\n', ["a.fixtures"], id="tuple"),
         pytest.param('pytest_plugins = "a.fixtures"\n', ["a.fixtures"], id="single_string"),
+        pytest.param('pytest_plugins = "a.fixtures, b"\n', ["a.fixtures", "b"], id="comma_separated_string"),
+        pytest.param('pytest_plugins = ["a"]\npytest_plugins += ["b"]\n', ["a", "b"], id="augmented"),
+        pytest.param(
+            'pytest_plugins = []\npytest_plugins.append("a")\npytest_plugins.extend(["b", "c"])\n',
+            ["a", "b", "c"],
+            id="append_and_extend",
+        ),
+        pytest.param(
+            'if FLAG:\n    pytest_plugins = ["a"]\nelse:\n    pytest_plugins = ["b"]\n', ["a", "b"], id="if_else"
+        ),
+        pytest.param(
+            'try:\n    import x\nexcept ImportError:\n    pytest_plugins = ["a"]\nelse:\n    pytest_plugins = ["b"]\n',
+            ["a", "b"],
+            id="try_except_else",
+        ),
+        pytest.param('class C:\n    pytest_plugins = ["a"]\n', [], id="class_body_ignored"),
+        pytest.param('import re\nPATTERN = re.compile("\\d+")\npytest_plugins = ["a"]\n', ["a"], id="syntax_warning"),
         pytest.param('pytest_plugins: list[str] = ["a.fixtures"]\n', ["a.fixtures"], id="annotated"),
         pytest.param('pytest_plugins = ["a", NAME, f"{x}"]\n', ["a"], id="computed_entries_ignored"),
         pytest.param('def f():\n    pytest_plugins = ["a"]\n', [], id="not_module_level"),
@@ -381,3 +399,13 @@ def test_parse_pytest_plugins(tmp_path, source, expected):
     path = tmp_path / "conftest.py"
     path.write_text(source)
     assert parsing.parse_pytest_plugins(str(path)) == expected
+
+
+def test_parse_pytest_plugins_survives_warnings_as_errors(tmp_path):
+    """Under ``-W error`` an invalid escape is a SyntaxError; that must not hide the declaration."""
+    path = tmp_path / "conftest.py"
+    path.write_text('import re\nPATTERN = re.compile("\\d+")\npytest_plugins = ["a"]\n')
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert parsing.parse_pytest_plugins(str(path)) == ["a"]

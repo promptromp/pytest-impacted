@@ -241,3 +241,20 @@ def test_pytest_plugins_declaration_is_an_edge(tmp_path):
 
     assert dep_tree.has_edge("tests.fixtures", "conftest")
     assert nx.has_path(dep_tree, "app.db", "conftest")
+
+
+def test_pytest_plugin_targets_are_flagged(tmp_path):
+    """Flagged so the strategy can treat them as session-wide."""
+    files = {
+        "app/__init__.py": "",
+        "tests/fixtures.py": "",
+        "tests/test_a.py": 'pytest_plugins = "tests.fixtures"\n',
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.nodes["tests.fixtures"].get("pytest_plugin") is True
+    assert not dep_tree.nodes["tests.test_a"].get("pytest_plugin")

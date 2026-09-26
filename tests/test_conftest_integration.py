@@ -123,7 +123,7 @@ PLUGIN_FIXTURES = "import pytest\nfrom app.db import connect\n\n@pytest.fixture\
 
 @pytest.mark.parametrize("edited", ["suite/plugin_fixtures.py", "app/db.py"])
 def test_fixtures_loaded_through_pytest_plugins(make_project, edited):
-    """``pytest_plugins`` is only allowed in the root conftest, so its plugins reach every test."""
+    """Plugins are registered for the whole session, so a change reaching one runs every test."""
     project = make_project(
         {
             **APP,
@@ -138,6 +138,7 @@ def test_fixtures_loaded_through_pytest_plugins(make_project, edited):
 
 
 def test_pytest_plugins_declared_in_a_test_module(make_project):
+    """pytest registers the plugin for the whole session, so every test sees its fixtures and hooks."""
     project = make_project(
         {
             **APP,
@@ -148,7 +149,20 @@ def test_pytest_plugins_declared_in_a_test_module(make_project):
     )
     edit(project, "suite/plugin_fixtures.py")
 
-    result = run(project)
+    run(project).assert_outcomes(passed=2)
 
-    result.assert_outcomes(passed=1, skipped=1)
-    result.stdout.fnmatch_lines(["*test_db.py*"])
+
+def test_plugins_declared_by_a_plugin_are_followed(make_project):
+    """pytest reads ``pytest_plugins`` from every plugin it loads, not just conftests and test modules."""
+    project = make_project(
+        {
+            **APP,
+            **TESTS,
+            "suite/plugin_fixtures.py": 'pytest_plugins = ["suite.db_fixtures"]\n',
+            "suite/db_fixtures.py": PLUGIN_FIXTURES,
+            "conftest.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n',
+        }
+    )
+    edit(project, "suite/db_fixtures.py")
+
+    run(project).assert_outcomes(passed=2)
