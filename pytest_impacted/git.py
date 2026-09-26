@@ -36,10 +36,18 @@ class GitUnavailableError(RuntimeError):
     no test needs to run, whereas "unknown" means every test might, and
     conflating the two would skip the whole suite and report success.
 
-    Only for an environment that cannot run git. A misconfigured project (no
-    repository, a bare one, an unknown base branch) stays a hard error so the
-    user fixes it, rather than silently losing test selection.
+    Only for an environment that cannot run git. When git *can* run, a
+    misconfigured project (no repository, a bare one, an unknown base branch)
+    stays a hard error so the user fixes it, rather than silently losing test
+    selection. Without git those cannot be checked, so they fail open too.
     """
+
+    def __init__(self, detail: str | None = None):
+        message = (
+            "GitPython or the git executable is not available, so changed files cannot be determined. "
+            "Install GitPython and ensure the git CLI is on PATH."
+        )
+        super().__init__(f"{message} ({detail})" if detail else message)
 
 
 def validate_rev(rev: str) -> str:
@@ -209,19 +217,14 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
 
     """
     if not GIT_AVAILABLE:
-        raise GitUnavailableError(_GIT_UNAVAILABLE_MESSAGE)
+        raise GitUnavailableError()
 
     try:
         return _find_impacted_files(repo_dir, git_mode, base_branch)
     except GitCommandNotFound as err:
-        # The import succeeded (e.g. GIT_PYTHON_REFRESH=quiet) but the binary is gone.
-        raise GitUnavailableError(_GIT_UNAVAILABLE_MESSAGE) from err
-
-
-_GIT_UNAVAILABLE_MESSAGE = (
-    "GitPython or the git executable is not available, so changed files cannot be determined. "
-    "Install GitPython and ensure the git CLI is on PATH."
-)
+        # The import succeeded (e.g. GIT_PYTHON_REFRESH=quiet) but git could not be
+        # launched. GitPython uses this for any launch failure, so keep its reason.
+        raise GitUnavailableError(str(err)) from err
 
 
 def _find_impacted_files(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:

@@ -735,6 +735,19 @@ def test_bare_repo_is_a_clear_error(tmp_path, isolated_git_config, mode):
         git.find_impacted_files_in_repo(tmp_path, mode, "main")
 
 
+def test_git_that_cannot_launch_keeps_its_reason(monkeypatch):
+    """GitPython raises GitCommandNotFound for any launch failure, so the reason must survive."""
+    from git import GitCommandNotFound  # noqa: PLC0415
+
+    def launch_fails(*_):
+        raise GitCommandNotFound("git", "WinError 206")
+
+    monkeypatch.setattr(git, "_find_impacted_files", launch_fails)
+
+    with pytest.raises(git.GitUnavailableError, match="WinError 206"):
+        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+
+
 def test_find_impacted_files_raises_without_git(monkeypatch):
     """Unknown changes are an error, never ``None`` — which callers read as "nothing changed"."""
     monkeypatch.setattr(git, "GIT_AVAILABLE", False)

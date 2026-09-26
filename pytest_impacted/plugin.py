@@ -197,9 +197,12 @@ def pytest_report_header(config: Config) -> list[str]:
     ]
     if ext_names:
         header.append(f"extensions={','.join(ext_names)}")
-    return [
-        "pytest-impacted: " + ", ".join(header),
-    ]
+    lines = ["pytest-impacted: " + ", ".join(header)]
+    if get_option("impacted") and not GIT_AVAILABLE:
+        # The header is written by the controller, so this survives pytest-xdist,
+        # whose workers run collection and whose terminal output is discarded.
+        lines.append(f"pytest-impacted: WARNING: {GitUnavailableError()} Running every test.")
+    return lines
 
 
 def pytest_collection_modifyitems(session, config, items):
