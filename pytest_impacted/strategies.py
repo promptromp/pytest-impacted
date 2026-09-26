@@ -190,13 +190,13 @@ def _reached_conftest_dirs(impacted_modules: list[str], dep_tree: nx.DiGraph, ro
     One multi-source traversal, so a large changeset does not re-walk shared descendants.
     """
     sources = [module for module in impacted_modules if module in dep_tree]
-    if not sources:
-        return set()
     reached = set().union(*nx.bfs_layers(dep_tree, sources))
     return {
         path.parent
         for node in reached
-        # The file name, as for changed files: a package named ``conftest`` is not one.
+        # The name is a cheap pre-filter; the file name decides, as for changed
+        # files, so a package named ``conftest`` is not one.
+        if node.rpartition(".")[2] == "conftest"
         if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
     }
 

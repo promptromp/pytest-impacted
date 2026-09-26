@@ -199,3 +199,27 @@ def test_ancestor_conftest_relative_imports_resolve_in_src_layout(tmp_path):
     dep_tree = graph.build_dep_tree("src/app/core", root_dir=tmp_path)
 
     assert dep_tree.has_edge("app.core.db", "app.conftest")
+
+
+def test_ancestor_conftest_whose_short_name_clashes_keeps_its_full_name(tmp_path):
+    """``tests/app/conftest.py`` would shorten to ``app.conftest``, already the package's own conftest.
+
+    Dropping it on the clash would lose every edge from it, so it keeps its full path name.
+    """
+    files = {
+        "src/app/__init__.py": "",
+        "src/app/conftest.py": "",
+        "src/app/core/__init__.py": "",
+        "src/app/core/db.py": "",
+        "tests/app/__init__.py": "",
+        "tests/app/conftest.py": "import app.core.db\n",
+        "tests/app/unit/test_x.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests/app/unit", root_dir=tmp_path)
+
+    assert dep_tree.nodes["app.conftest"]["path"] == str((tmp_path / "src/app/conftest.py").resolve())
+    assert dep_tree.has_edge("app.core.db", "tests.app.conftest")

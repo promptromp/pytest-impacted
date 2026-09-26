@@ -3,7 +3,7 @@
 import logging
 import os
 import pkgutil
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from functools import lru_cache
 from pathlib import Path
 
@@ -191,26 +191,35 @@ def clear_discovery_cache() -> None:
 discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: ignore[attr-defined]
 
 
-def _conftest_module_name(directory: Path, root: Path) -> str:
-    """Dotted name for ``directory/conftest.py``, dropping a non-package prefix like ``src/``.
+def _conftest_module_name(directory: Path, root: Path, taken: Collection[str]) -> str:
+    """Dotted name for ``directory/conftest.py`` that is not already in *taken*.
 
-    Named the way package discovery names modules, so the conftest's relative
-    imports resolve to the same names as the modules they refer to.
+    Preferably named the way package discovery names modules, dropping a
+    non-package prefix like ``src/``, so the conftest's relative imports resolve
+    to the modules they refer to. Dropping the prefix can clash with another
+    module, and a clash would drop the conftest from the graph, so the full
+    path from the root — unique among conftests — is the fallback.
     """
     relative = directory.relative_to(root)
     if not relative.parts:
         return "conftest"
     _, importable = find_non_package_prefix(str(relative), root)
-    return f"{path_to_package_name(importable)}.conftest"
+    preferred = f"{path_to_package_name(importable)}.conftest"
+    return preferred if preferred not in taken else ".".join((*relative.parts, "conftest"))
 
 
-def discover_ancestor_conftests(packages: Iterable[str], root_dir: str | Path | None = None) -> dict[str, str]:
+def discover_ancestor_conftests(
+    packages: Iterable[str], root_dir: str | Path | None = None, *, taken: Collection[str] = ()
+) -> dict[str, str]:
     """Find the ``conftest.py`` files between *root_dir* and each package directory.
 
     pytest loads every conftest from the rootdir down to a test file, so one
     above the analysed packages — most often at the repository root — still
     provides fixtures to their tests. Package discovery never sees it, so
     without this its imports would be invisible to the dependency graph.
+
+    Args:
+        taken: Module names already in use (see :func:`_conftest_module_name`).
 
     Returns:
         Dict mapping a dotted name (``conftest``, ``backend.conftest``; a non-package
@@ -223,8 +232,8 @@ def discover_ancestor_conftests(packages: Iterable[str], root_dir: str | Path | 
         directory = (root / package_name_to_path(package)).parent
         while directory.is_relative_to(root):
             conftest = directory / "conftest.py"
-            if conftest.is_file():
-                found[_conftest_module_name(directory, root)] = str(conftest.resolve())
+            if conftest.is_file() and (path := str(conftest.resolve())) not in found.values():
+                found[_conftest_module_name(directory, root, taken={*taken, *found})] = path
             if directory == root:
                 break
             directory = directory.parent
