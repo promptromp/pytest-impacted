@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import logging
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 # the problem itself (see GitUnavailableError).
 try:
     from git import Repo
-    from git.exc import GitCommandNotFound
+    from git.exc import GitCommandError, GitCommandNotFound
 
     GIT_AVAILABLE = True
 except ImportError:
@@ -200,7 +201,14 @@ def normalize_git_paths(file_paths: list[str], git_root: Path, working_dir: Path
     return result
 
 
-def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:
+def find_impacted_files_in_repo(
+    repo_dir: str | Path,
+    git_mode: GitMode,
+    base_branch: str | None,
+    *,
+    use_merge_base: bool = True,
+    on_fallback: Callable[[str], None] | None = None,
+) -> list[str] | None:
     """Find impacted files in the repository. The definition of impacted is dependent on the git mode:
 
     UNSTAGED:
@@ -208,12 +216,16 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         - Any untracked files are also included.
 
     BRANCH:
-        - All files that have been modified in the current branch, relative to the base branch.
+        - All files that have been modified in the current branch since it forked from the base
+          branch (``git diff base...HEAD``, as a pull request shows it), or relative to the base
+          branch's tip when *use_merge_base* is false or there is no fork point.
         - This does *not* include untracked files as the expectation is that this is used for committed changes.
 
     :param repo_dir: path to the project directory (may be a subdirectory of the git root).
     :param git_mode: the git mode to use.
     :param base_branch: the base branch to compare against.
+    :param use_merge_base: in BRANCH mode, diff from the fork point rather than the base tip.
+    :param on_fallback: in BRANCH mode, told why there was no fork point to diff from.
     :returns: the changed files, or ``None`` when there are none.
     :raises GitUnavailableError: when git cannot be run at all.
 
@@ -222,7 +234,7 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         raise GitUnavailableError()
 
     try:
-        return _find_impacted_files(repo_dir, git_mode, base_branch)
+        return _find_impacted_files(repo_dir, git_mode, base_branch, use_merge_base, on_fallback)
     except GitCommandNotFound as err:
         # The import succeeded (e.g. GIT_PYTHON_REFRESH=quiet) but git could not be
         # launched. GitPython uses this for any launch failure, so keep its reason —
@@ -230,7 +242,13 @@ def find_impacted_files_in_repo(repo_dir: str | Path, git_mode: GitMode, base_br
         raise GitUnavailableError(str(err).strip().splitlines()[0]) from err
 
 
-def _find_impacted_files(repo_dir: str | Path, git_mode: GitMode, base_branch: str | None) -> list[str] | None:
+def _find_impacted_files(
+    repo_dir: str | Path,
+    git_mode: GitMode,
+    base_branch: str | None,
+    use_merge_base: bool,
+    on_fallback: Callable[[str], None] | None,
+) -> list[str] | None:
     repo = find_repo(repo_dir)
     if repo.bare:
         raise ValueError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")
@@ -243,7 +261,9 @@ def _find_impacted_files(repo_dir: str | Path, git_mode: GitMode, base_branch: s
             if not base_branch:
                 raise ValueError("Base branch is required for running in BRANCH git mode")
 
-            impacted_files = impacted_files_for_branch_mode(repo, base_branch=base_branch)
+            impacted_files = impacted_files_for_branch_mode(
+                repo, base_branch=base_branch, use_merge_base=use_merge_base, on_fallback=on_fallback
+            )
 
         case _:
             raise ValueError(f"Invalid git mode: {git_mode}")
@@ -308,8 +328,21 @@ def _untracked_files(repo: Repo) -> list[str]:
     return [path for path in output.split("\0") if path]
 
 
-def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
-    """Get the impacted files when in the BRANCH git mode."""
+def impacted_files_for_branch_mode(
+    repo: Repo,
+    base_branch: str,
+    *,
+    use_merge_base: bool = True,
+    on_fallback: Callable[[str], None] | None = None,
+) -> list[str]:
+    """Get the impacted files when in the BRANCH git mode.
+
+    By default the diff starts at the fork point, so commits that landed on the
+    base branch after this one forked are not counted as this branch's changes.
+    With several fork points (criss-cross merges) the diffs from each are
+    combined. With none, the diff falls back to the base tip and *on_fallback*
+    is told why (by default it is only logged).
+    """
 
     try:
         current_ref = repo.head.reference
@@ -317,4 +350,36 @@ def impacted_files_for_branch_mode(repo: Repo, base_branch: str) -> list[str]:
         # Detached HEAD state (common in CI) — fall back to HEAD commit
         current_ref = repo.head.commit
 
-    return _impactful_paths(_name_status_diff(repo, *rev_args(base_branch, current_ref)))
+    starts = _merge_bases(repo, base_branch, current_ref) if use_merge_base else [base_branch]
+    if not starts:
+        cause = (
+            "the clone is shallow — fetch more history, e.g. fetch-depth: 0"
+            if repo.git.rev_parse("--is-shallow-repository").strip() == "true"
+            else "the histories are unrelated"
+        )
+        (on_fallback or logger.warning)(
+            f"No merge base between {base_branch} and HEAD: {cause}. Diffing against {base_branch}'s tip "
+            "instead, which may also select tests for its newer commits."
+        )
+        starts = [base_branch]
+    paths = {
+        path for start in starts for path in _impactful_paths(_name_status_diff(repo, *rev_args(start, current_ref)))
+    }
+    return sorted(paths)
+
+
+def _merge_bases(repo: Repo, base_branch: str, current_ref: object) -> list[str]:
+    """Every commit *current_ref* forked from *base_branch* at — usually one; none if unrelated.
+
+    ``--all``: with criss-cross merges there are several best common ancestors,
+    and diffing from just one can miss a file that differs from another.
+    Exit status 1 means there is no common ancestor (unrelated histories, or a
+    shallow clone missing them); any other failure, such as an unknown ref, is
+    a real error and propagates.
+    """
+    try:
+        return repo.git.merge_base("--all", *rev_args(base_branch, current_ref)).split()
+    except GitCommandError as err:
+        if err.status == 1:
+            return []
+        raise

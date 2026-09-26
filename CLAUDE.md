@@ -73,6 +73,14 @@ collapse "unknown" into "no changes". The notice is printed exactly once: by
 so it survives pytest-xdist), otherwise by the collection hook. Never via `warnings.warn`,
 which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path.
 
+**Branch mode diffs from the merge base**, not the base tip: `_merge_bases` runs
+`git merge-base --all` (through `rev_args`) and the result is the union of the diffs from each
+fork point — criss-cross merges have several, and one alone can miss a file. Only git's exit
+status 1 (no common ancestor: unrelated histories, or a shallow clone cut above the fork) falls back to the tip,
+and it says so through `on_fallback` (the API routes it to `display.warn`; a bare log record is
+swallowed during collection). Any other failure, such as an unknown ref, propagates.
+`use_merge_base=False` (`--impacted-no-merge-base`) always uses the tip.
+
 **Every diff goes through `_name_status_diff` with fixed `--name-status -z --no-renames`.**
 `-z` stops git C-quoting non-ASCII paths (`core.quotePath`), which would never match a
 file on disk; `--no-renames` turns a rename into a delete plus an add, so no record

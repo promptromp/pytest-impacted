@@ -87,6 +87,23 @@ def pytest_addoption(parser: Parser):
     )
 
     group.addoption(
+        "--impacted-no-merge-base",
+        action="store_true",
+        default=None,
+        dest="impacted_no_merge_base",
+        help=(
+            "In 'branch' git mode, diff against the base branch's tip instead of the point this "
+            + "branch forked from, so commits the base gained since also count as changes."
+        ),
+    )
+    parser.addini(
+        "impacted_no_merge_base",
+        help="default value for --impacted-no-merge-base",
+        type="bool",
+        default=False,
+    )
+
+    group.addoption(
         "--impacted-tests-dir",
         action="store",
         default=None,
@@ -190,6 +207,7 @@ def pytest_report_header(config: Config) -> list[str]:
         f"impacted_module={get_option('impacted_module')}",
         f"impacted_git_mode={get_option('impacted_git_mode')}",
         f"impacted_base_branch={get_option('impacted_base_branch')}",
+        f"impacted_no_merge_base={get_option('impacted_no_merge_base')}",
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
         f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
@@ -220,6 +238,7 @@ def pytest_collection_modifyitems(session, config, items):
     ns_module = get_option("impacted_module")
     impacted_git_mode = get_option("impacted_git_mode")
     impacted_base_branch = get_option("impacted_base_branch")
+    use_merge_base = not get_option("impacted_no_merge_base")
     impacted_tests_dir = get_option("impacted_tests_dir")
     no_dep_files = get_option("no_impacted_dep_files")
     invalidate_all = get_option("impacted_invalidate_all") or []
@@ -243,6 +262,7 @@ def pytest_collection_modifyitems(session, config, items):
             tests_dir=impacted_tests_dir,
             session=session,
             strategy=strategy,
+            use_merge_base=use_merge_base,
         )
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not

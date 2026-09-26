@@ -78,11 +78,14 @@ def get_impacted_tests(
     strategy: ImpactStrategy | None = None,
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
+    use_merge_base: bool = True,
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
     ``watch_dep_files`` and ``invalidate_all_patterns`` configure the default
     pipeline and are ignored when an explicit ``strategy`` is supplied.
+    ``use_merge_base`` makes branch mode diff from the fork point (the default)
+    rather than the base branch's tip.
 
     Returns ``None`` when nothing is impacted, and raises
     :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known
@@ -108,6 +111,8 @@ def get_impacted_tests(
         root_dir,
         git_mode=git_mode,
         base_branch=base_branch,
+        use_merge_base=use_merge_base,
+        on_fallback=lambda reason: warn(reason, session),
     )
     if not impacted_files:
         notify(

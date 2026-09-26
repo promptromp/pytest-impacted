@@ -58,6 +58,12 @@ def configure_logging(verbose: bool) -> None:
         + "tests will only be found under namespace module directory."
     ),
 )
+@click.option(
+    "--no-merge-base",
+    is_flag=True,
+    default=False,
+    help="In branch mode, diff against the base branch's tip instead of the fork point.",
+)
 @click.option("--verbose", is_flag=True, help="Verbose output.")
 @click.option(
     "--no-dep-files", is_flag=True, default=False, help="Disable dependency and test-config file change detection."
@@ -78,6 +84,7 @@ def impacted_tests_cli(
     root_dir,
     module,
     tests_dir,
+    no_merge_base,
     verbose,
     no_dep_files,
     invalidate_all,
@@ -92,6 +99,8 @@ def impacted_tests_cli(
     click.secho(f"  root-dir: {root_dir}", fg="blue", bold=True, err=True)
     click.secho(f"  tests-dir: {tests_dir}", fg="blue", bold=True, err=True)
     click.secho(f"  no-dep-files: {no_dep_files}", fg="blue", bold=True, err=True)
+    if no_merge_base:
+        click.secho("  no-merge-base: True", fg="blue", bold=True, err=True)
     if invalidate_all:
         click.secho("  invalidate-all: {}".format(", ".join(invalidate_all)), fg="blue", bold=True, err=True)
     if disable_ext:
@@ -122,6 +131,7 @@ def impacted_tests_cli(
             ns_module=module,
             tests_dir=tests_dir,
             strategy=strategy,
+            use_merge_base=not no_merge_base,
         )
     except GitUnavailableError as err:
         # Printing nothing would read as "no tests impacted" to a script piping
