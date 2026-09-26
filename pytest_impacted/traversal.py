@@ -89,10 +89,12 @@ def _discover_via_pkgutil(package: str, root: Path) -> dict[str, str]:
     fs_path = package_name_to_path(package)
     non_pkg_prefix, importable_path = find_non_package_prefix(fs_path, root)
     importable_name = path_to_package_name(importable_path)
-    return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix, root)
+    return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix, root, ancestors=frozenset())
 
 
-def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str, root: Path) -> dict[str, str]:
+def _discover_pkgutil_impl(
+    module_name: str, scan_path: str, non_pkg_prefix: str, root: Path, *, ancestors: frozenset[str]
+) -> dict[str, str]:
     """Recursive implementation of pkgutil-based submodule discovery.
 
     Args:
@@ -101,7 +103,14 @@ def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str
         non_pkg_prefix: Non-package path prefix to prepend when constructing file paths
             (e.g. ``"src"``).  Empty string when there is no prefix.
         root: Project root every path is resolved against.
+        ancestors: Real paths of the directories above this one in the walk. A directory
+            symlinked to one of them would recurse forever, so it is not entered again;
+            a symlink elsewhere is followed, as the import system follows it.
     """
+    real_path = os.path.realpath(root / scan_path)
+    if real_path in ancestors:
+        return {}
+    ancestors |= {real_path}
     results: dict[str, str] = {}
     for module_info in iter_namespace(module_name, scan_path=str(root / scan_path)):
         name = module_info.name
@@ -121,13 +130,20 @@ def _discover_pkgutil_impl(module_name: str, scan_path: str, non_pkg_prefix: str
 
             if module_info.ispkg:
                 sub_scan_path = os.path.join(scan_path, module_parts[-1])
-                results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root))
+                results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root, ancestors=ancestors))
 
     for portion in _namespace_portions(root / scan_path):
         sub_scan_path = os.path.join(scan_path, portion)
-        results.update(_discover_pkgutil_impl(f"{module_name}.{portion}", sub_scan_path, non_pkg_prefix, root))
+        results.update(
+            _discover_pkgutil_impl(f"{module_name}.{portion}", sub_scan_path, non_pkg_prefix, root, ancestors=ancestors)
+        )
 
     return results
+
+
+#: Identifier-named directories that never hold the project's own modules: walking
+#: them costs time and adds phantom graph nodes (``node_modules`` holds thousands).
+_NEVER_PACKAGES = frozenset({"__pycache__", "node_modules"})
 
 
 def _namespace_portions(directory: Path) -> list[str]:
@@ -137,14 +153,23 @@ def _namespace_portions(directory: Path) -> list[str]:
     Since PEP 420, any directory inside a package whose name is an identifier imports
     as an implicit namespace package — ``import pkg.processors.ocr`` works when
     ``processors/`` has no ``__init__.py`` — so its modules are part of the package.
+
+    Like ``pkgutil``, a directory that cannot be listed — missing, or unreadable, such
+    as a container's bind-mounted data directory — has no modules; the ``os.path``
+    checks likewise treat an unreadable entry as absent rather than raising.
     """
-    if not directory.is_dir():  # a package that does not exist has no modules, as pkgutil reports
+    try:
+        entries = sorted(os.listdir(directory))
+    except OSError:
         return []
-    return sorted(
-        entry.name
-        for entry in directory.iterdir()
-        if entry.is_dir() and entry.name.isidentifier() and not (entry / "__init__.py").exists()
-    )
+    return [
+        name
+        for name in entries
+        if name.isidentifier()
+        and name not in _NEVER_PACKAGES
+        and os.path.isdir(directory / name)
+        and not os.path.isfile(directory / name / "__init__.py")
+    ]
 
 
 def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
@@ -281,8 +306,12 @@ def resolve_files_to_modules(
         test_submodules = discover_submodules(tests_package, require_init=False, root_dir=root)
         submodules = {**submodules, **test_submodules}
 
-    # Build reverse mapping: absolute file path -> module name
-    path_to_module = {path: name for name, path in submodules.items()}
+    # Reverse mapping: absolute file path -> every module name it was discovered under.
+    # A tests dir inside the package is found twice (``app.tests.x`` by the package
+    # walk, ``tests.x`` by the tests-dir walk) and importers may use either name.
+    path_to_modules: dict[str, list[str]] = {}
+    for name, path in submodules.items():
+        path_to_modules.setdefault(path, []).append(name)
 
     resolved_modules = []
     for file in filenames:
@@ -290,8 +319,8 @@ def resolve_files_to_modules(
             continue
 
         abs_path = str((root / file).resolve())
-        if abs_path in path_to_module:
-            resolved_modules.append(path_to_module[abs_path])
+        if abs_path in path_to_modules:
+            resolved_modules.extend(path_to_modules[abs_path])
         elif not Path(abs_path).exists():
             logger.debug("File %s no longer exists; nothing to resolve", file)
         else:

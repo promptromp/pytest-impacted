@@ -3,6 +3,7 @@
 import importlib
 import os
 import pkgutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -505,6 +506,7 @@ def make_package(root: Path, prefix: str, *rels: str) -> None:
             id="namespace_inside_a_regular_subpackage",
         ),
         pytest.param(["pkg/my-data/x.py", "pkg/.cache/y.py"], set(), id="non_identifier_directories_cannot_import"),
+        pytest.param(["pkg/node_modules/lodash/fp.py", "pkg/__pycache__/x.py"], set(), id="never_package_directories"),
     ],
 )
 def test_namespace_subpackages_are_discovered(tmp_path, prefix, files, expected):
@@ -521,3 +523,37 @@ def test_a_module_in_a_namespace_subpackage_resolves(tmp_path, prefix):
     modules = resolve_files_to_modules([f"{prefix}pkg/processors/ocr.py"], f"{prefix}pkg", root_dir=tmp_path)
 
     assert modules == ["pkg.processors.ocr"]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_an_unreadable_directory_has_no_modules(tmp_path, prefix):
+    """A container's bind-mounted data dir (mode 000 to us) must not crash discovery, as it never did."""
+    make_package(tmp_path, prefix, "pkg/core.py", "pkg/pgdata/base/x.py")
+    locked = tmp_path / prefix / "pkg/pgdata/base"
+    locked.chmod(0)
+    try:
+        found = discover_submodules(f"{prefix}pkg", root_dir=tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert set(found) == {"pkg.core"}
+
+
+def test_a_symlink_back_up_the_tree_is_not_followed_forever(tmp_path, prefix):
+    """Followed, a link to ``.`` names the module once per level until the OS gives up (and two
+    links make that ~2**32 walks); instead each module keeps its one real name."""
+    make_package(tmp_path, prefix, "pkg/ns/mod.py")
+    (tmp_path / prefix / "pkg/ns/loop").symlink_to(".", target_is_directory=True)
+
+    assert set(discover_submodules(f"{prefix}pkg", root_dir=tmp_path)) == {"pkg.ns.mod"}
+
+
+def test_a_file_found_under_two_names_resolves_to_both(tmp_path):
+    """A tests dir inside the package is walked as ``app.tests`` and as ``tests``; importers use either."""
+    for rel in ("app/__init__.py", "app/tests/factories.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    modules = resolve_files_to_modules(["app/tests/factories.py"], "app", tests_package="app/tests", root_dir=tmp_path)
+
+    assert sorted(modules) == ["app.tests.factories", "tests.factories"]

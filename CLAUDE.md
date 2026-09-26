@@ -25,13 +25,16 @@ in particular, which imports every parent package to answer.
 **`parsing.py` imports node classes from `astroid.nodes`**, not `astroid` — required
 since astroid v4.
 
-**`discover_submodules(..., require_init=)` has two distinct modes.** `True` names
-modules the way the import system does (a non-package prefix like `src/` is dropped)
-and uses `pkgutil.iter_modules` for real packages; `False` uses `Path.rglob` for test
-directories, which frequently lack `__init__.py`. Picking the wrong one silently
-finds nothing. Despite the name, `True` still walks sub-directories *without*
-`__init__.py` (`_namespace_portions`): since PEP 420 they import as namespace
-packages, and `pkgutil` skips them — which hid 10–20% of real projects' modules.
+**`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an
+importable package — `pkgutil.iter_modules`, with a non-package prefix like `src/`
+dropped from names; `False` uses `Path.rglob` for test directories, which frequently lack
+`__init__.py`, naming modules by path. Picking the wrong one silently finds nothing.
+Despite the name, `True` also walks sub-directories *without* `__init__.py`
+(`_namespace_portions`): since PEP 420 they import as namespace packages, and `pkgutil`
+skips them. That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
+modules (never raise — it would be an INTERNALERROR), and a symlink back up the tree is not
+re-entered. A tests dir inside the package is discovered under two names (`app.tests.x`
+and `tests.x`), so `resolve_files_to_modules` returns every name of a changed file.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`

@@ -36,3 +36,19 @@ def test_a_change_in_a_namespace_subpackage_selects_its_tests(make_git_project, 
 
     result.assert_outcomes(passed=1, skipped=1)
     result.stdout.fnmatch_lines([runs])
+
+
+def test_a_helper_imported_by_its_package_name_from_a_tests_dir_inside_the_package(make_git_project):
+    """``--impacted-tests-dir=app/checks`` names the helper ``checks.helpers`` too; the test's
+    ``from app.checks.helpers import …`` must still see the change."""
+    files = {
+        **FILES,
+        "app/checks/helpers.py": "def value():\n    return 1\n",
+        "app/checks/test_helpers.py": "from app.checks.helpers import value\n\ndef test_value():\n    assert value()\n",
+    }
+    project = make_git_project(files, INI + "impacted_tests_dir = app/checks\n")
+    edit_file(project, "app/checks/helpers.py")
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
+
+    result.stdout.fnmatch_lines(["*test_helpers.py::test_value PASSED*"])
