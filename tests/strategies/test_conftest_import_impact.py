@@ -18,6 +18,7 @@ from pytest_impacted.strategies import (
     PytestImpactStrategy,
     get_default_strategies,
 )
+from pytest_impacted.traversal import resolve_files_to_modules
 
 
 FIXTURE = "import pytest\nfrom app.helpers import make\n\n@pytest.fixture\ndef db():\n    return make()\n"
@@ -45,7 +46,7 @@ def make(root: Path, files: dict[str, str]) -> Path:
 def find(strategy, root: Path, changed: str, *, tests_package: str | None = "suite", ns_module: str = "app"):
     return strategy.find_impacted_tests(
         changed_files=[changed],
-        impacted_modules=[changed.removesuffix(".py").removesuffix("/__init__").replace("/", ".")],
+        impacted_modules=resolve_files_to_modules([changed], ns_module, tests_package, root_dir=root),
         ns_module=ns_module,
         tests_package=tests_package,
         root_dir=root,

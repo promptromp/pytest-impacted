@@ -573,6 +573,20 @@ def test_an_unreadable_directory_has_no_modules(tmp_path, prefix):
     assert set(found) == {"pkg", "pkg.core"}
 
 
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_an_unsearchable_package_directory_has_no_modules(tmp_path):
+    """Checking the analysed package's own ``__init__.py`` must not raise where listing it did not."""
+    make_package(tmp_path, "", "pkg/sub/__init__.py", "pkg/sub/core.py")
+    locked = tmp_path / "pkg/sub"
+    locked.chmod(0)
+    try:
+        found = discover_submodules("pkg/sub", root_dir=tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert found == {}
+
+
 @pytest.mark.parametrize(
     ("links", "expected"),
     [
@@ -644,6 +658,15 @@ def test_symlinked_namespace_portions(tmp_path, links, expected):
             "app.sub.x",
             set(),
             id="a_regular_package_is_never_a_sys_path_root",
+        ),
+        pytest.param(["src/app/__init__.py"], "src/app", None, "app", {"src.app"}, id="src_layout_package_itself"),
+        pytest.param(
+            ["src/company/app/__init__.py"],
+            "src/company/app",
+            None,
+            "app",
+            {"company.app", "src.company.app"},
+            id="package_itself_below_a_namespace_package",
         ),
     ],
 )
