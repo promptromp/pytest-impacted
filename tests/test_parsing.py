@@ -387,6 +387,14 @@ def test_parse_file_imports_matches_rust_backend_with_bom(tmp_path):
             id="try_except_else",
         ),
         pytest.param('class C:\n    pytest_plugins = ["a"]\n', [], id="class_body_ignored"),
+        pytest.param(
+            'match PLATFORM:\n    case "linux":\n        pytest_plugins = ["a"]\n'
+            '    case _:\n        pytest_plugins = ["b"]\n',
+            ["a", "b"],
+            id="match_case",
+        ),
+        pytest.param('for name in NAMES:\n    pytest_plugins.append("a")\n', ["a"], id="for_loop"),
+        pytest.param('pytest_plugins = BASE + ["a"] + ("b",)\n', ["a", "b"], id="concatenation"),
         pytest.param('import re\nPATTERN = re.compile("\\d+")\npytest_plugins = ["a"]\n', ["a"], id="syntax_warning"),
         pytest.param('pytest_plugins: list[str] = ["a.fixtures"]\n', ["a.fixtures"], id="annotated"),
         pytest.param('pytest_plugins = ["a", NAME, f"{x}"]\n', ["a"], id="computed_entries_ignored"),
@@ -409,3 +417,29 @@ def test_parse_pytest_plugins_survives_warnings_as_errors(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert parsing.parse_pytest_plugins(str(path)) == ["a"]
+
+
+def test_declares_pytest_plugins_counts_computed_names(tmp_path):
+    """Editing a computed declaration still changes what pytest loads."""
+    path = tmp_path / "conftest.py"
+    path.write_text("pytest_plugins = discover()\n")
+
+    assert parsing.parse_pytest_plugins(str(path)) == []
+    assert parsing.declares_pytest_plugins(str(path)) is True
+
+
+def test_parse_pytest_plugins_survives_pathological_nesting(tmp_path):
+    path = tmp_path / "conftest.py"
+    path.write_text("pytest_plugins = " + "[" * 5000 + "]" * 5000 + "\n")
+
+    assert parsing.parse_pytest_plugins(str(path)) == []
+
+
+def test_parse_file_imports_survives_warnings_as_errors(tmp_path):
+    """The same -W error trap as for pytest_plugins: an invalid escape must not drop the imports."""
+    path = tmp_path / "mod.py"
+    path.write_text('import os\nPATTERN = "\\d+"\n')
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert parsing.parse_file_imports(str(path), "mod") == ["os"]

@@ -93,11 +93,14 @@ in traversal, graph or strategy code.
 **`pytest_plugins` declarations are edges, and their targets are global.** `build_dep_tree`
 adds an edge from each conftest, test module or (transitively) plugin to the modules its
 `pytest_plugins` names, and flags those with the `pytest_plugin` node attribute.
-`PytestImpactStrategy` marks *every* test impacted when a change reaches a flagged node,
-because pytest registers plugins session-wide — not for the declaring module's directory.
+`PytestImpactStrategy` marks *every* test impacted when a change reaches a flagged node, a
+`-p` plugin (`session.config.option.plugins`), or edits a module flagged
+`declares_pytest_plugins` — pytest registers plugins session-wide, not for the declaring
+module's directory (`_session_wide_changes`).
 `parse_pytest_plugins` uses stdlib `ast`, outside the backend on purpose (it cannot break
 Rust/Python parity), behind a text pre-filter, with warnings silenced so `-W error` cannot
-turn a `SyntaxWarning` into a lost declaration. `read_source` and `is_conftest_module` are the
+turn a `SyntaxWarning` into a lost declaration — `_quiet_parse` does the same for the astroid
+import parser. `read_source` and `is_conftest_module` are the
 shared reader and conftest-name check — don't re-implement either.
 
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`

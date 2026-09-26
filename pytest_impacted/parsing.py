@@ -4,6 +4,8 @@ import ast
 import logging
 import os
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import astroid
@@ -35,8 +37,21 @@ def read_source(file_path: str) -> str | None:
     try:
         return Path(file_path).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
-        logger.error("Error reading file %s", file_path)
         return None
+
+
+@contextmanager
+def _quiet_parse() -> Iterator[None]:
+    """Silence warnings while parsing source.
+
+    An invalid escape such as ``"\\d"`` is a SyntaxWarning, which ``-W error`` or
+    ``filterwarnings = error`` turns into a SyntaxError — silently dropping every
+    import in the file. The warning is the user's to see when Python compiles the
+    module, not ours to raise while only reading it.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        yield
 
 
 def is_conftest_module(module_name: str) -> bool:
@@ -124,14 +139,18 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         as :func:`~pytest_impacted.graph.build_dep_tree` does.
     """
     source = read_source(file_path)
-    if source is None or not source.strip():
+    if source is None:
+        logger.error("Error reading file %s", file_path)
+        return []
+    if not source.strip():
         return []
 
     package = _package_of(module_name, is_package)
 
     try:
-        tree = astroid.parse(source)
-    except astroid.exceptions.AstroidSyntaxError:
+        with _quiet_parse():
+            tree = astroid.parse(source)
+    except (astroid.exceptions.AstroidSyntaxError, RecursionError):
         logger.warning("Syntax error while parsing %s", file_path)
         return []
 
@@ -140,6 +159,11 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         imports.update(_extract_imports_from_node(node, package))
 
     return sorted(imports)
+
+
+def declares_pytest_plugins(file_path: str) -> bool:
+    """Whether a file assigns or extends ``pytest_plugins`` at module level, whatever it names."""
+    return bool(_plugin_declarations(file_path))
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:
@@ -155,28 +179,46 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
     Parsed with the stdlib ``ast`` and independent of the parsing backend, so both
     backends see the same edges.
     """
+    return [name for stmt in _plugin_declarations(file_path) for name in _declared_plugins(stmt)]
+
+
+def _plugin_declarations(file_path: str) -> list[ast.stmt]:
+    """The module-level statements of a file that assign or extend ``pytest_plugins``."""
     source = read_source(file_path)
     if source is None or "pytest_plugins" not in source:  # cheap pre-filter
         return []
     try:
-        with warnings.catch_warnings():
-            # e.g. an invalid escape: a SyntaxWarning that `-W error` would turn into
-            # a SyntaxError, silently dropping every declaration in the file.
-            warnings.simplefilter("ignore")
+        with _quiet_parse():
             tree = ast.parse(source)
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError):
         return []
-    return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
+    return [stmt for stmt in _module_level_statements(tree.body) if _touches_plugins(stmt)]
 
 
-_BLOCK_FIELDS = ("body", "handlers", "orelse", "finalbody")  # source order
+def _touches_plugins(stmt: ast.stmt) -> bool:
+    if isinstance(stmt, ast.Assign):
+        return any(_is_plugins_name(t) for t in stmt.targets)
+    if isinstance(stmt, ast.AnnAssign | ast.AugAssign):
+        return _is_plugins_name(stmt.target)
+    return (
+        isinstance(stmt, ast.Expr)
+        and isinstance(call := stmt.value, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and _is_plugins_name(call.func.value)
+        and call.func.attr in ("append", "extend")
+    )
 
 
-def _module_level_statements(body: list[ast.stmt]):
-    """Statements that run at import: nested ``if``/``try``/``with`` blocks, but not functions or classes."""
+_BLOCK_FIELDS = ("body", "cases", "handlers", "orelse", "finalbody")  # source order
+_BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.ExceptHandler, ast.Match, ast.match_case, ast.For, ast.While)
+
+
+def _module_level_statements(body: list) -> Iterator[ast.stmt]:
+    """Statements that run at import, including nested blocks — but not functions or classes."""
     for stmt in body:
-        yield stmt
-        if isinstance(stmt, ast.If | ast.Try | ast.TryStar | ast.With | ast.ExceptHandler):
+        if isinstance(stmt, ast.stmt):
+            yield stmt
+        if isinstance(stmt, _BLOCKS):
             for field in _BLOCK_FIELDS:
                 yield from _module_level_statements(getattr(stmt, field, []))
 
@@ -210,6 +252,8 @@ def _plugin_specs(value: ast.expr) -> list[str]:
         return [spec.strip() for spec in value.value.split(",") if spec.strip()]
     if isinstance(value, ast.List | ast.Tuple):
         return _string_items(value.elts)
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):  # BASE + ["extra"]
+        return _plugin_specs(value.left) + _plugin_specs(value.right)
     return []
 
 

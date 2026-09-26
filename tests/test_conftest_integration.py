@@ -166,3 +166,28 @@ def test_plugins_declared_by_a_plugin_are_followed(make_project):
     edit(project, "suite/db_fixtures.py")
 
     run(project).assert_outcomes(passed=2)
+
+
+def test_editing_a_module_that_declares_pytest_plugins_runs_every_test(make_project):
+    """The edit may be to the declaration itself, which changes plugins for the whole session."""
+    project = make_project(
+        {
+            **APP,
+            **TESTS,
+            "suite/plugin_fixtures.py": PLUGIN_FIXTURES,
+            "suite/db/test_db.py": 'pytest_plugins = ["suite.plugin_fixtures"]\n\ndef test_db(db):\n    assert db\n',
+        }
+    )
+    edit(project, "suite/db/test_db.py")
+
+    run(project).assert_outcomes(passed=2)
+
+
+def test_plugins_loaded_with_dash_p_are_session_wide(make_project):
+    project = make_project(
+        {**APP, **TESTS, "suite/plugin_fixtures.py": PLUGIN_FIXTURES},
+        ini=INI + "addopts = -p suite.plugin_fixtures\n",
+    )
+    edit(project, "suite/plugin_fixtures.py")
+
+    run(project).assert_outcomes(passed=2)
