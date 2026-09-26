@@ -29,7 +29,9 @@ since astroid v4.
 
 **`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an
 importable package — `pkgutil.iter_modules`, with a non-package prefix like `src/`
-dropped from names; `False` uses `Path.rglob` for test directories, which frequently lack
+dropped from names, plus the package's own `__init__.py` under the package's name
+(`pkgutil` lists children only; without it, `from pkg import X` had no edge, nor did
+anything the `__init__` re-exports); `False` uses `Path.rglob` for test directories, which frequently lack
 `__init__.py`, naming modules by path. Picking the wrong one silently finds nothing.
 Despite the name, `True` also walks sub-directories *without* `__init__.py`
 (`_namespace_portions`): since PEP 420 they import as namespace packages, and `pkgutil`

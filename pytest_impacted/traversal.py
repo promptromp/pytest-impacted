@@ -80,17 +80,21 @@ def iter_namespace(ns_package: str, *, scan_path: str) -> list[pkgutil.ModuleInf
 
 
 def _discover_via_pkgutil(package: str, root: Path) -> dict[str, str]:
-    """Discover the modules importable under *package*, the way the import system names them.
+    """Discover *package* and the modules importable under it, the way the import system names them.
 
     ``pkgutil`` lists modules and regular packages; :func:`_namespace_portions` adds
-    the sub-directories without ``__init__.py`` it skips. Handles src-layout
-    projects by detecting non-package prefix directories (e.g. ``src/``) and
-    stripping them from module names while keeping them in filesystem paths.
+    the sub-directories without ``__init__.py`` it skips. Both list only children, so
+    the package's own ``__init__.py`` — run by every ``import pkg`` — is added here.
+    Handles src-layout projects by detecting non-package prefix directories (e.g.
+    ``src/``) and stripping them from module names while keeping them in filesystem paths.
     """
     fs_path = package_name_to_path(package)
     non_pkg_prefix, importable_path = find_non_package_prefix(fs_path, root)
     importable_name = path_to_package_name(importable_path)
-    return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix, root, ancestors=frozenset())
+    modules = _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix, root, ancestors=frozenset())
+    if (init := root / fs_path / "__init__.py").is_file():
+        modules[importable_name] = str(init.resolve())
+    return modules
 
 
 def _discover_pkgutil_impl(
@@ -236,9 +240,10 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
         package: Dotted package name (or path-style name like ``"src.predicated"``)
             to scan.  For src-layout projects, non-package prefix directories
             are automatically detected and stripped from module names.
-        require_init: If True, discover an importable package: module names follow
-            the import system, so a non-package prefix such as ``src/`` is dropped,
-            and sub-directories without __init__.py count as namespace packages.
+        require_init: If True, discover an importable package — the package itself,
+            when it has an ``__init__.py``, and every module under it: module names
+            follow the import system, so a non-package prefix such as ``src/`` is
+            dropped, and sub-directories without __init__.py count as namespace packages.
             If False, use filesystem walking which finds all .py files
             regardless of __init__.py (matching pytest's discovery behavior).
         root_dir: Project root *package* is relative to. Defaults to the current
