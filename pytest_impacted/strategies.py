@@ -14,7 +14,7 @@ import networkx as nx
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption
 from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
-from pytest_impacted.parsing import is_test_module, normalize_path
+from pytest_impacted.parsing import is_conftest_module, is_test_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache
 
 
@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 # filterwarnings apply to every test. (The file pytest actually loaded — including one
 # passed with ``-c`` — is matched as well; see DependencyFileImpactStrategy.)
 DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
-    # Lockfiles and project metadata
+    # Lockfiles and project metadata. requirements.txt is also matched by a glob below,
+    # but stays here so callers passing their own glob_patterns keep it.
     "uv.lock",
+    "requirements.txt",
     "poetry.lock",
     "pdm.lock",
     "pixi.lock",
@@ -223,21 +225,51 @@ def _outermost(directories: set[Path]) -> list[Path]:
     return kept
 
 
-def _reached_conftest_dirs(impacted_modules: list[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
-    """Directories of the conftests that depend, directly or transitively, on *impacted_modules*.
+def _reached(impacted_modules: list[str], dep_tree: nx.DiGraph) -> set[str]:
+    """Every node that depends, directly or transitively, on *impacted_modules* (sources included).
 
     One multi-source traversal, so a large changeset does not re-walk shared descendants.
     """
     sources = [module for module in impacted_modules if module in dep_tree]
-    reached = set().union(*nx.bfs_layers(dep_tree, sources))
+    return set().union(*nx.bfs_layers(dep_tree, sources))
+
+
+def _conftest_dirs(nodes: set[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
+    """Directories of the conftests among *nodes*."""
     return {
         path.parent
-        for node in reached
+        for node in nodes
         # The name is a cheap pre-filter; the file name decides, as for changed
         # files, so a package named ``conftest`` is not one.
-        if node.rpartition(".")[2] == "conftest"
+        if is_conftest_module(node)
         if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
     }
+
+
+def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
+    """All test modules, announcing *reason* — the answer when a change can reach any test."""
+    all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
+    notify(f"{reason}. Marking all {len(all_test_modules)} test modules as impacted.", session)
+    return all_test_modules
+
+
+def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any) -> list[str]:
+    """Reached modules that pytest loads as plugins, whose fixtures and hooks reach every test.
+
+    - a ``pytest_plugins`` module (flagged in the graph), or anything it imports
+    - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
+    """
+    return sorted(
+        {node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (_session_plugins(session) & reached)
+    )
+
+
+def _session_plugins(session: Any) -> set[str]:
+    """Modules loaded with ``-p`` or ``PYTEST_PLUGINS``; ``-p no:name`` disables one and loads nothing."""
+    names = getattr(getattr(getattr(session, "config", None), "option", None), "plugins", None)
+    from_options = [name for name in names if isinstance(name, str)] if isinstance(names, list) else []
+    from_env = os.environ.get("PYTEST_PLUGINS", "").split(",")
+    return {name.strip() for name in [*from_options, *from_env] if name.strip() and not name.startswith("no:")}
 
 
 class ImpactStrategy(ABC):
@@ -420,13 +452,19 @@ class PytestImpactStrategy(ImpactStrategy):
         dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Find impacted tests including pytest-specific dependencies."""
-        # Start with AST-based analysis
-        impacted_tests = resolve_impacted_tests(impacted_modules, dep_tree)
+        reached = _reached(impacted_modules, dep_tree)
+        if session_wide := _session_wide_changes(reached, dep_tree, session):
+            # pytest registers plugins for the whole session: their fixtures and
+            # hooks are visible to every test, wherever they were declared.
+            return _every_test(dep_tree, f"pytest plugin changes detected: {session_wide}", session)
+
+        # AST-based analysis, from the same traversal; modules outside the graph
+        # keep resolve_impacted_tests' conservative handling.
+        impacted_tests = [node for node in reached if is_test_module(node)]
+        impacted_tests += resolve_impacted_tests([m for m in impacted_modules if m not in dep_tree], dep_tree)
 
         # Add conftest.py impact analysis
-        conftest_impacted_tests = self._find_conftest_impacted_tests(
-            changed_files, impacted_modules, root_dir, dep_tree
-        )
+        conftest_impacted_tests = self._find_conftest_impacted_tests(changed_files, reached, root_dir, dep_tree)
 
         # Combine and deduplicate
         all_impacted = list(set(impacted_tests + conftest_impacted_tests))
@@ -435,7 +473,7 @@ class PytestImpactStrategy(ImpactStrategy):
     def _find_conftest_impacted_tests(
         self,
         changed_files: list[str],
-        impacted_modules: list[str],
+        reached: set[str],
         root_dir: Path | None,
         dep_tree: nx.DiGraph,
     ) -> list[str]:
@@ -455,7 +493,7 @@ class PytestImpactStrategy(ImpactStrategy):
             # None: the path could not be normalized
             if (conftest_dir := _resolve_changed_file_dir(conftest_file, root_dir)) is not None
         }
-        conftest_dirs.update(_reached_conftest_dirs(impacted_modules, dep_tree, root_dir))
+        conftest_dirs.update(_conftest_dirs(reached, dep_tree, root_dir))
 
         impacted_tests: list[str] = []
         for conftest_dir in _outermost(conftest_dirs):
@@ -507,14 +545,7 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         ]
         if not dep_files:
             return []
-        all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
-        notify(
-            f"Dependency file changes detected: {dep_files}. "
-            f"Marking all {len(all_test_modules)} test modules as impacted.",
-            session,
-        )
-
-        return all_test_modules
+        return _every_test(dep_tree, f"Dependency file changes detected: {dep_files}", session)
 
 
 class InvalidationFileImpactStrategy(ImpactStrategy):
@@ -553,13 +584,9 @@ class InvalidationFileImpactStrategy(ImpactStrategy):
         if not hits:
             return []
 
-        all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
-        notify(
-            f"Invalidation file changes detected: {hits} (matched --impacted-invalidate-all). "
-            f"Marking all {len(all_test_modules)} test modules as impacted.",
-            session,
+        return _every_test(
+            dep_tree, f"Invalidation file changes detected: {hits} (matched --impacted-invalidate-all)", session
         )
-        return all_test_modules
 
 
 def get_default_strategies(

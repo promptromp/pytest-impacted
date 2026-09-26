@@ -1,7 +1,11 @@
 """Python code parsing (AST) utilities."""
 
+import ast
 import logging
 import os
+import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import astroid
@@ -23,6 +27,36 @@ def normalize_path(path_like: str | os.PathLike[str]) -> Path:
         return Path(os.fspath(path_like))
     except TypeError as e:
         raise ValueError(f"Cannot normalize path-like object {path_like!r} of type {type(path_like)}") from e
+
+
+def read_source(file_path: str) -> str | None:
+    """A source file's text, or ``None`` if it cannot be read.
+
+    ``utf-8-sig`` drops a BOM, as ruff does — a parity point with the Rust backend.
+    """
+    try:
+        return Path(file_path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+@contextmanager
+def _quiet_parse() -> Iterator[None]:
+    """Silence warnings while parsing source.
+
+    An invalid escape such as ``"\\d"`` is a SyntaxWarning, which ``-W error`` or
+    ``filterwarnings = error`` turns into a SyntaxError — silently dropping every
+    import in the file. The warning is the user's to see when Python compiles the
+    module, not ours to raise while only reading it.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        yield
+
+
+def is_conftest_module(module_name: str) -> bool:
+    """Whether a dotted module name names a ``conftest`` (by name; callers check the file where it matters)."""
+    return module_name.rpartition(".")[2] == "conftest"
 
 
 def _package_of(module_name: str, is_package: bool) -> str:
@@ -104,19 +138,18 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         callers filter against :func:`~pytest_impacted.traversal.discover_submodules`
         as :func:`~pytest_impacted.graph.build_dep_tree` does.
     """
-    try:
-        source = Path(file_path).read_text(encoding="utf-8-sig")  # -sig: drop a BOM, as ruff does
-    except (OSError, UnicodeDecodeError):
+    source = read_source(file_path)
+    if source is None:
         logger.error("Error reading file %s", file_path)
         return []
-
     if not source.strip():
         return []
 
     package = _package_of(module_name, is_package)
 
     try:
-        tree = astroid.parse(source)
+        with _quiet_parse():
+            tree = astroid.parse(source)
     except astroid.exceptions.AstroidSyntaxError:
         logger.warning("Syntax error while parsing %s", file_path)
         return []
@@ -126,6 +159,82 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         imports.update(_extract_imports_from_node(node, package))
 
     return sorted(imports)
+
+
+def parse_pytest_plugins(file_path: str) -> list[str]:
+    """Module names a file loads through a module-level ``pytest_plugins`` declaration.
+
+    ``pytest_plugins = ["pkg.fixtures"]`` makes pytest import ``pkg.fixtures`` and
+    register its fixtures and hooks, so it is a dependency exactly like an import —
+    but as strings, which import parsing never sees. Follows what pytest accepts:
+    a comma-separated string or a list/tuple of strings, assigned, annotated,
+    extended with ``+=``, ``.append`` or ``.extend``, including inside
+    module-level ``if``/``try``/``with`` blocks. Computed entries are ignored.
+
+    Parsed with the stdlib ``ast`` and independent of the parsing backend, so both
+    backends see the same edges.
+    """
+    source = read_source(file_path)
+    if source is None or "pytest_plugins" not in source:  # cheap pre-filter
+        return []
+    try:
+        with _quiet_parse():
+            tree = ast.parse(source)
+        return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
+    except (SyntaxError, ValueError, RecursionError):  # RecursionError: e.g. a 3000-term `+` chain
+        return []
+
+
+_BLOCK_FIELDS = ("body", "cases", "handlers", "orelse", "finalbody")  # source order
+_BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.ExceptHandler, ast.Match, ast.match_case, ast.For, ast.While)
+
+
+def _module_level_statements(body: list) -> Iterator[ast.stmt]:
+    """Statements that run at import, including nested blocks — but not functions or classes."""
+    for stmt in body:
+        if isinstance(stmt, ast.stmt):
+            yield stmt
+        if isinstance(stmt, _BLOCKS):
+            for field in _BLOCK_FIELDS:
+                yield from _module_level_statements(getattr(stmt, field, []))
+
+
+def _declared_plugins(stmt: ast.stmt) -> list[str]:
+    """Plugin names one statement adds to ``pytest_plugins`` (the single matcher for every form)."""
+    if isinstance(stmt, ast.Assign) and any(_is_plugins_name(t) for t in stmt.targets):
+        return _plugin_specs(stmt.value)
+    if isinstance(stmt, ast.AnnAssign | ast.AugAssign) and _is_plugins_name(stmt.target) and stmt.value:
+        return _plugin_specs(stmt.value)
+    if (
+        isinstance(stmt, ast.Expr)
+        and isinstance(call := stmt.value, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and _is_plugins_name(call.func.value)
+        and call.func.attr in ("append", "extend")
+        and call.args
+    ):
+        # append takes one name (never comma-split); extend takes a sequence.
+        return _plugin_specs(call.args[0]) if call.func.attr == "extend" else _string_items([call.args[0]])
+    return []
+
+
+def _is_plugins_name(node: ast.expr) -> bool:
+    return isinstance(node, ast.Name) and node.id == "pytest_plugins"
+
+
+def _plugin_specs(value: ast.expr) -> list[str]:
+    """What pytest makes of a ``pytest_plugins`` value: a string splits on commas, a sequence does not."""
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return [spec.strip() for spec in value.value.split(",") if spec.strip()]
+    if isinstance(value, ast.List | ast.Tuple):
+        return _string_items(value.elts)
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):  # BASE + ["extra"]
+        return _plugin_specs(value.left) + _plugin_specs(value.right)
+    return []
+
+
+def _string_items(nodes: list[ast.expr]) -> list[str]:
+    return [node.value for node in nodes if isinstance(node, ast.Constant) and isinstance(node.value, str)]
 
 
 def is_test_module(module_name: str) -> bool:
@@ -148,7 +257,7 @@ def is_test_module(module_name: str) -> bool:
     last_part = module_parts[-1] if module_parts else ""
 
     # Check naming patterns
-    is_test = last_part != "conftest" and (
+    is_test = not is_conftest_module(module_name) and (
         last_part.startswith("test_")
         or last_part.endswith("_test")
         or "test" in module_parts

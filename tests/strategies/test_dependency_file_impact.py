@@ -255,3 +255,8 @@ def test_a_session_without_a_real_config_is_ignored():
     )
 
     assert result == []
+
+
+def test_requirements_txt_survives_custom_glob_patterns():
+    """Callers replacing the globs keep the exact names, requirements.txt included."""
+    assert matches_dependency_file("requirements.txt", glob_patterns=("deps/*.txt",))
