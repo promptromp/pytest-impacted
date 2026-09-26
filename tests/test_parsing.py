@@ -127,6 +127,9 @@ from unittest.mock import patch
         # Non-test module names
         ("regular_module", False),
         ("package.module", False),
+        # A conftest holds fixtures and hooks, never tests
+        ("tests.conftest", False),
+        ("conftest", False),
         # Edge cases
         ("test", True),
         ("tests", True),

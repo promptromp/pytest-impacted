@@ -10,6 +10,7 @@ import pytest
 from pytest_impacted import traversal
 from pytest_impacted.traversal import (
     clear_discovery_cache,
+    discover_ancestor_conftests,
     discover_submodules,
     find_non_package_prefix,
     iter_namespace,
@@ -471,3 +472,22 @@ def test_discover_submodules_without_init_uses_root_dir(tmp_path, monkeypatch):
     modules = discover_submodules("tests", require_init=False, root_dir=tmp_path / "proj")
 
     assert set(modules) == {"tests.test_thing"}
+
+
+def test_discover_ancestor_conftests(tmp_path):
+    """Conftests between the root and a package are found; ones inside it or elsewhere are not."""
+    for rel in ("conftest.py", "backend/conftest.py", "backend/tests/conftest.py", "frontend/conftest.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+
+    found = discover_ancestor_conftests(["backend/tests"], root_dir=tmp_path)
+
+    assert found == {
+        "conftest": str((tmp_path / "conftest.py").resolve()),
+        "backend.conftest": str((tmp_path / "backend/conftest.py").resolve()),
+    }
+
+
+def test_discover_ancestor_conftests_without_any(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    assert discover_ancestor_conftests(["pkg"], root_dir=tmp_path) == {}

@@ -8,6 +8,7 @@ import networkx as nx
 
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
+    _outermost,
     find_test_modules_under,
 )
 
@@ -58,8 +59,8 @@ class TestPytestImpactStrategy:
         test_file = subdir / "test_example.py"
         test_file.touch()
 
-        mock_dep_tree = MagicMock()
-        mock_dep_tree.nodes = ["tests.subdir.test_example", "tests.test_other", "module_b"]
+        dep_tree = nx.DiGraph()
+        dep_tree.add_nodes_from(["tests.subdir.test_example", "tests.test_other", "module_b"])
         mock_resolve.return_value = []  # No AST-based impacts
         mock_is_test.side_effect = lambda x: x.startswith("tests.") and "test_" in x
 
@@ -70,7 +71,7 @@ class TestPytestImpactStrategy:
             ns_module="mypackage",
             tests_package="tests",
             root_dir=self.root_dir,
-            dep_tree=mock_dep_tree,
+            dep_tree=dep_tree,
         )
 
         # Should include test modules affected by conftest.py
@@ -102,3 +103,50 @@ class TestPytestImpactStrategy:
         ]
         # ...and a directory holding no tests reaches none.
         assert find_test_modules_under(self.root_dir / "docs", dep_tree, root_dir=self.root_dir) == []
+
+
+def test_only_a_file_named_exactly_conftest_counts(tmp_path):
+    """pytest never loads ``myconftest.py``, so editing it must not select a directory."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_a.py").touch()
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.test_a", path=str(tmp_path / "tests/test_a.py"))
+
+    result = PytestImpactStrategy().find_impacted_tests(
+        changed_files=["tests/myconftest.py"],
+        impacted_modules=[],
+        ns_module="pkg",
+        root_dir=tmp_path,
+        dep_tree=dep_tree,
+    )
+
+    assert result == []
+
+
+def test_nested_conftest_directories_collapse(tmp_path):
+    """A directory inside another selected one adds nothing, so it is not scanned again."""
+    outer, inner, sibling = tmp_path / "tests", tmp_path / "tests/db", tmp_path / "other"
+
+    assert set(_outermost({inner, outer, sibling})) == {outer.resolve(), sibling.resolve()}
+
+
+def test_a_package_named_conftest_is_not_a_conftest(tmp_path):
+    """pytest loads only files named ``conftest.py``; ``app/conftest/__init__.py`` is an ordinary package."""
+    (tmp_path / "app/conftest").mkdir(parents=True)
+    (tmp_path / "app/conftest/__init__.py").touch()
+    (tmp_path / "app/conftest/test_inner.py").touch()
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("app.db", path=str(tmp_path / "app/db.py"))
+    dep_tree.add_node("app.conftest", path=str(tmp_path / "app/conftest/__init__.py"))
+    dep_tree.add_node("app.conftest.test_inner", path=str(tmp_path / "app/conftest/test_inner.py"))
+    dep_tree.add_edge("app.db", "app.conftest")
+
+    result = PytestImpactStrategy().find_impacted_tests(
+        changed_files=["app/db.py"],
+        impacted_modules=["app.db"],
+        ns_module="app",
+        root_dir=tmp_path,
+        dep_tree=dep_tree,
+    )
+
+    assert result == []

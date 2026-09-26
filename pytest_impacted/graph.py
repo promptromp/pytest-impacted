@@ -7,7 +7,7 @@ import networkx as nx
 
 from pytest_impacted._rust import RUST_AVAILABLE, rust_parse_all_imports
 from pytest_impacted.parsing import is_test_module, parse_file_imports
-from pytest_impacted.traversal import discover_submodules
+from pytest_impacted.traversal import discover_ancestor_conftests, discover_submodules
 
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,10 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     Scans the package directory to find modules, reads their source files,
     and parses imports via AST — without executing any module-level code.
     Package paths are resolved against *root_dir* (default: the current directory).
+
+    Conftests above the packages are included too (see
+    :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), and every
+    discovered node carries its absolute file in the ``path`` attribute.
     """
     submodules = discover_submodules(package, require_init=True, root_dir=root_dir)
 
@@ -92,14 +96,21 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
         test_submodules = discover_submodules(tests_package, require_init=False, root_dir=root_dir)
         submodules = {**submodules, **test_submodules}
 
+    # Skip any the package scan already found: the walk up from a tests
+    # directory inside the package passes through package directories.
+    packages = [package, tests_package] if tests_package else [package]
+    known_paths = set(submodules.values())
+    ancestors = discover_ancestor_conftests(packages, root_dir=root_dir, taken=submodules.keys())
+    submodules = {**{name: path for name, path in ancestors.items() if path not in known_paths}, **submodules}
+
     logger.debug("Building dependency tree for %d submodules", len(submodules))
 
     # Parse imports — Rust parallel path or Python sequential fallback
     all_imports = _parse_all_module_imports(submodules)
 
     digraph = nx.DiGraph()
-    for name in submodules:
-        digraph.add_node(name)
+    for name, file_path in submodules.items():
+        digraph.add_node(name, path=file_path)
         for imp in all_imports.get(name, []):
             if imp in submodules:
                 digraph.add_node(imp)

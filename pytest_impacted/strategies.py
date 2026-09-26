@@ -140,6 +140,16 @@ def _test_module_path(test_module: str, root_dir: Path) -> Path | None:
     return None
 
 
+def _module_path(module: str, dep_tree: nx.DiGraph, root_dir: Path) -> Path | None:
+    """The source file of graph node *module*.
+
+    Prefers the ``path`` recorded by :func:`~pytest_impacted.graph.build_dep_tree`,
+    which is right for src-layout too; nodes added by extensions may lack it.
+    """
+    path = dep_tree.nodes[module].get("path")
+    return Path(path) if path else _test_module_path(module, root_dir)
+
+
 def _is_under(path: Path, directory: Path) -> bool:
     try:
         path.resolve().relative_to(directory.resolve())
@@ -158,10 +168,37 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
     for test_module in dep_tree.nodes:
         if not is_test_module(test_module):
             continue
-        path = _test_module_path(test_module, root_dir)
+        path = _module_path(test_module, dep_tree, root_dir)
         if path is not None and _is_under(path, directory):
             matches.append(test_module)
     return sorted(matches)
+
+
+def _outermost(directories: set[Path]) -> list[Path]:
+    """Drop every directory nested inside another one: its tests are already covered."""
+    resolved = sorted({directory.resolve() for directory in directories}, key=lambda d: len(d.parts))
+    kept: list[Path] = []
+    for directory in resolved:
+        if not any(directory.is_relative_to(outer) for outer in kept):
+            kept.append(directory)
+    return kept
+
+
+def _reached_conftest_dirs(impacted_modules: list[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
+    """Directories of the conftests that depend, directly or transitively, on *impacted_modules*.
+
+    One multi-source traversal, so a large changeset does not re-walk shared descendants.
+    """
+    sources = [module for module in impacted_modules if module in dep_tree]
+    reached = set().union(*nx.bfs_layers(dep_tree, sources))
+    return {
+        path.parent
+        for node in reached
+        # The name is a cheap pre-filter; the file name decides, as for changed
+        # files, so a package named ``conftest`` is not one.
+        if node.rpartition(".")[2] == "conftest"
+        if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
+    }
 
 
 class ImpactStrategy(ABC):
@@ -348,27 +385,43 @@ class PytestImpactStrategy(ImpactStrategy):
         impacted_tests = resolve_impacted_tests(impacted_modules, dep_tree)
 
         # Add conftest.py impact analysis
-        conftest_impacted_tests = self._find_conftest_impacted_tests(changed_files, root_dir, dep_tree)
+        conftest_impacted_tests = self._find_conftest_impacted_tests(
+            changed_files, impacted_modules, root_dir, dep_tree
+        )
 
         # Combine and deduplicate
         all_impacted = list(set(impacted_tests + conftest_impacted_tests))
         return sorted(all_impacted)
 
     def _find_conftest_impacted_tests(
-        self, changed_files: list[str], root_dir: Path | None, dep_tree: nx.DiGraph
+        self,
+        changed_files: list[str],
+        impacted_modules: list[str],
+        root_dir: Path | None,
+        dep_tree: nx.DiGraph,
     ) -> list[str]:
-        """Find tests impacted by conftest.py changes."""
+        """Find tests under every conftest.py that changed or depends on a change.
+
+        Tests never import their conftest — pytest injects its fixtures — so a
+        conftest reached through the import graph (it imports a changed module)
+        impacts its directory exactly as an edit to the conftest itself does.
+        """
         if not root_dir:
             return []
 
-        impacted_tests: list[str] = []
-        for conftest_file in (f for f in changed_files if f.endswith("conftest.py")):
-            conftest_dir = _resolve_changed_file_dir(conftest_file, root_dir)
-            if conftest_dir is None:
-                # Skip files that can't be normalized to valid paths
-                continue
-            impacted_tests.extend(find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir))
+        conftest_dirs = {
+            conftest_dir
+            for conftest_file in changed_files
+            # Path, not PurePosixPath: monorepo paths are OS-native (backslashes on Windows).
+            if Path(conftest_file).name == "conftest.py"
+            # None: the path could not be normalized
+            if (conftest_dir := _resolve_changed_file_dir(conftest_file, root_dir)) is not None
+        }
+        conftest_dirs.update(_reached_conftest_dirs(impacted_modules, dep_tree, root_dir))
 
+        impacted_tests: list[str] = []
+        for conftest_dir in _outermost(conftest_dirs):
+            impacted_tests.extend(find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir))
         return impacted_tests
 
 

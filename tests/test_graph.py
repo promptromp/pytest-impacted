@@ -79,6 +79,7 @@ def test_build_dep_tree():
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
+        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
     ):
         # Set up mock imports for each module
@@ -107,6 +108,7 @@ def test_changed_init_with_no_dependents_impacts_nothing():
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
+        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
         # pkg/__init__.py imports nothing, pkg.core imports nothing,
@@ -137,6 +139,7 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
     with (
         patch("pytest_impacted.graph.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph.discover_submodules", return_value=mock_submodules),
+        patch("pytest_impacted.graph.discover_ancestor_conftests", return_value={}),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
     ):
         mock_parse.side_effect = [
@@ -153,3 +156,70 @@ def test_pruned_singleton_init_does_not_affect_other_changes():
 
         # Only test_core should run (depends on pkg.core), not test_utils
         assert set(impacted) == {"tests.test_core"}
+
+
+def test_build_dep_tree_includes_root_conftest_with_paths(tmp_path):
+    """A root conftest joins the graph, and every node records its source file."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/__init__.py").touch()
+    (tmp_path / "app/db.py").write_text("")
+    (tmp_path / "conftest.py").write_text("from app.db import connect\n")
+
+    dep_tree = graph.build_dep_tree("app", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("app.db", "conftest")  # the graph is inverted: dependency -> dependent
+    assert dep_tree.nodes["conftest"]["path"] == str((tmp_path / "conftest.py").resolve())
+    assert dep_tree.nodes["app.db"]["path"] == str((tmp_path / "app/db.py").resolve())
+
+
+def test_build_dep_tree_does_not_duplicate_a_conftest_inside_the_package(tmp_path):
+    """Walking up from a tests dir inside the package passes a conftest pkgutil already named."""
+    for rel in ("src/app/__init__.py", "src/app/conftest.py", "src/app/tests/test_a.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("")
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="src/app/tests", root_dir=tmp_path)
+
+    assert "app.conftest" in dep_tree
+    assert "src.app.conftest" not in dep_tree
+
+
+def test_ancestor_conftest_relative_imports_resolve_in_src_layout(tmp_path):
+    """Named ``app.conftest`` (not ``src.app.conftest``), so ``.core.db`` matches the discovered module."""
+    files = {
+        "src/app/__init__.py": "",
+        "src/app/conftest.py": "from .core.db import connect\n",
+        "src/app/core/__init__.py": "",
+        "src/app/core/db.py": "def connect(): ...\n",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("src/app/core", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("app.core.db", "app.conftest")
+
+
+def test_ancestor_conftest_whose_short_name_clashes_keeps_its_full_name(tmp_path):
+    """``tests/app/conftest.py`` would shorten to ``app.conftest``, already the package's own conftest.
+
+    Dropping it on the clash would lose every edge from it, so it keeps its full path name.
+    """
+    files = {
+        "src/app/__init__.py": "",
+        "src/app/conftest.py": "",
+        "src/app/core/__init__.py": "",
+        "src/app/core/db.py": "",
+        "tests/app/__init__.py": "",
+        "tests/app/conftest.py": "import app.core.db\n",
+        "tests/app/unit/test_x.py": "",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests/app/unit", root_dir=tmp_path)
+
+    assert dep_tree.nodes["app.conftest"]["path"] == str((tmp_path / "src/app/conftest.py").resolve())
+    assert dep_tree.has_edge("app.core.db", "tests.app.conftest")
