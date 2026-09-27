@@ -678,8 +678,8 @@ def modules_for_files(
 ) -> list[str]:
     """The module of each of *filenames* (relative to *root_dir*) in *path_to_module*, keyed by absolute path.
 
-    Non-Python files have none; a deleted file has none either, and one that exists
-    but is not a known module is logged.
+    Non-Python files have none, nor has a file absent from *path_to_module*: silently if
+    it no longer exists, logged if it does.
     """
     root = canonical_root(root_dir)
     resolved_modules = []

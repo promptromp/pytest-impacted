@@ -289,7 +289,8 @@ class _CodeRoles:
 
     Application code is what :func:`~pytest_impacted.traversal.discover_application_files`
     finds — the ``--impacted-module`` walk, less the ``--impacted-tests-dir`` walk — and
-    is never a conftest. Everything else in the graph is test code.
+    is never a conftest. Everything else walked is test code; a module no walk names is
+    placed by :func:`_changes_by_role`.
     """
 
     def __init__(self, *, ns_module: str, tests_package: str | None, root_dir: Path):

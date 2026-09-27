@@ -103,7 +103,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     We then check if these nodes are test modules.
     We return the list of test modules that are impacted.
 
-    For modules not found in the dependency tree (e.g. outside the analyzed package scope):
+    For modules not found in the dependency tree (e.g. a name an extension passes that is no node):
     - Test modules are included directly as impacted (they changed, so they should run).
     - Production modules cause ALL test modules to be marked as impacted,
       erring on the side of caution per project philosophy.
@@ -116,7 +116,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
         if module not in dep_tree.nodes:
             logger.warning(
                 "Module %s is marked as impacted but was not found in dependency tree "
-                "(possibly outside the analyzed package scope).",
+                "(a name that is no node of the graph).",
                 module,
             )
             if is_test_module(module):
@@ -345,8 +345,9 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     ``external`` (see :class:`_Linker`). Every node carries its absolute file in the
     ``path`` attribute. Modules named in a ``pytest_plugins`` declaration count as
     imports (see :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are
-    flagged with the ``pytest_plugin`` attribute. Imports that name no module are
-    kept in ``graph["unresolved"]``, for :func:`link_changed_files`.
+    flagged with the ``pytest_plugin`` attribute. Every import the walks do not
+    define — found on disk or not — is kept in ``graph["unresolved"]`` with its
+    importers, for :func:`link_changed_files`.
     """
     root = canonical_root(root_dir)
     discovered = _discover_project(package, tests_package, root)

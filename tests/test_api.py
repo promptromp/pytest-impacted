@@ -635,8 +635,9 @@ def test_duck_typed_strategy_passed_directly(mock_tree, mock_files):
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 def test_changed_files_resolve_through_the_graph_the_run_uses(mock_find_impacted_files, tmp_path):
-    """A conftest created after the graph was cached is not a node, so it must not become an
-    impacted module: one outside the graph reads as a production module and selects every test."""
+    """A conftest created after the graph was cached is no node of it: linked into the run's copy as
+    an ``external`` node, it must not read as a production module outside the graph, which would
+    select every test."""
     for rel in ("backend/app/__init__.py", "backend/app/db.py", "suite/test_a.py"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text("import backend.app.db\n" if rel.startswith("suite") else "")
@@ -812,3 +813,101 @@ def _run_with_a_changed_test_file(tmp_path, changed):
 def test_a_changed_test_file_with_a_dotted_stem_outside_the_tests_walk_is_a_test(tmp_path):
     with patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["checks/test_flow.v2.py"]):
         _run_with_a_changed_test_file(tmp_path, "checks/test_flow.v2.py")
+
+
+def _run_with_notices(tmp_path, changed, **kwargs):
+    """``get_impacted_tests`` over *changed*: the selected files, relative, and the notices printed."""
+    notices = []
+    with (
+        patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=changed),
+        patch("pytest_impacted.api.notify", side_effect=lambda message, session: notices.append(message)),
+    ):
+        result = get_impacted_tests(
+            impacted_git_mode=GitMode.UNSTAGED, impacted_base_branch="main", root_dir=tmp_path, **kwargs
+        )
+    return sorted(Path(file).relative_to(tmp_path.resolve()).as_posix() for file in result or []), notices
+
+
+def _write(tmp_path, files):
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+
+UNIMPORTED = "Import analysis selects no tests"
+
+
+@pytest.mark.parametrize(
+    ("files", "changed", "tests_dir", "expected"),
+    [
+        pytest.param(
+            {"pkg/__init__.py": "", "tests/unit/test_a.py": "", "tests/integration/test_flow.py": ""},
+            ["tests/integration/test_flow.py"],
+            "tests/unit",
+            ["tests/integration/test_flow.py"],
+            id="a_test_module_outside_the_tests_walk",
+        ),
+        pytest.param(
+            {
+                "pkg/__init__.py": "",
+                "pkg/mod.py": "def f():\n    import pkg.gone\n",
+                "tests/test_mod.py": "import pkg.mod\n",
+            },
+            ["pkg/gone.py"],
+            "tests",
+            ["tests/test_mod.py"],
+            id="a_deleted_module_something_imports",
+        ),
+    ],
+)
+def test_a_changed_file_that_selects_tests_gets_no_unimported_notice(tmp_path, files, changed, tests_dir, expected):
+    _write(tmp_path, files)
+
+    result, notices = _run_with_notices(tmp_path, changed, ns_module="pkg", tests_dir=tests_dir)
+
+    assert result == expected
+    assert not [notice for notice in notices if UNIMPORTED in notice]
+
+
+def test_placed_and_unplaced_test_modules_both_map_to_files(tmp_path):
+    """A node with a ``path``, and an alias that is no node, which discovery places."""
+    _write(tmp_path, {"app/__init__.py": "", "app/tests/test_x.py": "", "app/tests/test_y.py": ""})
+
+    class Mixed:
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return ["app.tests.test_x", "tests.test_y"]
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/tests/test_x.py"], ns_module="app", tests_dir="app/tests", strategy=Mixed()
+    )
+
+    assert result == ["app/tests/test_x.py", "app/tests/test_y.py"]
+
+
+def test_deleting_an_application_module_a_root_conftest_reaches_selects_only_its_importers(tmp_path):
+    """The deleted module is placed by what imports it: application code, so the conftest rule is opt-in."""
+    _write(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "def thing():\n    from app.utils import add\n",
+            "suite/conftest.py": "from app.core import thing\n",
+            "suite/core/test_core.py": "from app.core import thing\n",
+            "suite/other/test_other.py": "",
+        },
+    )
+
+    result, _ = _run_with_notices(tmp_path, ["app/utils.py"], ns_module="app", tests_dir="suite")
+
+    assert result == ["suite/core/test_core.py"]
+
+
+def test_a_full_run_does_not_list_a_deleted_test_module(tmp_path):
+    _write(
+        tmp_path,
+        {"pkg/__init__.py": "", "tests/test_child.py": "def test_child():\n    from tests.test_base import Base\n"},
+    )
+
+    result, _ = _run_with_notices(tmp_path, ["uv.lock", "tests/test_base.py"], ns_module="pkg", tests_dir="tests")
+
+    assert result == ["tests/test_child.py"]

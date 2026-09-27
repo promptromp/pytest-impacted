@@ -15,7 +15,7 @@ import networkx as nx
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
-from pytest_impacted.graph import link_changed_files, resolve_files_to_nodes
+from pytest_impacted.graph import is_test_node, link_changed_files, resolve_files_to_nodes
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
@@ -81,7 +81,7 @@ def build_strategy_with_extensions(
 
 
 def _notify_unimported(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
-    """Name the changed files no analysed module imports: import analysis selects nothing for them.
+    """Name the changed files outside the walks that nothing imports: import analysis selects nothing for them.
 
     Only that: another strategy may still select for them (``setup.py`` is a dependency
     file, a changed ``conftest.py`` selects its directory), so the notice advises nothing.
@@ -90,7 +90,8 @@ def _notify_unimported(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | 
     unimported = sorted(
         Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix()
         for node in linked
-        if not dep_tree.out_degree(node)
+        # A test module runs on its own: nothing needs to import it.
+        if not dep_tree.out_degree(node) and not is_test_node(dep_tree, node)
     )
     if unimported:
         pronoun = "it" if len(unimported) == 1 else "them"

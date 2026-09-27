@@ -9,7 +9,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted import graph
-from pytest_impacted.strategies import cached_build_dep_tree
+from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
 from pytest_impacted.traversal import _Discovered, path_to_package_name, resolve_files_to_modules
 
 
@@ -290,12 +290,14 @@ def test_a_test_importing_from_the_package_root_sees_what_its_init_imports(tmp_p
 
 def test_every_node_resolves_back_to_itself(tmp_path):
     """The graph and the changed-file resolver name every file alike: a node an edit cannot
-    resolve to is a change that impacts nothing."""
+    resolve to is a change that impacts nothing. Discovery knows every walked node, never an
+    ``external`` one, which only the graph finds."""
     files = {
         "conftest.py": "",
         "backend/conftest.py": "from backend.app.db import connect\n",
         "backend/app/__init__.py": "",
-        "backend/app/db.py": "",
+        "backend/app/db.py": "import libs.shared\n",
+        "libs/shared.py": "",
         "backend/app/ns/x.py": "",
         "backend/app/checks/test_in.py": "",
         "suite/conftest.py": "from backend.conftest import *\n",
@@ -308,13 +310,17 @@ def test_every_node_resolves_back_to_itself(tmp_path):
 
     dep_tree = graph.build_dep_tree("backend/app", tests_package="suite", root_dir=tmp_path)
 
+    assert dep_tree.nodes["libs.shared"]["external"]
     for node, path in dep_tree.nodes(data="path"):
         changed = str(Path(path).relative_to(root))
-        assert resolve_files_to_modules([changed], "backend/app", "suite", root_dir=tmp_path) == [node], changed
+        assert graph.resolve_files_to_nodes([changed], dep_tree, root_dir=tmp_path) == [node], changed
+        by_discovery = resolve_files_to_modules([changed], "backend/app", "suite", root_dir=tmp_path)
+        assert by_discovery == ([] if dep_tree.nodes[node].get("external") else [node]), changed
 
 
 def test_changed_files_resolve_to_the_graph_nodes_with_that_path(tmp_path):
-    """Including a conftest above the package; a file created after the graph was cached is no node."""
+    """Including a conftest above the package; a file created after the graph was cached is no node
+    of it (``link_changed_files`` adds one to a run's copy)."""
     for rel in ("backend/conftest.py", "backend/app/__init__.py", "backend/app/db.py", "suite/test_a.py"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
@@ -739,6 +745,7 @@ def test_a_linked_file_takes_no_name_already_in_use(tmp_path):
 
     linked = graph.link_changed_files(["tests/x.py", "other/x.py"], dep_tree, root_dir=tmp_path)
 
+    assert dep_tree.graph["aliases"]["tests.x"] == "app.tests.x"  # left alone
     names_in_use = set(dep_tree.graph["aliases"]) | {"app.tests.x", "other.x", ".other.x"}
     assert len(linked) == 2 and not names_in_use & set(linked)
     assert dep_tree.nodes[".other.x"]["path"] == "/elsewhere/x/__init__.py"
@@ -967,3 +974,92 @@ def test_a_test_file_an_extension_adds_is_judged_by_its_file_name(tmp_path):
     assert graph.is_test_node(dep_tree, "mypkg.generated_cases")
     assert graph.is_test_node(dep_tree, "checks.flow")
     assert not graph.is_test_node(dep_tree, "mypkg.helper")
+
+
+def test_a_test_module_outside_the_tests_walk_that_a_test_imports_is_itself_a_test(tmp_path):
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/core.py": "",
+            "tests/unit/test_child.py": "from tests.integration.test_base import Base\n",
+            "tests/integration/test_base.py": "import pkg.core\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests/unit", root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests(["pkg.core"], dep_tree) == ["tests.integration.test_base", "unit.test_child"]
+
+
+def test_a_deleted_module_that_only_an_external_module_imports_is_linked(tmp_path):
+    """Imports by a module outside the walks are recorded too."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "testing/factories.py": "def make():\n    from testing import base\n",
+            "tests/test_a.py": "import testing.factories\n",
+            "tests/test_b.py": "",
+        },
+    )
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files(["testing/base.py"], dep_tree, root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests([linked], dep_tree) == ["tests.test_a"]
+
+
+def test_a_module_created_after_caching_is_linked_to_what_imports_it(tmp_path):
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "def f():\n    from app import helpers\n",
+            "tests/test_core.py": "import app.core\n",
+        },
+    )
+    cached = cached_build_dep_tree("app", "tests", root_dir=tmp_path)
+    (tmp_path / "app/helpers.py").touch()
+    dep_tree = run_copy(cached)
+
+    (linked,) = graph.link_changed_files(["app/helpers.py"], dep_tree, root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests([linked], dep_tree) == ["tests.test_core"]
+
+
+def test_clearing_the_caches_forgets_directory_listings(tmp_path):
+    """A rebuild after ``clear_dep_tree_cache`` sees a top-level module created since."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/core.py": "import shared\n"})
+    assert "shared" not in cached_build_dep_tree("app", root_dir=tmp_path)
+
+    (tmp_path / "shared.py").touch()
+    clear_dep_tree_cache()
+
+    assert "shared" in cached_build_dep_tree("app", root_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        pytest.param({"myproject.egg-info/top_level.txt": "app\nshared\n"}, id="a_development_install_egg_info"),
+        pytest.param({"broken-1.0.dist-info/METADATA": ""}, id="a_dist_info_without_top_level_or_record"),
+    ],
+)
+def test_metadata_that_names_no_installed_distribution_hides_nothing(tmp_path, metadata):
+    """An ``.egg-info`` describes the project's own packages; a bare ``.dist-info`` lists nothing."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/core.py": "import shared\n", "shared.py": "", **metadata})
+
+    assert "shared" in graph.build_dep_tree("app", root_dir=tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_an_import_root_that_cannot_be_listed_raises_nothing(tmp_path):
+    write_files(tmp_path, {"app/__init__.py": "", "qa/src/tests/test_a.py": "import shared\n"})
+    (tmp_path / "qa").chmod(0o311)  # searchable, not listable
+    try:
+        dep_tree = graph.build_dep_tree("app", tests_package="qa/src/tests", root_dir=tmp_path)
+    finally:
+        (tmp_path / "qa").chmod(0o755)
+
+    assert "tests.test_a" in dep_tree
