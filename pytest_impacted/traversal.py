@@ -216,13 +216,7 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
 
     results: dict[str, str] = {}
     for py_file in base_path.rglob("*.py"):
-        rel = py_file.relative_to(base_path.parent)
-        if py_file.name == "__init__.py":
-            module_name = ".".join(rel.parent.parts)
-        else:
-            module_name = ".".join(rel.with_suffix("").parts)
-
-        results[module_name] = str(py_file.resolve())
+        results[".".join(module_parts(py_file.relative_to(base_path.parent)))] = str(py_file.resolve())
 
     return results
 
@@ -265,6 +259,7 @@ def clear_discovery_cache() -> None:
     """Drop every cached discovery result (see :func:`discover_submodules`)."""
     _discover_submodules.cache_clear()
     installed_top_levels.cache_clear()
+    top_level_entries.cache_clear()
 
 
 # The cache moved to the private inner function when ``root_dir`` was added, but
@@ -566,17 +561,25 @@ def module_parts(relative: Path) -> tuple[str, ...]:
 
 
 def import_roots(
-    modules: Mapping[str, str], aliases: Mapping[str, str], root_dir: str | Path | None = None
+    packages: Iterable[str],
+    modules: Mapping[str, str],
+    aliases: Mapping[str, str],
+    root_dir: str | Path | None = None,
 ) -> list[Path]:
-    """The directories the walks' names are rooted at, and the rootdir: where an import resolves from.
+    """The directories an import of a module no walk names is looked up from, the rootdir first.
 
-    ``app.x`` for ``src/app/x.py`` is rooted at ``src/``, its alias ``src.app.x`` at the
-    rootdir, and ``tests.x`` for ``backend/tests/x.py`` (the tests-dir walk) at
-    ``backend/``. Derived from the names rather than restated, so the directories taken to
-    be on ``sys.path`` are the ones the walks already assume.
+    Any directory between the rootdir and one the project's imports resolve from could be on
+    ``sys.path``: those down to each analysed directory's non-package prefix (``src/`` for
+    ``src/app``, even through a symlinked ``src/app``), and those down to where the walks'
+    own names are rooted (``backend/`` for a tests dir ``backend/tests`` walked as
+    ``tests.x``). Never a regular package, which would invent names like ``types`` for
+    ``pkg/types.py``.
     """
     root = canonical_root(root_dir)
-    roots = {root: None}
+    bases = {root: None}
+    for package in packages:
+        prefix, _ = find_non_package_prefix(package_name_to_path(package), root)
+        bases.setdefault(root / prefix)
     named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
     for name, path in named:
         parts = tuple(name.split("."))
@@ -586,8 +589,21 @@ def import_roots(
         depth = len(parts) - 1 + (file.name == "__init__.py")
         # A name reached through a symlinked directory does not spell the file's real path.
         if depth < len(file.parents) and module_parts(file.relative_to(base := file.parents[depth])) == parts:
-            roots.setdefault(base)
-    return list(roots)
+            bases.setdefault(base)
+    roots = {root: None}
+    for base in bases:
+        steps = base.relative_to(root).parts
+        roots.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
+    return [directory for directory in roots if directory == root or not _is_regular_package(directory)]
+
+
+@lru_cache(maxsize=64)
+def top_level_entries(directory: Path) -> frozenset[str]:
+    """The names of the entries in *directory*; none when it cannot be listed."""
+    try:
+        return frozenset(entry.name for entry in os.scandir(directory))
+    except OSError:
+        return frozenset()
 
 
 @lru_cache(maxsize=64)
@@ -609,10 +625,11 @@ def installed_top_levels(directory: Path) -> frozenset[str]:
                 names.update(line.strip() for line in top_level.read_text().splitlines() if line.strip())
             else:
                 record = (Path(dist_info.path) / "RECORD").read_text()
-                names.update(line.split("/", 1)[0] for line in record.splitlines() if "/" in line.split(",", 1)[0])
+                names.update(line.split(",", 1)[0].split("/", 1)[0] for line in record.splitlines())
         except (OSError, UnicodeDecodeError):
             continue
-    return frozenset(name.removesuffix(".py") for name in names if not name.endswith((".dist-info", ".data")))
+    tops = {name.removesuffix(".py") for name in names}
+    return frozenset(name for name in tops if name.isidentifier() and name != "__pycache__")
 
 
 def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
@@ -627,6 +644,9 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
     top = name.partition(".")[0]
     found = []
     for base in roots:
+        entries = top_level_entries(base)
+        if top not in entries and f"{top}.py" not in entries:
+            continue  # one listing per root answers most candidates, the standard library's included
         if top in installed_top_levels(base):
             continue  # third-party code installed into the project (``pip install -t .``)
         # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.

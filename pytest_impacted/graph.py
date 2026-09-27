@@ -2,8 +2,7 @@
 
 import logging
 import os
-import sys
-from collections.abc import Container, Iterable
+from collections.abc import Callable, Iterable
 from functools import cache
 from pathlib import Path
 
@@ -70,12 +69,24 @@ def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
 
 
 def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
-    """Whether graph node *node* is a test module: named like one, and found by a walk.
+    """Whether graph node *node* is a test module to run.
 
-    A module outside the walks (``external``) is a helper something imports, or a changed
-    file linked in for the run — a deleted test module, say — never a test to run.
+    A node the walks found is judged by its name (:func:`is_test_module`). A node outside
+    them (``external``) — a helper something imports, or a changed file linked in for the
+    run — only when its file exists and is named the way pytest collects one
+    (``test_*.py``, ``*_test.py``): ``tests/factories.py`` is a helper, and a deleted test
+    module is nothing to run.
     """
-    return is_test_module(node) and not dep_tree.nodes[node].get("external")
+    attributes = dep_tree.nodes[node]
+    if not attributes.get("external"):
+        return is_test_module(node)
+    path = attributes.get("path")
+    return path is not None and _is_test_file_name(Path(path).name) and os.path.isfile(path)
+
+
+def _is_test_file_name(name: str) -> bool:
+    """pytest's default ``python_files``: ``test_*.py`` and ``*_test.py``."""
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
 
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
@@ -150,7 +161,6 @@ class _Linker:
         self.modules = dict(discovered.modules)
         self.aliases = dict(discovered.aliases)
         self.external: set[str] = set()
-        self.tops = {name.partition(".")[0] for name in self.modules}
         self._contested = discovered.contested
         self._roots, self._root = roots, root
         self._by_path = {path: name for name, path in self.modules.items()}
@@ -168,28 +178,29 @@ class _Linker:
         self._located[candidate] = [self._node_for(candidate, path) for path in paths]
         return self._located[candidate]
 
+    def _taken(self, name: str) -> bool:
+        return name in self.modules or name in self.aliases
+
     def _node_for(self, candidate: str, path: str) -> str:
         if (node := self._by_path.get(path)) is not None:
             if candidate not in self.modules:  # not when it named a file another root found
                 self.aliases.setdefault(candidate, node)
             return node
         # Two files under one name (one per import root): the second is named by its path.
-        taken = self.modules.keys() | self.aliases.keys()
-        node = _free_name([candidate], _last_resort_name(Path(path), self._root), taken)
+        node = _free_name([candidate], _last_resort_name(Path(path), self._root), self._taken)
         self.modules[node] = path
         self.external.add(node)
-        self.tops.add(node.partition(".")[0])
         self._by_path[path] = node
         return node
 
 
-def _free_name(preferred: Iterable[str], last_resort: str, taken: Container[str]) -> str:
+def _free_name(preferred: Iterable[str], last_resort: str, taken: Callable[[str], bool]) -> str:
     """The first of *preferred* not *taken* (by a node or an alias), else *last_resort*, made unique.
 
     A package and a module file of the same name share a last-resort name.
     """
-    name = next((name for name in preferred if name not in taken), last_resort)
-    while name in taken:
+    name = next((name for name in preferred if not taken(name)), last_resort)
+    while taken(name):
         name += "_"
     return name
 
@@ -210,7 +221,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     """
     root = canonical_root(root_dir)
     known = {path for _, path in dep_tree.nodes(data="path") if path}
-    taken = set(dep_tree) | set(dep_tree.graph.get("aliases", {}))
+    aliases = dep_tree.graph.setdefault("aliases", {})
+    taken = set(dep_tree) | set(aliases)
     unresolved = dep_tree.graph.get("unresolved", {})
     roots = sorted((Path(d) for d in dep_tree.graph.get("import_roots", [root])), key=lambda d: -len(d.parts))
     added = []
@@ -222,7 +234,10 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
         importers = {importer for name in names for importer in unresolved.get(name, ())}
         if not importers and not os.path.exists(path):
             continue
-        node = _free_name(names, _last_resort_name(path, root), taken)
+        node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
+        # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
+        aliases.update({name: node for name in names if name != node and name not in taken})
+        taken.update(names)
         taken.add(node)
         dep_tree.add_node(node, path=str(path), external=True)
         dep_tree.add_edges_from((node, importer) for importer in importers)
@@ -297,11 +312,9 @@ def _may_name_a_module(candidate: str, linker: _Linker) -> bool:
     """Whether *candidate*, which names no module, could name one that is gone.
 
     Not a name defined in a module file (``pkg.mod.func`` for ``from pkg.mod import
-    func``), nor the standard library's — unless a local package of that name exists.
+    func``). A standard-library name counts: a deleted local ``platform/`` or ``secrets.py``
+    shadowed it.
     """
-    top = candidate.partition(".")[0]
-    if top in sys.stdlib_module_names and top not in linker.tops:
-        return False
     parent = candidate.rpartition(".")[0]
     parent_path = linker.modules.get(linker.aliases.get(parent, parent))
     return parent_path is None or parent_path.endswith("__init__.py")
@@ -325,7 +338,8 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     """
     root = canonical_root(root_dir)
     discovered = _discover_project(package, tests_package, root)
-    roots = import_roots(discovered.modules, discovered.aliases, root)
+    analysed = [name for name in (package, tests_package) if name]
+    roots = import_roots(analysed, discovered.modules, discovered.aliases, root)
     linker = _Linker(discovered, roots, root)
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
