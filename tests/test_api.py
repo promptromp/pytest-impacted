@@ -11,6 +11,8 @@ from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 from pytest_impacted.strategies import ImpactStrategy, cached_build_dep_tree, run_copy
 
+from .git_helpers import write_files
+
 
 @pytest.mark.parametrize(
     ("item_path", "impacted_tests", "expected"),
@@ -828,12 +830,6 @@ def _run_with_notices(tmp_path, changed, **kwargs):
     return sorted(Path(file).relative_to(tmp_path.resolve()).as_posix() for file in result or []), notices
 
 
-def _write(tmp_path, files):
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
-
-
 UNIMPORTED = "Import analysis selects no tests"
 
 
@@ -861,7 +857,7 @@ UNIMPORTED = "Import analysis selects no tests"
     ],
 )
 def test_a_changed_file_that_selects_tests_gets_no_unimported_notice(tmp_path, files, changed, tests_dir, expected):
-    _write(tmp_path, files)
+    write_files(tmp_path, files)
 
     result, notices = _run_with_notices(tmp_path, changed, ns_module="pkg", tests_dir=tests_dir)
 
@@ -869,9 +865,29 @@ def test_a_changed_file_that_selects_tests_gets_no_unimported_notice(tmp_path, f
     assert not [notice for notice in notices if UNIMPORTED in notice]
 
 
+@pytest.mark.parametrize(
+    ("files", "changed"),
+    [
+        pytest.param(
+            {"pkg/__init__.py": "", "pkg/cli.py": "def main():\n    import scripts.gone\n", "tests/unit/test_a.py": ""},
+            "scripts/gone.py",
+            id="a_deleted_module_only_untested_code_imports",
+        ),
+    ],
+)
+def test_a_changed_file_no_test_depends_on_is_named_in_the_notice(tmp_path, files, changed):
+    """The notice says what import analysis did: no test depends on the file, itself included."""
+    write_files(tmp_path, files)
+
+    result, notices = _run_with_notices(tmp_path, [changed], ns_module="pkg", tests_dir="tests/unit")
+
+    assert result == []
+    assert [notice for notice in notices if UNIMPORTED in notice and changed in notice]
+
+
 def test_placed_and_unplaced_test_modules_both_map_to_files(tmp_path):
     """A node with a ``path``, and an alias that is no node, which discovery places."""
-    _write(tmp_path, {"app/__init__.py": "", "app/tests/test_x.py": "", "app/tests/test_y.py": ""})
+    write_files(tmp_path, {"app/__init__.py": "", "app/tests/test_x.py": "", "app/tests/test_y.py": ""})
 
     class Mixed:
         def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
@@ -886,7 +902,7 @@ def test_placed_and_unplaced_test_modules_both_map_to_files(tmp_path):
 
 def test_deleting_an_application_module_a_root_conftest_reaches_selects_only_its_importers(tmp_path):
     """The deleted module is placed by what imports it: application code, so the conftest rule is opt-in."""
-    _write(
+    write_files(
         tmp_path,
         {
             "app/__init__.py": "",
@@ -903,7 +919,7 @@ def test_deleting_an_application_module_a_root_conftest_reaches_selects_only_its
 
 
 def test_a_full_run_does_not_list_a_deleted_test_module(tmp_path):
-    _write(
+    write_files(
         tmp_path,
         {"pkg/__init__.py": "", "tests/test_child.py": "def test_child():\n    from tests.test_base import Base\n"},
     )

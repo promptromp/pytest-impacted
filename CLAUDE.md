@@ -75,9 +75,10 @@ import means depends on `sys.path`, so a hit under one root must never hide it f
 deleted file of that name under another. `link_changed_files` gives each changed `.py` inside
 the rootdir that the run's graph lacks — deleted, or never walked — a node on the run's copy,
 linked to those importers (a deleted one only when something imports it). So the graph has
-more nodes than `discover_project_modules`: never judge graph membership by discovery. Whether a node is a test is `is_test_node`, not `is_test_module`,
-wherever the graph is at hand: an external node carries a `test` attribute judged by its
-path from the rootdir (it is named from wherever it was found), false for a deleted file.
+more nodes than `discover_project_modules`: never judge graph membership by discovery.
+Whether a node is a test is `is_test_node`, not `is_test_module`, wherever the graph is at
+hand: an external node carries a `test` attribute judged by its path from the rootdir (it
+is named from wherever it was found), false for a deleted file.
 An `external` node is application code when application code depends on it
 (`_changes_by_role`), so #85's opt-in still governs a shared library that reaches a
 conftest through the app; otherwise it is test code, which is followed.

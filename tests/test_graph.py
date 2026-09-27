@@ -12,6 +12,8 @@ from pytest_impacted import graph
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
 from pytest_impacted.traversal import _Discovered, path_to_package_name, resolve_files_to_modules
 
+from .git_helpers import write_files
+
 
 @pytest.fixture
 def sample_dep_tree():
@@ -480,12 +482,6 @@ def test_a_file_reached_under_two_names_is_one_node(tmp_path):
     assert len(paths) == len(set(paths))
     # ``tests.helpers`` is an alias of ``app.tests.helpers``: the import still becomes an edge.
     assert "app.tests.test_a" in graph.resolve_impacted_tests(["app.core"], dep_tree)
-
-
-def write_files(root: Path, files: dict[str, str]) -> None:
-    for rel, source in files.items():
-        (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        (root / rel).write_text(source)
 
 
 def test_a_module_outside_the_analysed_dirs_that_they_import_is_a_node(tmp_path):
