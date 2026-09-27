@@ -126,3 +126,15 @@ def test_a_changed_file_nothing_imports_is_named_in_a_notice(make_git_project):
 
     result.assert_outcomes(skipped=2)
     result.stdout.fnmatch_lines(["*No analysed module imports *scripts/deploy.py*"])
+
+
+def test_a_dash_p_plugin_outside_the_analysed_dirs_is_session_wide(make_git_project):
+    """Nothing imports ``-p testing.plugin``, but pytest loads it for every test."""
+    project = make_git_project(
+        {**TESTS, "suite/db/test_db.py": TESTS["suite/other/test_other.py"], "testing/plugin.py": ""}, INI
+    )
+    edit_file(project, "testing/plugin.py")
+
+    result = run(project, "suite", "-p", "testing.plugin")
+
+    result.assert_outcomes(passed=2)

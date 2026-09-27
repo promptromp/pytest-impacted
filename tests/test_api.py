@@ -6,6 +6,7 @@ from unittest.mock import ANY, MagicMock, patch
 import networkx as nx
 import pytest
 
+from pytest_impacted import graph
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 from pytest_impacted.strategies import ImpactStrategy, cached_build_dep_tree, run_copy
@@ -300,11 +301,9 @@ def test_get_impacted_tests_invalidate_all_patterns(
 @pytest.mark.parametrize(("conftest_imports", "expected"), [(False, None), (True, ["tests/test_db.py"])])
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
 @patch("pytest_impacted.api.cached_build_dep_tree")
 def test_get_impacted_tests_conftest_imports(
     mock_cached_build_dep_tree,
-    mock_resolve_modules_to_files,
     mock_resolve_files_to_nodes,
     mock_find_impacted_files,
     tmp_path,
@@ -322,7 +321,6 @@ def test_get_impacted_tests_conftest_imports(
     mock_cached_build_dep_tree.return_value = dep_tree
     mock_find_impacted_files.return_value = ["project_ns/db.py"]
     mock_resolve_files_to_nodes.return_value = ["project_ns.db"]
-    mock_resolve_modules_to_files.side_effect = lambda modules, **_: [m.replace(".", "/") + ".py" for m in modules]
 
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
@@ -333,7 +331,7 @@ def test_get_impacted_tests_conftest_imports(
         conftest_imports=conftest_imports,
     )
 
-    assert result == expected
+    assert result == (expected and [str(tmp_path / rel) for rel in expected])
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
@@ -685,3 +683,61 @@ def test_a_run_copy_shares_no_graph_level_value_with_the_cached_graph():
 
     assert cached.graph["lists"] == {"a": [1]}
     assert copy.graph["aliases"] == {}  # every run graph has one, as enrichers expect
+
+
+class _GeneratedTestEnricher:
+    """Adds a test module no walk finds, with its ``path``, as the extension docs ask."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def enrich_dep_tree(self, dep_tree, **kwargs):
+        dep_tree.add_node("generated.test_gen", path=self.path)
+        dep_tree.add_edge("pkg.mod", "generated.test_gen")
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        return graph.resolve_impacted_tests(impacted_modules, dep_tree)
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/mod.py"])
+def test_an_impacted_test_module_maps_to_its_node_path(_mock_find_impacted_files, tmp_path):
+    """A test node an extension added outside the walks keeps its file: no second discovery drops it."""
+    for rel in ("pkg/__init__.py", "pkg/mod.py", "generated/test_gen.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).touch()
+    generated = str((tmp_path / "generated/test_gen.py").resolve())
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=tmp_path,
+        ns_module="pkg",
+        strategy=_GeneratedTestEnricher(generated),
+    )
+
+    assert result == [generated]
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/gone.py"])
+def test_a_deleted_module_joins_the_run_graph_only(_mock_find_impacted_files, tmp_path):
+    """Linked on the run's copy: the cached graph never learns of a file one run saw deleted."""
+    for rel, source in {"pkg/__init__.py": "", "pkg/mod.py": "def f():\n    import pkg.gone\n"}.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+    seen = []
+
+    class Recorder:
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            seen.extend(impacted_modules)
+            return []
+
+    get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=tmp_path,
+        ns_module="pkg",
+        strategy=Recorder(),
+    )
+
+    assert seen == ["pkg.gone"]
+    assert "pkg.gone" not in cached_build_dep_tree("pkg", root_dir=tmp_path)

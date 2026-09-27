@@ -99,6 +99,20 @@ def _notify_unimported(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | 
         )
 
 
+def _test_files(
+    modules: list[str], dep_tree: nx.DiGraph, ns_module: str, tests_package: str | None, root_dir: str | Path
+) -> list[str]:
+    """The file of each impacted test module: its node's ``path``, or discovery's for a node without one.
+
+    Through the graph first, like the changed files: a test module no walk finds — one an
+    extension added with its ``path`` — would otherwise be dropped.
+    """
+    paths = [dep_tree.nodes[module].get("path") if module in dep_tree else None for module in modules]
+    unplaced = [module for module, path in zip(modules, paths, strict=True) if not path]
+    found = resolve_modules_to_files(unplaced, ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
+    return [path for path in paths if path] + (found if unplaced else [])
+
+
 def get_impacted_tests(
     impacted_git_mode: GitMode,
     impacted_base_branch: str,
@@ -227,12 +241,7 @@ def get_impacted_tests(
         )
         return None
 
-    impacted_test_files = resolve_modules_to_files(
-        impacted_test_modules,
-        ns_module=ns_module,
-        tests_package=tests_package,
-        root_dir=root_dir,
-    )
+    impacted_test_files = _test_files(impacted_test_modules, dep_tree, ns_module, tests_package, root_dir)
     if not impacted_test_files:
         warn(
             "No unit-test file paths impacted by the changes could be found. "

@@ -618,3 +618,23 @@ def test_a_changed_file_nothing_imports_is_linked_to_nothing(tmp_path):
 
     assert linked == ["scripts.deploy"]
     assert not list(dep_tree.successors("scripts.deploy"))
+
+
+def test_one_name_found_under_two_import_roots_links_both_files(tmp_path):
+    """``import shared`` could load ``shared.py`` or ``src/shared.py``, depending on ``sys.path``."""
+    write_files(
+        tmp_path,
+        {
+            "src/app/__init__.py": "",
+            "src/app/core.py": "import shared\n",
+            "shared.py": "",
+            "src/shared.py": "",
+            "tests/test_core.py": "import app.core\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+
+    shared = {node for node, path in dep_tree.nodes(data="path") if path and Path(path).name == "shared.py"}
+    assert len(shared) == 2
+    assert all(dep_tree.has_edge(node, "app.core") for node in shared)

@@ -144,13 +144,14 @@ class _Linker:
 
     def targets(self, candidate: str) -> list[str]:
         """The nodes an import of *candidate* depends on (none: it names no module in the project)."""
+        # First: a name looked up on disk may have found several files, one named after it.
+        if (located := self._located.get(candidate)) is not None:
+            return located
         known = self.aliases.get(candidate, candidate), *self._contested.get(candidate, ())
-        found = [name for name in known if name in self.modules]
-        if found:
+        if found := [name for name in known if name in self.modules]:
             return found
-        if candidate not in self._located:
-            paths = locate_module(candidate, self._roots, self._root)
-            self._located[candidate] = [self._node_for(candidate, path) for path in paths]
+        paths = locate_module(candidate, self._roots, self._root)
+        self._located[candidate] = [self._node_for(candidate, path) for path in paths]
         return self._located[candidate]
 
     def _node_for(self, candidate: str, path: str) -> str:
@@ -281,11 +282,13 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     Package paths are resolved against *root_dir* (default: the current directory).
 
     Conftests above the packages are included too (see
-    :func:`~pytest_impacted.traversal.discover_project_modules`), and every
-    discovered node carries its absolute file in the ``path`` attribute. Modules
-    named in a ``pytest_plugins`` declaration count as imports (see
-    :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are flagged with
-    the ``pytest_plugin`` attribute.
+    :func:`~pytest_impacted.traversal.discover_project_modules`), and so is any
+    module outside the walks that one of them imports, found on disk and flagged
+    ``external`` (see :class:`_Linker`). Every node carries its absolute file in the
+    ``path`` attribute. Modules named in a ``pytest_plugins`` declaration count as
+    imports (see :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are
+    flagged with the ``pytest_plugin`` attribute. Imports that name no module are
+    kept in ``graph["unresolved"]``, for :func:`link_changed_files`.
     """
     root = canonical_root(root_dir)
     roots = import_roots([name for name in (package, tests_package) if name], root)
