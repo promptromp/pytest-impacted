@@ -72,12 +72,13 @@ node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_
 entries included). Every candidate the *walks* do not define goes into `graph["unresolved"]`
 (`_may_name_a_module`, judged by the walks alone), found on disk or not: which file an
 import means depends on `sys.path`, so a hit under one root must never hide it from a
-deleted file of that name under another. `link_changed_files` gives each changed `.py` the
-run's graph lacks — deleted, or never walked — a node on the run's copy, linked to those
-importers. So the graph has more nodes than `discover_project_modules`: never judge graph
-membership by discovery. Whether a node is a test is `is_test_node`, not `is_test_module`,
-wherever the graph is at hand: an external node carries a `test` attribute judged by its
-path from the rootdir (it is named from wherever it was found), false for a deleted file.
+deleted file of that name under another. `link_changed_files` gives each changed `.py` inside
+the rootdir that the run's graph lacks — deleted, or never walked — a node on the run's copy,
+linked to those importers (a deleted one only when something imports it). So the graph has
+more nodes than `discover_project_modules`: never judge graph membership by discovery.
+Whether a node is a test is `is_test_node`, not `is_test_module`, wherever the graph is at
+hand: an external node carries a `test` attribute judged by its path from the rootdir (it
+is named from wherever it was found), false for a deleted file.
 An `external` node is application code when application code depends on it
 (`_changes_by_role`), so #85's opt-in still governs a shared library that reaches a
 conftest through the app; otherwise it is test code, which is followed.
@@ -218,7 +219,8 @@ don't re-implement either.
 
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`
 emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg`, so
-`build_dep_tree` filters candidates against the discovered modules (and their aliases) instead. The apparent
+`build_dep_tree` maps candidates to the discovered modules and aliases, and looks the rest up on
+disk (`_Linker`), instead. The apparent
 over-emission is the design, not a bug.
 
 **The Python and Rust backends must agree exactly.** `parsing.py` (astroid) and

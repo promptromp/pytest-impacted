@@ -125,9 +125,7 @@ def test_a_changed_file_nothing_imports_is_named_in_a_notice(make_git_project):
     result = run(project, "suite")
 
     result.assert_outcomes(skipped=2)
-    result.stdout.fnmatch_lines(
-        ["*Import analysis selects no tests for *scripts/deploy.py*: no analysed module imports it*"]
-    )
+    result.stdout.fnmatch_lines(["*Import analysis selects no tests for *scripts/deploy.py*: no test depends on it*"])
 
 
 def test_a_dash_p_plugin_outside_the_analysed_dirs_is_session_wide(make_git_project):
@@ -140,3 +138,14 @@ def test_a_dash_p_plugin_outside_the_analysed_dirs_is_session_wide(make_git_proj
     result = run(project, "suite", "-p", "testing.plugin")
 
     result.assert_outcomes(passed=2)
+
+
+def test_a_changed_test_file_outside_the_analysed_dirs_is_run_without_the_notice(make_git_project):
+    """It is a test (selected by its own name), not a file import analysis cannot place."""
+    project = make_git_project({**TESTS, "extra/test_extra.py": "def test_extra():\n    assert True\n"}, INI)
+    edit_file(project, "extra/test_extra.py")
+
+    result = run(project, "suite", "extra")
+
+    result.stdout.fnmatch_lines(["*extra/test_extra.py::test_extra PASSED*"])
+    result.stdout.no_fnmatch_line("*Import analysis selects no tests*")

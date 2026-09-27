@@ -15,7 +15,7 @@ import networkx as nx
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
-from pytest_impacted.graph import link_changed_files, resolve_files_to_nodes
+from pytest_impacted.graph import is_test_node, link_changed_files, resolve_files_to_nodes
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
@@ -80,21 +80,21 @@ def build_strategy_with_extensions(
     return CompositeImpactStrategy(builtin_strategies + ext_strategies)
 
 
-def _notify_unimported(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
-    """Name the changed files no analysed module imports: import analysis selects nothing for them.
+def _notify_untested(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
+    """Name the changed files linked in for the run that no test depends on, themselves included.
 
-    Only that: another strategy may still select for them (``setup.py`` is a dependency
-    file, a changed ``conftest.py`` selects its directory), so the notice advises nothing.
+    Only that: import analysis selects no tests for them, but another strategy still may
+    (``setup.py`` is a dependency file, a changed ``conftest.py`` selects its directory).
     """
     root = canonical_root(root_dir)
-    unimported = sorted(
+    untested = sorted(
         Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix()
         for node in linked
-        if not dep_tree.out_degree(node)
+        if not any(is_test_node(dep_tree, reached) for reached in nx.dfs_preorder_nodes(dep_tree, node))
     )
-    if unimported:
-        pronoun = "it" if len(unimported) == 1 else "them"
-        notify(f"Import analysis selects no tests for {unimported}: no analysed module imports {pronoun}.", session)
+    if untested:
+        pronoun = "it" if len(untested) == 1 else "them"
+        notify(f"Import analysis selects no tests for {untested}: no test depends on {pronoun}.", session)
 
 
 def _test_files(
@@ -186,8 +186,8 @@ def get_impacted_tests(
     dep_tree = run_copy(cached)
 
     # A changed file the graph lacks — deleted, or no walk reaches it — joins the run's copy,
-    # linked to whatever still imports it; say so for one nothing imports.
-    _notify_unimported(link_changed_files(impacted_files, dep_tree, root_dir=root_dir), dep_tree, root_dir, session)
+    # linked to whatever still imports it; say so for one no test depends on.
+    _notify_untested(link_changed_files(impacted_files, dep_tree, root_dir=root_dir), dep_tree, root_dir, session)
 
     # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
     impacted_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)

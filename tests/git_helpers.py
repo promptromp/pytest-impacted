@@ -37,3 +37,10 @@ def edit_file(pytester, rel: str) -> None:
     """Make an uncommitted change to *rel*, as unstaged git mode sees it."""
     path = pytester.path / rel
     path.write_text(path.read_text() + "\n# edited\n")
+
+
+def write_files(root, files: dict[str, str]) -> None:
+    """Write ``{relative path: source}`` under *root*, creating directories as needed."""
+    for rel, source in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(source)
