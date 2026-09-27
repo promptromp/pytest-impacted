@@ -638,3 +638,42 @@ def test_one_name_found_under_two_import_roots_links_both_files(tmp_path):
     shared = {node for node, path in dep_tree.nodes(data="path") if path and Path(path).name == "shared.py"}
     assert len(shared) == 2
     assert all(dep_tree.has_edge(node, "app.core") for node in shared)
+
+
+def test_a_file_found_under_another_name_is_an_alias_of_its_node(tmp_path):
+    """The tests-dir walk names ``suite/unit/helpers.py`` ``unit.helpers``; imported as
+    ``suite.unit.helpers``, that spelling joins its aliases, as ``-p`` lookups expect."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "suite/unit/helpers.py": "", "suite/unit/test_a.py": "import suite.unit.helpers\n"},
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite/unit", root_dir=tmp_path)
+
+    assert dep_tree.graph["aliases"]["suite.unit.helpers"] == "unit.helpers"
+    assert dep_tree.has_edge("unit.helpers", "unit.test_a")
+
+
+def test_a_package_directory_wins_over_a_module_file_of_the_same_name(tmp_path):
+    """As in Python: ``import shared`` loads ``shared/__init__.py`` when ``shared.py`` is beside it."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "app/core.py": "import shared\n", "shared/__init__.py": "", "shared.py": ""},
+    )
+
+    dep_tree = graph.build_dep_tree("app", root_dir=tmp_path)
+
+    assert dep_tree.nodes["shared"]["path"] == str((tmp_path / "shared/__init__.py").resolve())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_module_linked_in_from_outside_the_project_is_no_node(tmp_path):
+    """Git reports no change to a file outside the project, so it would only be an unreachable node."""
+    project = tmp_path / "project"
+    write_files(project, {"app/__init__.py": "", "app/core.py": "import vendored.lib\n"})
+    write_files(tmp_path, {"elsewhere/lib.py": ""})
+    (project / "vendored").symlink_to(tmp_path / "elsewhere")
+
+    dep_tree = graph.build_dep_tree("app", root_dir=project)
+
+    assert "vendored.lib" not in dep_tree
