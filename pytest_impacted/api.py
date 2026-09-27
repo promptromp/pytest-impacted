@@ -81,7 +81,11 @@ def build_strategy_with_extensions(
 
 
 def _notify_unimported(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
-    """Name the changed files no analysed module imports: import analysis cannot place them."""
+    """Name the changed files no analysed module imports: import analysis selects nothing for them.
+
+    Only that: another strategy may still select for them (``setup.py`` is a dependency
+    file, a changed ``conftest.py`` selects its directory), so the notice advises nothing.
+    """
     root = canonical_root(root_dir)
     unimported = sorted(
         Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix()
@@ -89,14 +93,8 @@ def _notify_unimported(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | 
         if not dep_tree.out_degree(node)
     )
     if unimported:
-        notify(
-            f"No analysed module imports {unimported}, so import analysis cannot tell which tests use "
-            + ("it" if len(unimported) == 1 else "them")
-            + "; if some do, list "
-            + ("it" if len(unimported) == 1 else "them")
-            + " in --impacted-invalidate-all.",
-            session,
-        )
+        pronoun = "it" if len(unimported) == 1 else "them"
+        notify(f"Import analysis selects no tests for {unimported}: no analysed module imports {pronoun}.", session)
 
 
 def _test_files(
@@ -109,8 +107,10 @@ def _test_files(
     """
     paths = [dep_tree.nodes[module].get("path") if module in dep_tree else None for module in modules]
     unplaced = [module for module, path in zip(modules, paths, strict=True) if not path]
+    if not unplaced:
+        return [path for path in paths if path]
     found = resolve_modules_to_files(unplaced, ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
-    return [path for path in paths if path] + (found if unplaced else [])
+    return [path for path in paths if path] + found
 
 
 def get_impacted_tests(

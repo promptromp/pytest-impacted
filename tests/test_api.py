@@ -741,3 +741,45 @@ def test_a_deleted_module_joins_the_run_graph_only(_mock_find_impacted_files, tm
 
     assert seen == ["pkg.gone"]
     assert "pkg.gone" not in cached_build_dep_tree("pkg", root_dir=tmp_path)
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["tests/test_base.py"])
+def test_a_deleted_test_module_is_no_test_file(_mock_find_impacted_files, tmp_path):
+    """Linked to the test that still imports it, but never handed to pytest: it is gone."""
+    files = {
+        "pkg/__init__.py": "",
+        "tests/test_child.py": "def test_child():\n    from tests.test_base import Base\n",
+    }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=tmp_path,
+        ns_module="pkg",
+        tests_dir="tests",
+    )
+
+    assert result == [str((tmp_path / "tests/test_child.py").resolve())]
+
+
+@patch("pytest_impacted.api.resolve_modules_to_files")
+@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/mod.py"])
+def test_test_modules_with_a_path_need_no_discovery(_mock_find_impacted_files, mock_resolve_modules_to_files, tmp_path):
+    """Discovery re-walks the project: skipped when every impacted test module is a node with a file."""
+    for rel, source in {"pkg/__init__.py": "", "pkg/mod.py": "", "tests/test_mod.py": "import pkg.mod\n"}.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    result = get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=tmp_path,
+        ns_module="pkg",
+        tests_dir="tests",
+    )
+
+    assert result == [str((tmp_path / "tests/test_mod.py").resolve())]
+    mock_resolve_modules_to_files.assert_not_called()

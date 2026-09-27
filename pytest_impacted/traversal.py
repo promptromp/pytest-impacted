@@ -3,7 +3,6 @@
 import logging
 import os
 import pkgutil
-import sys
 from collections.abc import Callable, Iterable, Mapping
 from functools import cache, lru_cache
 from itertools import chain
@@ -265,6 +264,7 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
 def clear_discovery_cache() -> None:
     """Drop every cached discovery result (see :func:`discover_submodules`)."""
     _discover_submodules.cache_clear()
+    installed_top_levels.cache_clear()
 
 
 # The cache moved to the private inner function when ``root_dir`` was added, but
@@ -529,9 +529,8 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
         file = Path(path)
         if not file.is_relative_to(root):
             continue
-        directories = file.relative_to(root).parent.parts
-        parts = directories if file.name == "__init__.py" else (*directories, file.stem)
-        for alias in _rooted_names(directories, parts, root, last_root, is_regular_package):
+        relative = file.relative_to(root)
+        for alias in _rooted_names(relative.parent.parts, module_parts(relative), root, last_root, is_regular_package):
             aliases.setdefault(alias, name)
     return aliases
 
@@ -561,35 +560,75 @@ def _is_regular_package(directory: Path) -> bool:
     return os.path.isfile(directory / "__init__.py")
 
 
-def import_roots(packages: Iterable[str], root_dir: str | Path | None = None) -> list[Path]:
-    """The directories an import of a module outside the walks is looked up from.
+def module_parts(relative: Path) -> tuple[str, ...]:
+    """The dotted-name parts of the module file *relative*: a package's ``__init__.py`` is its directory."""
+    return relative.parent.parts if relative.name == "__init__.py" else (*relative.parent.parts, relative.stem)
 
-    The rootdir, and each directory down to every analysed directory's non-package
-    prefix — ``src/`` for ``src/app``; ``src/`` and ``src/company/`` for
-    ``src/company/app`` — any of which can be on ``sys.path`` for the package's own
-    imports to work.
+
+def import_roots(
+    modules: Mapping[str, str], aliases: Mapping[str, str], root_dir: str | Path | None = None
+) -> list[Path]:
+    """The directories the walks' names are rooted at, and the rootdir: where an import resolves from.
+
+    ``app.x`` for ``src/app/x.py`` is rooted at ``src/``, its alias ``src.app.x`` at the
+    rootdir, and ``tests.x`` for ``backend/tests/x.py`` (the tests-dir walk) at
+    ``backend/``. Derived from the names rather than restated, so the directories taken to
+    be on ``sys.path`` are the ones the walks already assume.
     """
     root = canonical_root(root_dir)
-    roots = [root]
-    for package in packages:
-        prefix, _ = find_non_package_prefix(package_name_to_path(package), root)
-        parts = Path(prefix).parts
-        roots += [root.joinpath(*parts[: end + 1]) for end in range(len(parts))]
-    return list(dict.fromkeys(roots))
+    roots = {root: None}
+    named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
+    for name, path in named:
+        parts = tuple(name.split("."))
+        file = Path(path)
+        if name.startswith(LAST_RESORT_PREFIX) or not file.is_relative_to(root):
+            continue
+        depth = len(parts) - 1 + (file.name == "__init__.py")
+        # A name reached through a symlinked directory does not spell the file's real path.
+        if depth < len(file.parents) and module_parts(file.relative_to(base := file.parents[depth])) == parts:
+            roots.setdefault(base)
+    return list(roots)
+
+
+@lru_cache(maxsize=64)
+def installed_top_levels(directory: Path) -> frozenset[str]:
+    """The top-level names of the distributions installed *into* *directory* (``pip install -t``).
+
+    Read from each ``*.dist-info``'s ``top_level.txt``, else its ``RECORD``. Not
+    ``*.egg-info``: a development install describes the project's own packages that way.
+    """
+    names: set[str] = set()
+    try:
+        dist_infos = [entry for entry in os.scandir(directory) if entry.name.endswith(".dist-info")]
+    except OSError:
+        return frozenset()
+    for dist_info in dist_infos:
+        top_level = Path(dist_info.path) / "top_level.txt"
+        try:
+            if os.path.isfile(top_level):
+                names.update(line.strip() for line in top_level.read_text().splitlines() if line.strip())
+            else:
+                record = (Path(dist_info.path) / "RECORD").read_text()
+                names.update(line.split("/", 1)[0] for line in record.splitlines() if "/" in line.split(",", 1)[0])
+        except (OSError, UnicodeDecodeError):
+            continue
+    return frozenset(name.removesuffix(".py") for name in names if not name.endswith((".dist-info", ".data")))
 
 
 def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
     """The files inside *root* that importing *name* from each of *roots* would load.
 
     Filesystem checks only, never an import; a package directory wins over a module
-    file, as in Python. A standard-library name is never a local file: Python imported
-    it before the project's code ran.
+    file, as in Python. A standard-library name is looked up too: with a project
+    directory first on ``sys.path``, a local ``profile/`` shadows the standard library's
+    unless Python loaded it first, which depends on the process.
     """
-    if name.partition(".")[0] in sys.stdlib_module_names:
-        return []
     relative = package_name_to_path(name)
+    top = name.partition(".")[0]
     found = []
     for base in roots:
+        if top in installed_top_levels(base):
+            continue  # third-party code installed into the project (``pip install -t .``)
         # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.
         file = next((f for f in (base / relative / "__init__.py", base / f"{relative}.py") if os.path.isfile(f)), None)
         if file is not None and (real := file.resolve()).is_relative_to(root):

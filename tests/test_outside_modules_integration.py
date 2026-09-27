@@ -125,7 +125,9 @@ def test_a_changed_file_nothing_imports_is_named_in_a_notice(make_git_project):
     result = run(project, "suite")
 
     result.assert_outcomes(skipped=2)
-    result.stdout.fnmatch_lines(["*No analysed module imports *scripts/deploy.py*"])
+    result.stdout.fnmatch_lines(
+        ["*Import analysis selects no tests for *scripts/deploy.py*: no analysed module imports it*"]
+    )
 
 
 def test_a_dash_p_plugin_outside_the_analysed_dirs_is_session_wide(make_git_project):

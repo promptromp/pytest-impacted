@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+from collections.abc import Container, Iterable
 from functools import cache
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from pytest_impacted.traversal import (
     import_base,
     import_roots,
     locate_module,
+    module_parts,
     modules_for_files,
 )
 
@@ -67,6 +69,15 @@ def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
     return result
 
 
+def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
+    """Whether graph node *node* is a test module: named like one, and found by a walk.
+
+    A module outside the walks (``external``) is a helper something imports, or a changed
+    file linked in for the run — a deleted test module, say — never a test to run.
+    """
+    return is_test_module(node) and not dep_tree.nodes[node].get("external")
+
+
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     """Resolve impacted tests based on impacted modules.
 
@@ -81,7 +92,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
 
     """
     impacted_tests = []
-    all_test_modules_in_tree = [node for node in dep_tree.nodes if is_test_module(node)]
+    all_test_modules_in_tree = [node for node in dep_tree.nodes if is_test_node(dep_tree, node)]
 
     for module in impacted_modules:
         if module not in dep_tree.nodes:
@@ -103,7 +114,9 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
                 impacted_tests.extend(all_test_modules_in_tree)
             continue
 
-        dependent_nodes = [node for node in nx.dfs_preorder_nodes(dep_tree, source=module) if is_test_module(node)]
+        dependent_nodes = [
+            node for node in nx.dfs_preorder_nodes(dep_tree, source=module) if is_test_node(dep_tree, node)
+        ]
 
         impacted_tests.extend(dependent_nodes)
 
@@ -137,6 +150,7 @@ class _Linker:
         self.modules = dict(discovered.modules)
         self.aliases = dict(discovered.aliases)
         self.external: set[str] = set()
+        self.tops = {name.partition(".")[0] for name in self.modules}
         self._contested = discovered.contested
         self._roots, self._root = roots, root
         self._by_path = {path: name for name, path in self.modules.items()}
@@ -156,21 +170,33 @@ class _Linker:
 
     def _node_for(self, candidate: str, path: str) -> str:
         if (node := self._by_path.get(path)) is not None:
-            self.aliases.setdefault(candidate, node)
+            if candidate not in self.modules:  # not when it named a file another root found
+                self.aliases.setdefault(candidate, node)
             return node
         # Two files under one name (one per import root): the second is named by its path.
-        node = candidate if candidate not in self.modules else _last_resort_name(Path(path), self._root)
+        taken = self.modules.keys() | self.aliases.keys()
+        node = _free_name([candidate], _last_resort_name(Path(path), self._root), taken)
         self.modules[node] = path
         self.external.add(node)
+        self.tops.add(node.partition(".")[0])
         self._by_path[path] = node
         return node
 
 
+def _free_name(preferred: Iterable[str], last_resort: str, taken: Container[str]) -> str:
+    """The first of *preferred* not *taken* (by a node or an alias), else *last_resort*, made unique.
+
+    A package and a module file of the same name share a last-resort name.
+    """
+    name = next((name for name in preferred if name not in taken), last_resort)
+    while name in taken:
+        name += "_"
+    return name
+
+
 def _last_resort_name(path: Path, root: Path) -> str:
     """A unique node name no import spells, from *path* relative to *root* (see ``LAST_RESORT_PREFIX``)."""
-    relative = path.relative_to(root)
-    parts = relative.parent.parts if relative.name == "__init__.py" else (*relative.parent.parts, relative.stem)
-    return LAST_RESORT_PREFIX + ".".join(parts)
+    return LAST_RESORT_PREFIX + ".".join(module_parts(path.relative_to(root)))
 
 
 def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
@@ -184,6 +210,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     """
     root = canonical_root(root_dir)
     known = {path for _, path in dep_tree.nodes(data="path") if path}
+    taken = set(dep_tree) | set(dep_tree.graph.get("aliases", {}))
     unresolved = dep_tree.graph.get("unresolved", {})
     roots = sorted((Path(d) for d in dep_tree.graph.get("import_roots", [root])), key=lambda d: -len(d.parts))
     added = []
@@ -195,7 +222,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
         importers = {importer for name in names for importer in unresolved.get(name, ())}
         if not importers and not os.path.exists(path):
             continue
-        node = next((name for name in names if name not in dep_tree), None) or _last_resort_name(path, root)
+        node = _free_name(names, _last_resort_name(path, root), taken)
+        taken.add(node)
         dep_tree.add_node(node, path=str(path), external=True)
         dep_tree.add_edges_from((node, importer) for importer in importers)
         known.add(str(path))
@@ -209,8 +237,7 @@ def _importable_names(path: Path, roots: list[Path]) -> list[str]:
     for base in roots:
         if not path.is_relative_to(base):
             continue
-        relative = path.relative_to(base)
-        parts = relative.parent.parts if relative.name == "__init__.py" else (*relative.parent.parts, relative.stem)
+        parts = module_parts(path.relative_to(base))
         if parts and all(part.isidentifier() for part in parts):
             names.append(".".join(parts))
     return names
@@ -223,7 +250,12 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
     every plugin it loads that way, so plugins are followed transitively. Names
     outside the project — usually third-party plugins such as ``pytester`` — are skipped.
     """
-    pending = [name for name in linker.modules if is_conftest_module(name) or is_test_module(name)]
+    # pytest reads them from the conftests and test modules it collects: those the walks find.
+    pending = [
+        name
+        for name in linker.modules
+        if (is_conftest_module(name) or is_test_module(name)) and name not in linker.external
+    ]
     edges: dict[str, list[str]] = {}
     while pending:
         name = pending.pop()
@@ -265,9 +297,10 @@ def _may_name_a_module(candidate: str, linker: _Linker) -> bool:
     """Whether *candidate*, which names no module, could name one that is gone.
 
     Not a name defined in a module file (``pkg.mod.func`` for ``from pkg.mod import
-    func``), and not the standard library's.
+    func``), nor the standard library's — unless a local package of that name exists.
     """
-    if candidate.partition(".")[0] in sys.stdlib_module_names:
+    top = candidate.partition(".")[0]
+    if top in sys.stdlib_module_names and top not in linker.tops:
         return False
     parent = candidate.rpartition(".")[0]
     parent_path = linker.modules.get(linker.aliases.get(parent, parent))
@@ -291,8 +324,9 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     kept in ``graph["unresolved"]``, for :func:`link_changed_files`.
     """
     root = canonical_root(root_dir)
-    roots = import_roots([name for name in (package, tests_package) if name], root)
-    linker = _Linker(_discover_project(package, tests_package, root), roots, root)
+    discovered = _discover_project(package, tests_package, root)
+    roots = import_roots(discovered.modules, discovered.aliases, root)
+    linker = _Linker(discovered, roots, root)
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
