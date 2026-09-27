@@ -685,6 +685,10 @@ def test_an_unsearchable_package_directory_has_no_modules(tmp_path):
         pytest.param(
             lambda root: resolve_files_to_modules(["pkg/data/gone.py"], "pkg", root_dir=root), id="a_file_in_it"
         ),
+        pytest.param(
+            lambda root: discover_submodules("pkg/data/suite", require_init=False, root_dir=root),
+            id="a_tests_dir_in_it",
+        ),
     ],
 )
 def test_a_listable_but_unsearchable_directory_raises_nothing(tmp_path, probe):

@@ -132,7 +132,7 @@ Extends the AST analysis with pytest-specific dependency detection:
 
 ### ConftestImportImpactStrategy (opt-in)
 
-Always in the default pipeline, but by default it only *reports*: a notice names the conftests that import changed application code (it is printed during collection, so not shown under pytest-xdist). Enabled with `--impacted-conftest-imports` (ini: `impacted_conftest_imports = true`; `impacted-tests` CLI: `--conftest-imports`), it selects too: a conftest that imports changed *application* code, directly or through other modules, then impacts every test in its directory and below, exactly as an edited conftest does. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir` are followed; a helper package outside both is invisible.
+Always in the default pipeline, but by default it only *reports*: a notice names the conftests that import changed application code (it is printed during collection, so not shown under pytest-xdist). Enabled with `--impacted-conftest-imports` (ini: `impacted_conftest_imports = true`; `impacted-tests` CLI: `--conftest-imports`), it selects too: a conftest that imports changed *application* code, directly or through other modules, then impacts every test in its directory and below, exactly as an edited conftest does. A `db` fixture built on `app/db.py` means a change to `app/db.py` impacts every test under that conftest, even though no test imports `app/db.py` itself. As everywhere in the graph, only imports of modules inside `--impacted-module` or `--impacted-tests-dir`, or of the conftests above them, are followed; a helper package outside both is invisible.
 
 *Application code* is what discovering `--impacted-module` finds, less conftests and anything `--impacted-tests-dir` finds too. So if your tests live inside the package, pass `--impacted-tests-dir` (e.g. `my_package/tests`): without it their fixture modules count as application code, and a conftest importing them is only followed with this option. (A tests dir holding the whole package cannot tell the two apart and is ignored for this.)
 
@@ -264,10 +264,11 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
+| `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; run `impacted-tests --help` to list them |
 
 ## Configuration via `pyproject.toml`
 
-All CLI options can be set as defaults in your `pyproject.toml` (or `pytest.ini`):
+All pytest options can be set as defaults in your `pyproject.toml` (or `pytest.ini`). The `impacted-tests` CLI reads no config file, so pass its flags explicitly.
 
 ```toml
 [tool.pytest.ini_options]
@@ -283,7 +284,7 @@ impacted_no_merge_base = false  # true: branch mode diffs against the base tip
 impacted_disable_ext = []  # extension names to disable
 ```
 
-CLI flags override these defaults — except that a boolean set to `true` here cannot currently be switched off from the command line.
+Command-line flags override these defaults. A boolean set to `true` here has no flag to turn it off; override it with `-o`, e.g. `-o impacted_conftest_imports=false`.
 
 ## Input Validation
 
@@ -392,4 +393,4 @@ python -m benchmarks.bench_parsing --module my_package --tests-dir tests
 ```
 
 !!! note
-    The Rust extension is **completely optional**. When not installed, the pure-Python (astroid) implementation is used automatically. All functionality works identically in both modes.
+    The Rust extension is **completely optional**. When not installed, the pure-Python (astroid) implementation is used automatically. Apart from the grammar difference above, both modes select the same tests.

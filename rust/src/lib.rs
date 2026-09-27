@@ -63,7 +63,7 @@ fn extract_from_import(node: &StmtImport) -> Vec<String> {
 ///
 /// For `from pkg.mod import name`, we return both `pkg.mod.name` and `pkg.mod`
 /// since we cannot determine at parse time whether `name` is a submodule or a
-/// symbol. The caller (graph builder) filters to known submodules anyway.
+/// symbol. The caller (graph builder) keeps only the discovered modules and aliases.
 /// `from pkg import *` contributes only `pkg`: `pkg.*` is not a module name.
 fn extract_from_import_from(
     node: &StmtImportFrom,
@@ -96,7 +96,7 @@ fn extract_from_import_from(
             continue;
         }
         // Return both the full path and the base module
-        // The graph builder filters to known submodules
+        // The graph builder keeps only the discovered modules and aliases
         if !resolved_modname.is_empty() {
             let full_name = format!("{}.{}", resolved_modname, name);
             imports.push(full_name);

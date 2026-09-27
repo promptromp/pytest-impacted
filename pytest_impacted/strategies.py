@@ -176,7 +176,8 @@ def _test_module_path(test_module: str, root_dir: Path) -> Path | None:
     module_path = "/".join(test_module.split("."))
     root_path = normalize_path(root_dir)
     for candidate in (root_path / (module_path + ".py"), root_path / module_path / "__init__.py"):
-        if candidate.exists():
+        # os.path, not Path.exists(): a file in an unsearchable directory is missing, rather than raising.
+        if os.path.isfile(candidate):
             return candidate
     return None
 
@@ -370,9 +371,10 @@ class ImpactStrategy(ABC):
         The hook receives the same context kwargs as :meth:`setup`
         (``ns_module``, ``tests_package``, ``root_dir``, ``session``) so
         that scan-based enrichers can walk the source tree with
-        :func:`~pytest_impacted.traversal.discover_submodules` and
-        :func:`~pytest_impacted.parsing.parse_file_imports` before
-        deciding which edges to add.
+        :func:`~pytest_impacted.traversal.discover_project_modules` (the
+        graph's own names, its aliases and the conftests above the packages
+        included) and :func:`~pytest_impacted.parsing.parse_file_imports`
+        before deciding which edges to add.
 
         Once all strategies have enriched the graph, the final graph is
         passed by reference to every :meth:`setup` and :meth:`find_impacted_tests`
@@ -384,10 +386,11 @@ class ImpactStrategy(ABC):
         in place with :meth:`networkx.DiGraph.add_edge` and similar.
 
         Args:
-            dep_tree: The per-run dependency graph, mutable. A shallow
-                copy of the LRU-cached base graph produced by
+            dep_tree: The per-run dependency graph, mutable. A copy of the
+                LRU-cached base graph produced by
                 :func:`~pytest_impacted.strategies.cached_build_dep_tree`,
-                so mutations do not persist across pytest runs.
+                its ``aliases`` included, so mutations do not persist across
+                pytest runs.
             ns_module: The namespace module being analyzed.
             tests_package: Optional tests package name.
             root_dir: Project root (the pytest rootdir); may be below the git root.
@@ -446,7 +449,8 @@ class ImpactStrategy(ABC):
 
         Args:
             changed_files: List of file paths that have changed
-            impacted_modules: List of Python modules corresponding to changed files
+            impacted_modules: The ``dep_tree`` nodes the changed ``.py`` files resolve to,
+                by node ``path``, before enrichment; conftests above the packages included
             ns_module: The namespace module being analyzed
             tests_package: Optional tests package name
             root_dir: Project root (the pytest rootdir); may be below the git root
