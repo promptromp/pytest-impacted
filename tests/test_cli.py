@@ -1,9 +1,12 @@
 """Unit tests for the CLI module."""
 
 import logging
+import os
+import sys
 from pathlib import Path
 from unittest.mock import ANY, patch
 
+import pytest
 from click.testing import CliRunner
 
 from pytest_impacted.cli import configure_logging, impacted_tests_cli
@@ -447,3 +450,18 @@ def test_the_cli_prints_the_impacted_test_files_of_a_real_repo(make_git_project,
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [str((project.path / "suite/test_db.py").resolve())]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_a_directory_in_a_listable_but_unsearchable_one_is_a_bad_parameter(tmp_path):
+    """``Path.is_dir()`` raises there on 3.11–3.13; the CLI must report the option, not crash."""
+    locked = tmp_path / "pkg/data"
+    locked.mkdir(parents=True)
+    locked.chmod(0o644)
+    try:
+        result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(tmp_path), "--module", "pkg/data/sub"])
+    finally:
+        locked.chmod(0o755)
+
+    assert result.exit_code == 2, result.output
+    assert "does not exist under root-dir" in result.output

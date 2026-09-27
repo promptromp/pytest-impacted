@@ -547,11 +547,14 @@ def test_get_impacted_tests_does_not_pollute_cached_dep_tree(
 class _AliasEnricher:
     """Registers an alias for a node it adds, as an extension naming a generated module might."""
 
+    seen = None
+
     def enrich_dep_tree(self, dep_tree, **kwargs):
         dep_tree.add_node("pkg.generated")
         dep_tree.graph["aliases"]["generated"] = "pkg.generated"
 
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        self.seen = dep_tree.graph["aliases"].get("generated")
         return []
 
 
@@ -561,15 +564,17 @@ def test_an_alias_added_during_enrichment_stays_out_of_the_cached_graph(_mock_fi
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg/__init__.py").touch()
     (tmp_path / "pkg/mod.py").touch()
+    enricher = _AliasEnricher()
 
     get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
         impacted_base_branch="main",
         root_dir=tmp_path,
         ns_module="pkg",
-        strategy=_AliasEnricher(),
+        strategy=enricher,
     )
 
+    assert enricher.seen == "pkg.generated"  # the run's own graph has it
     assert "generated" not in cached_build_dep_tree("pkg", root_dir=tmp_path).graph["aliases"]
 
 

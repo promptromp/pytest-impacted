@@ -264,7 +264,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
-| `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; run `impacted-tests --help` to list them |
+| `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; it takes a value, `true` or `false` for a boolean. Run `impacted-tests --help` to list them |
 
 ## Configuration via `pyproject.toml`
 
@@ -375,7 +375,7 @@ cd rust && maturin develop --release
 
 When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential astroid parsing. No configuration or flags are needed — the extension is detected at import time.
 
-Both backends extract the same imports from the same source, so switching backends does not change which tests run. The one known difference is grammar: astroid parses with the running interpreter's grammar, while ruff's parser accepts newer syntax on any interpreter. A module using syntax newer than your Python (for example PEP 695 `type` aliases on 3.11) logs a syntax-error warning and contributes no edges on the pure-Python backend; every test that imports it is then selected only through other paths.
+Both backends extract the same imports from the same source, so switching backends does not change which tests run, with one known exception, grammar: astroid parses with the running interpreter's grammar, while ruff's parser accepts newer syntax on any interpreter. A module using syntax newer than your Python (for example PEP 695 `type` aliases on 3.11) logs a syntax-error warning and contributes no edges on the pure-Python backend; every test that imports it is then selected only through other paths.
 
 The Rust extension:
 

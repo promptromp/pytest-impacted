@@ -213,15 +213,20 @@ Beyond `resolve_impacted_tests`, three additional helpers are exported from the 
 Example: a strategy that enumerates all source files and scans them for a custom pattern:
 
 ```python
-from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+from pytest_impacted import ImpactStrategy, discover_project_modules, parse_file_imports
 
 
 class MyScanningStrategy(ImpactStrategy):
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, root_dir=None, **kwargs):
-        # Walk every source file in the package, rooted where the core rooted it
-        modules = discover_submodules(ns_module, root_dir=root_dir)
+    def find_impacted_tests(
+        self, changed_files, impacted_modules, ns_module, *, dep_tree, tests_package=None, root_dir=None, **kwargs
+    ):
+        # Walk every source file the core graph knows, rooted where the core rooted it
+        modules, aliases = discover_project_modules(ns_module, tests_package, root_dir=root_dir)
         for module_name, file_path in modules.items():
-            imports = parse_file_imports(file_path, module_name, is_package=file_path.endswith("__init__.py"))
+            candidates = parse_file_imports(
+                file_path, module_name.removeprefix("."), is_package=file_path.endswith("__init__.py")
+            )
+            imports = {aliases.get(name, name) for name in candidates} & modules.keys()
             # ... do something with imports ...
         return []
 ```
@@ -236,17 +241,19 @@ class MyScanningStrategy(ImpactStrategy):
 ### `setup` and `teardown` — one-time work per run
 
 ```python
-from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+from pytest_impacted import ImpactStrategy, discover_project_modules, parse_file_imports
 
 
 class IndexingStrategy(ImpactStrategy):
     def setup(self, *, ns_module, tests_package=None, root_dir=None, session=None, dep_tree):
         # One-time O(source-tree) work happens here, not in find_impacted_tests
         self._index = {}
-        for module_name, file_path in discover_submodules(ns_module, root_dir=root_dir).items():
-            self._index[module_name] = parse_file_imports(
-                file_path, module_name, is_package=file_path.endswith("__init__.py")
+        modules, aliases = discover_project_modules(ns_module, tests_package, root_dir=root_dir)
+        for module_name, file_path in modules.items():
+            candidates = parse_file_imports(
+                file_path, module_name.removeprefix("."), is_package=file_path.endswith("__init__.py")
             )
+            self._index[module_name] = {aliases.get(name, name) for name in candidates} & modules.keys()
 
     def teardown(self):
         # Release per-run state. Fires even if find_impacted_tests raises.
@@ -334,7 +341,7 @@ class DIBindingStrategy(ImpactStrategy):
 
 **When it fires.** `enrich_dep_tree` runs once per pytest invocation, on a **per-run copy** of the LRU-cached base graph, **before** any strategy's `setup` is called. The ordering is: build cached graph → copy → resolve the changed files to its nodes (`impacted_modules`) → `enrich_dep_tree(all strategies)` → `setup(all strategies)` → `find_impacted_tests(all strategies)` → `teardown(all strategies)`.
 
-**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached (maxsize=8) by `(ns_module, tests_package, canonical_root(root_dir))`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
+**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached (maxsize=8) by `(ns_module, tests_package, canonical_root(root_dir))`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator hands `enrich_dep_tree` a `pytest_impacted.strategies.run_copy()` of the cached graph — graph-level values such as `graph["aliases"]` included, which a plain `DiGraph.copy()` would share — so the graph you mutate is yours for this run only. Take a `run_copy` too if you call `cached_build_dep_tree` yourself and mutate the result.
 
 **Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order, forwarding all context kwargs unchanged. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
 

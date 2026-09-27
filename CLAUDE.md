@@ -33,8 +33,8 @@ dropped from names, plus the package's own `__init__.py` under its importable na
 (`pkgutil` lists children only; without it, `from pkg import X` had no edge, nor did
 anything the `__init__` re-exports); `False` uses `Path.rglob` for test directories,
 which frequently lack `__init__.py`, naming modules by path. Picking the wrong one
-silently misnames modules (`app.tests.x` rather than `tests.x`) or skips directories that
-are not identifiers (`my-dir/`), so imports stop matching nodes.
+silently names modules differently (`app.tests.x` under `True`, `tests.x` under `False`) or
+skips directories that are not identifiers (`my-dir/`), so imports stop matching nodes.
 Despite the name, `True` also walks sub-directories *without* `__init__.py`
 (`_namespace_portions`): since PEP 420 they import as namespace packages, and `pkgutil`
 skips them. A directory shadowed by a same-named module (`tests.py` beside `tests/`) is
@@ -65,13 +65,13 @@ must resolve to the module name `my_package`, or AST-parsed imports will not mat
 discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
-(`cached_build_dep_tree → .copy() → resolve_files_to_nodes → enrich_dep_tree → setup →
+(`cached_build_dep_tree → run_copy → resolve_files_to_nodes → enrich_dep_tree → setup →
 find_impacted_tests → teardown`). Changed files resolve through the graph's own node
 `path`s, not a second discovery: a changed module the (cached) graph lacks would read as a
 production module outside it, and `resolve_impacted_tests` would select every test. The
 copy is load-bearing: without it, extension enrichment pollutes the LRU-cached base graph
-and the next run in the same process starts dirty. `DiGraph.copy()` shares graph-level
-values, so the run copies `graph["aliases"]` too. `teardown`
+and the next run in the same process starts dirty. `run_copy`, not `DiGraph.copy()`, which
+shares graph-level values such as `graph["aliases"]`. `teardown`
 runs in a `finally`.
 
 **`get_impacted_tests` contains no strategy-specific dispatch.** `api.py` assembles

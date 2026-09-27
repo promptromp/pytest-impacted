@@ -145,7 +145,7 @@ fi
 ```
 
 The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `--root-dir`, `--tests-dir`,
-`--verbose`, `--no-dep-files`, `--invalidate-all`, `--conftest-imports` and `--disable-ext`, plus an `--impacted-ext-{ext}-{option}` flag for each option of an installed extension. If your tests live outside the package,
+`--verbose`, `--no-dep-files`, `--invalidate-all`, `--conftest-imports` and `--disable-ext`, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
 In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit — and name it as the remote-tracking ref (`origin/main`): a PR checkout has no local `main`.

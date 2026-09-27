@@ -125,7 +125,7 @@ def impacted_tests_cli(
     # Paths are relative to --root-dir, which need not be the working directory.
     # Dotted names are accepted here as they are by discover_submodules.
     for option, value in (("--module", module), ("--tests-dir", tests_dir)):
-        if value and not (Path(root_dir) / value.replace(".", os.sep)).is_dir():
+        if value and not os.path.isdir(Path(root_dir) / value.replace(".", os.sep)):
             raise click.BadParameter(
                 f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=option
             )

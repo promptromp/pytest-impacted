@@ -19,6 +19,7 @@ from pytest_impacted.strategies import (
     ImpactStrategy,
     cached_build_dep_tree,
     get_default_strategies,
+    run_copy,
 )
 from pytest_impacted.traversal import (
     canonical_root,
@@ -145,10 +146,9 @@ def get_impacted_tests(
     # Build the dependency graph once and pass it to the strategy pipeline.
     # The result is LRU-cached and must not be mutated, so we hand each run a
     # copy. Strategies that implement enrich_dep_tree() mutate the copy,
-    # leaving the cached base graph pristine for subsequent runs. copy() shares
-    # graph-level values, so the run gets its own aliases too.
-    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir)).copy()
-    dep_tree.graph["aliases"] = dict(dep_tree.graph.get("aliases", {}))
+    # leaving the cached base graph pristine for subsequent runs.
+    cached = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir))
+    dep_tree = run_copy(cached)
 
     # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
     impacted_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)

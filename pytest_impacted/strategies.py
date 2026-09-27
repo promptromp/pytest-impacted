@@ -5,6 +5,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -124,7 +125,7 @@ def cached_build_dep_tree(
 
     Returns:
         NetworkX dependency graph. Do not mutate it — it is shared between
-        runs; callers take a copy (see :func:`~pytest_impacted.api.get_impacted_tests`).
+        runs; callers take a :func:`run_copy`.
 
     Note:
         The root is canonicalized *before* the cache lookup, so the default
@@ -132,6 +133,17 @@ def cached_build_dep_tree(
         key would.
     """
     return _cached_build_dep_tree(ns_module, tests_package, canonical_root(root_dir))
+
+
+def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:
+    """A copy of *dep_tree* that a run may mutate without touching the cached graph.
+
+    ``DiGraph.copy()`` copies nodes, edges and their attribute dicts, but shares
+    graph-level values such as ``graph["aliases"]``, so those are copied too.
+    """
+    copy = dep_tree.copy()
+    copy.graph = deepcopy(dep_tree.graph)
+    return copy
 
 
 def clear_dep_tree_cache() -> None:
@@ -386,11 +398,10 @@ class ImpactStrategy(ABC):
         in place with :meth:`networkx.DiGraph.add_edge` and similar.
 
         Args:
-            dep_tree: The per-run dependency graph, mutable. A copy of the
-                LRU-cached base graph produced by
-                :func:`~pytest_impacted.strategies.cached_build_dep_tree`,
-                its ``aliases`` included, so mutations do not persist across
-                pytest runs.
+            dep_tree: The per-run dependency graph, mutable. A :func:`run_copy`
+                of the LRU-cached base graph produced by
+                :func:`~pytest_impacted.strategies.cached_build_dep_tree`, so
+                mutations do not persist across pytest runs.
             ns_module: The namespace module being analyzed.
             tests_package: Optional tests package name.
             root_dir: Project root (the pytest rootdir); may be below the git root.
