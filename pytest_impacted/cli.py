@@ -122,10 +122,11 @@ def impacted_tests_cli(
 
     configure_logging(verbose=verbose)
 
-    # Paths are relative to --root-dir, which need not be the working directory.
-    # Dotted names are accepted here as they are by discover_submodules.
+    # Paths are relative to --root-dir, which need not be the working directory. Dotted
+    # names are accepted here as they are by discover_submodules, but ``./suite`` is a path.
     for option, value in (("--module", module), ("--tests-dir", tests_dir)):
-        if value and not os.path.isdir(Path(root_dir) / value.replace(".", os.sep)):
+        candidates = (Path(root_dir) / value, Path(root_dir) / value.replace(".", os.sep)) if value else ()
+        if value and not any(os.path.isdir(candidate) for candidate in candidates):
             raise click.BadParameter(
                 f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=option
             )

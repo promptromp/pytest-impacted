@@ -8,7 +8,7 @@ import pytest
 
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
-from pytest_impacted.strategies import ImpactStrategy, cached_build_dep_tree
+from pytest_impacted.strategies import ImpactStrategy, cached_build_dep_tree, run_copy
 
 
 @pytest.mark.parametrize(
@@ -674,3 +674,14 @@ def test_changed_files_resolve_against_the_run_graph_before_enrichment(mock_find
 
     assert [step for step, _ in calls] == ["resolve", "enrich"]
     assert calls[0][1] is calls[1][1] is strategy.find_impacted_tests.call_args.kwargs["dep_tree"]
+
+
+def test_a_run_copy_shares_no_graph_level_value_with_the_cached_graph():
+    cached = nx.DiGraph()
+    cached.graph["lists"] = {"a": [1]}
+
+    copy = run_copy(cached)
+    copy.graph["lists"]["a"].append(2)
+
+    assert cached.graph["lists"] == {"a": [1]}
+    assert copy.graph["aliases"] == {}  # every run graph has one, as enrichers expect

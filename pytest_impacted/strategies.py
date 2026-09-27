@@ -139,10 +139,13 @@ def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:
     """A copy of *dep_tree* that a run may mutate without touching the cached graph.
 
     ``DiGraph.copy()`` copies nodes, edges and their attribute dicts, but shares
-    graph-level values such as ``graph["aliases"]``, so those are copied too.
+    graph-level values such as ``graph["aliases"]``, so those are copied too, and a
+    graph built without aliases gets an empty dict. Node and edge attribute *values*
+    are still shared: keep them immutable (strings, booleans).
     """
     copy = dep_tree.copy()
     copy.graph = deepcopy(dep_tree.graph)
+    copy.graph.setdefault("aliases", {})
     return copy
 
 
@@ -382,11 +385,10 @@ class ImpactStrategy(ABC):
 
         The hook receives the same context kwargs as :meth:`setup`
         (``ns_module``, ``tests_package``, ``root_dir``, ``session``) so
-        that scan-based enrichers can walk the source tree with
-        :func:`~pytest_impacted.traversal.discover_project_modules` (the
-        graph's own names, its aliases and the conftests above the packages
-        included) and :func:`~pytest_impacted.parsing.parse_file_imports`
-        before deciding which edges to add.
+        that scan-based enrichers can scan the source tree — every node carries
+        its file in ``path``, and ``dep_tree.graph["aliases"]`` maps the other
+        names — with :func:`~pytest_impacted.parsing.parse_file_imports` before
+        deciding which edges to add.
 
         Once all strategies have enriched the graph, the final graph is
         passed by reference to every :meth:`setup` and :meth:`find_impacted_tests`

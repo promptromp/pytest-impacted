@@ -63,8 +63,7 @@ def test_discover_submodules():
 
 def test_resolve_files_to_modules():
     """Test resolve_files_to_modules function."""
-    package_path = Path(importlib.import_module("pytest_impacted").__path__[0])
-    test_file = str(package_path / "traversal.py")
+    test_file = str(REPO_ROOT / "pytest_impacted" / "traversal.py")
     modules = resolve_files_to_modules([test_file], "pytest_impacted", root_dir=REPO_ROOT)
     assert len(modules) == 1
     assert modules[0] == "pytest_impacted.traversal"

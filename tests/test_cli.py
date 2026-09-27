@@ -430,7 +430,8 @@ class TestImpactedTestsCLI:
         assert result.exit_code == 0, result.output
 
 
-def test_the_cli_prints_the_impacted_test_files_of_a_real_repo(make_git_project, monkeypatch, tmp_path):
+@pytest.mark.parametrize("tests_dir", ["suite", "./suite", "suite/"])
+def test_the_cli_prints_the_impacted_test_files_of_a_real_repo(make_git_project, monkeypatch, tmp_path, tests_dir):
     """End to end, from elsewhere: ``--root-dir`` is honoured, and only test paths reach stdout."""
     project = make_git_project(
         {
@@ -445,7 +446,7 @@ def test_the_cli_prints_the_impacted_test_files_of_a_real_repo(make_git_project,
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(
-        impacted_tests_cli, ["--root-dir", str(project.path), "--module", "app", "--tests-dir", "suite"]
+        impacted_tests_cli, ["--root-dir", str(project.path), "--module", "app", "--tests-dir", tests_dir]
     )
 
     assert result.exit_code == 0, result.output
