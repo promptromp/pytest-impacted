@@ -101,63 +101,49 @@ def test_build_dep_tree():
         assert dep_tree.has_edge("module_c", "module_b")
 
 
-def test_changed_init_with_no_dependents_impacts_nothing():
-    """A changed __init__.py singleton should not cause all tests to run."""
-    mock_submodules = {
-        "pkg": "/fake/pkg/__init__.py",
-        "pkg.core": "/fake/pkg/core.py",
-        "tests.test_core": "/fake/tests/test_core.py",
+def test_an_init_that_no_test_imports_from_impacts_nothing(tmp_path):
+    """``import pkg.core`` runs ``pkg/__init__.py`` too, but is not linked to it (a documented limit)."""
+    for rel, source in {"pkg/__init__.py": "", "pkg/core.py": "", "tests/test_core.py": "import pkg.core\n"}.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests(["pkg"], dep_tree) == []
+
+
+def test_an_init_changed_beside_a_module_adds_no_tests_of_its_own(tmp_path):
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/core.py": "",
+        "pkg/utils.py": "",
+        "tests/test_core.py": "import pkg.core\n",
+        "tests/test_utils.py": "import pkg.utils\n",
     }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
 
-    with (
-        patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
-        patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
-    ):
-        # pkg/__init__.py imports nothing, pkg.core imports nothing,
-        # tests.test_core imports pkg.core
-        mock_parse.side_effect = [
-            [],  # pkg/__init__.py
-            [],  # pkg.core
-            ["pkg.core"],  # tests.test_core
-        ]
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
 
-        dep_tree = graph.build_dep_tree("pkg")
-        impacted = graph.resolve_impacted_tests(["pkg"], dep_tree)
-
-        # Only __init__.py changed — nothing depends on it, so no tests should run
-        assert impacted == []
+    assert graph.resolve_impacted_tests(["pkg", "pkg.core"], dep_tree) == ["tests.test_core"]
 
 
-def test_pruned_singleton_init_does_not_affect_other_changes():
-    """Changing __init__.py alongside a real module should only run tests for the real module."""
-    mock_submodules = {
-        "pkg": "/fake/pkg/__init__.py",
-        "pkg.core": "/fake/pkg/core.py",
-        "pkg.utils": "/fake/pkg/utils.py",
-        "tests.test_core": "/fake/tests/test_core.py",
-        "tests.test_utils": "/fake/tests/test_utils.py",
+def test_a_module_importing_from_its_package_root_links_its_tests_to_the_init(tmp_path):
+    """``from . import VERSION`` in a top-level module is an import of ``app/__init__.py``."""
+    files = {
+        "app/__init__.py": "VERSION = 1\n",
+        "app/core.py": "from . import VERSION\n",
+        "tests/test_core.py": "from app.core import thing\n",
+        "tests/test_other.py": "",
     }
+    for rel, source in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
 
-    with (
-        patch("pytest_impacted.graph.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
-        patch("pytest_impacted.graph.parse_file_imports") as mock_parse,
-    ):
-        mock_parse.side_effect = [
-            [],  # pkg/__init__.py
-            [],  # pkg.core
-            [],  # pkg.utils
-            ["pkg.core"],  # tests.test_core
-            ["pkg.utils"],  # tests.test_utils
-        ]
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
 
-        dep_tree = graph.build_dep_tree("pkg")
-        # Both __init__.py and core changed
-        impacted = graph.resolve_impacted_tests(["pkg", "pkg.core"], dep_tree)
-
-        # Only test_core should run (depends on pkg.core), not test_utils
-        assert set(impacted) == {"tests.test_core"}
+    assert graph.resolve_impacted_tests(["app"], dep_tree) == ["tests.test_core"]
 
 
 def test_build_dep_tree_includes_root_conftest_with_paths(tmp_path):

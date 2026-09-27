@@ -32,3 +32,22 @@ def test_an_edit_reaching_the_package_root_selects_tests_importing_from_it(make_
 
     result.assert_outcomes(passed=1, skipped=1)
     result.stdout.fnmatch_lines(["*test_app.py::test_app PASSED*"])
+
+
+@pytest.mark.parametrize("package_dir", ["app", "src/app"])
+def test_an_init_edit_does_not_select_a_test_importing_only_a_submodule(make_git_project, package_dir):
+    """``from app.core import Thing`` runs ``app/__init__.py`` too, but is not linked to it (documented)."""
+    ini = f"[pytest]\npythonpath = {package_dir.removesuffix('app') or '.'}\nimpacted_module = {package_dir}\n"
+    project = make_git_project(
+        {
+            f"{package_dir}/__init__.py": "from app.core import Thing\n",
+            f"{package_dir}/core.py": "class Thing:\n    pass\n",
+            "suite/test_core.py": "from app.core import Thing\n\ndef test_core():\n    assert Thing\n",
+        },
+        ini + "impacted_tests_dir = suite\n",
+    )
+    edit_file(project, f"{package_dir}/__init__.py")
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged")
+
+    result.assert_outcomes(skipped=1)
