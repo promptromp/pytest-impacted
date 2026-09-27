@@ -10,10 +10,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import networkx as nx
+
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
-from pytest_impacted.graph import resolve_files_to_nodes
+from pytest_impacted.graph import link_changed_files, resolve_files_to_nodes
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
@@ -76,6 +78,39 @@ def build_strategy_with_extensions(
     ext_strategies.sort(key=lambda s: getattr(s, "priority", 100))
 
     return CompositeImpactStrategy(builtin_strategies + ext_strategies)
+
+
+def _notify_unimported(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
+    """Name the changed files no analysed module imports: import analysis selects nothing for them.
+
+    Only that: another strategy may still select for them (``setup.py`` is a dependency
+    file, a changed ``conftest.py`` selects its directory), so the notice advises nothing.
+    """
+    root = canonical_root(root_dir)
+    unimported = sorted(
+        Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix()
+        for node in linked
+        if not dep_tree.out_degree(node)
+    )
+    if unimported:
+        pronoun = "it" if len(unimported) == 1 else "them"
+        notify(f"Import analysis selects no tests for {unimported}: no analysed module imports {pronoun}.", session)
+
+
+def _test_files(
+    modules: list[str], dep_tree: nx.DiGraph, ns_module: str, tests_package: str | None, root_dir: str | Path
+) -> list[str]:
+    """The file of each impacted test module: its node's ``path``, or discovery's for a node without one.
+
+    Through the graph first, like the changed files: a test module no walk finds — one an
+    extension added with its ``path`` — would otherwise be dropped.
+    """
+    paths = [dep_tree.nodes[module].get("path") if module in dep_tree else None for module in modules]
+    unplaced = [module for module, path in zip(modules, paths, strict=True) if not path]
+    if not unplaced:
+        return [path for path in paths if path]
+    found = resolve_modules_to_files(unplaced, ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
+    return [path for path in paths if path] + found
 
 
 def get_impacted_tests(
@@ -150,6 +185,10 @@ def get_impacted_tests(
     cached = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir))
     dep_tree = run_copy(cached)
 
+    # A changed file the graph lacks — deleted, or no walk reaches it — joins the run's copy,
+    # linked to whatever still imports it; say so for one nothing imports.
+    _notify_unimported(link_changed_files(impacted_files, dep_tree, root_dir=root_dir), dep_tree, root_dir, session)
+
     # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
     impacted_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
     if not impacted_modules:
@@ -202,12 +241,7 @@ def get_impacted_tests(
         )
         return None
 
-    impacted_test_files = resolve_modules_to_files(
-        impacted_test_modules,
-        ns_module=ns_module,
-        tests_package=tests_package,
-        root_dir=root_dir,
-    )
+    impacted_test_files = _test_files(impacted_test_modules, dep_tree, ns_module, tests_package, root_dir)
     if not impacted_test_files:
         warn(
             "No unit-test file paths impacted by the changes could be found. "

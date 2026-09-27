@@ -26,14 +26,10 @@ class TestIntegration:
         (test_dir / "conftest.py").touch()
         (test_dir / "test_example.py").touch()
 
-        with (
-            patch("pytest_impacted.strategies.resolve_impacted_tests") as mock_resolve,
-            patch("pytest_impacted.strategies.is_test_module") as mock_is_test,
-        ):
+        with patch("pytest_impacted.strategies.resolve_impacted_tests") as mock_resolve:
             dep_tree = nx.DiGraph()
             dep_tree.add_node("tests.test_example")
             mock_resolve.return_value = []
-            mock_is_test.side_effect = lambda x: x.startswith("tests.") and "test_" in x
 
             strategy = PytestImpactStrategy()
             for conftest in ("tests/conftest.py", str(test_dir / "conftest.py")):

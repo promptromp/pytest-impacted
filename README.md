@@ -197,7 +197,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 ```
 
 1. **Git introspection** identifies which files changed (uncommitted edits staged or not, untracked files and deletions, or a branch diff)
-2. **Filesystem discovery** maps file paths to Python module names — without importing anything
+2. **Filesystem discovery** maps file paths to Python module names — without importing anything; a module outside the analysed directories joins when an analysed module imports it, and a deleted one reaches whatever still imports it
 3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules
 5. **pytest wiring** — a `conftest.py` that changed, or imports changed test code (a fixture module, another conftest), selects every test in its directory and below — and with `--impacted-conftest-imports`, so does one importing changed application code; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects all tests

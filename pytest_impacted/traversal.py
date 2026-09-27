@@ -216,13 +216,7 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
 
     results: dict[str, str] = {}
     for py_file in base_path.rglob("*.py"):
-        rel = py_file.relative_to(base_path.parent)
-        if py_file.name == "__init__.py":
-            module_name = ".".join(rel.parent.parts)
-        else:
-            module_name = ".".join(rel.with_suffix("").parts)
-
-        results[module_name] = str(py_file.resolve())
+        results[".".join(module_parts(py_file.relative_to(base_path.parent)))] = str(py_file.resolve())
 
     return results
 
@@ -264,6 +258,8 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
 def clear_discovery_cache() -> None:
     """Drop every cached discovery result (see :func:`discover_submodules`)."""
     _discover_submodules.cache_clear()
+    installed_top_levels.cache_clear()
+    top_level_entries.cache_clear()
 
 
 # The cache moved to the private inner function when ``root_dir`` was added, but
@@ -528,9 +524,8 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
         file = Path(path)
         if not file.is_relative_to(root):
             continue
-        directories = file.relative_to(root).parent.parts
-        parts = directories if file.name == "__init__.py" else (*directories, file.stem)
-        for alias in _rooted_names(directories, parts, root, last_root, is_regular_package):
+        relative = file.relative_to(root)
+        for alias in _rooted_names(relative.parent.parts, module_parts(relative), root, last_root, is_regular_package):
             aliases.setdefault(alias, name)
     return aliases
 
@@ -558,6 +553,107 @@ def _rooted_names(
 def _is_regular_package(directory: Path) -> bool:
     """Whether *directory* has an ``__init__.py``; an unsearchable one has none, rather than raising."""
     return os.path.isfile(directory / "__init__.py")
+
+
+def module_parts(relative: Path) -> tuple[str, ...]:
+    """The dotted-name parts of the module file *relative*: a package's ``__init__.py`` is its directory."""
+    return relative.parent.parts if relative.name == "__init__.py" else (*relative.parent.parts, relative.stem)
+
+
+def import_roots(
+    packages: Iterable[str],
+    modules: Mapping[str, str],
+    aliases: Mapping[str, str],
+    root_dir: str | Path | None = None,
+) -> list[Path]:
+    """The directories an import of a module no walk names is looked up from, the rootdir first.
+
+    The walks' own names say where they assume ``sys.path`` starts: ``app.x`` for
+    ``src/app/x.py`` is rooted at ``src/``, ``tests.x`` for ``app/tests/x.py`` at ``app/``
+    (package or not — the walk names it so). Each analysed directory's non-package prefix is
+    another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and any
+    directory between the rootdir and one of these could be on ``sys.path`` too, unless it is
+    a regular package, which would invent names like ``types`` for ``pkg/types.py``. Not
+    here: the directory of a rootless test module, which pytest inserts itself.
+    """
+    root = canonical_root(root_dir)
+    naming: dict[Path, None] = {}
+    named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
+    for name, path in named:
+        parts = tuple(name.split("."))
+        file = Path(path)
+        if name.startswith(LAST_RESORT_PREFIX) or not file.is_relative_to(root):
+            continue
+        depth = len(parts) - 1 + (file.name == "__init__.py")
+        # A name reached through a symlinked directory does not spell the file's real path.
+        if depth < len(file.parents) and module_parts(file.relative_to(base := file.parents[depth])) == parts:
+            naming.setdefault(base)
+    prefixes = [root / find_non_package_prefix(package_name_to_path(package), root)[0] for package in packages]
+    between: dict[Path, None] = {}
+    for base in (*naming, *prefixes):
+        if base.is_relative_to(root):  # an absolute path outside it names no directory under it
+            steps = base.relative_to(root).parts
+            between.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
+    return list(dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))]))
+
+
+@lru_cache(maxsize=64)
+def top_level_entries(directory: Path) -> frozenset[str]:
+    """The names of the entries in *directory*; none when it cannot be listed."""
+    try:
+        return frozenset(entry.name for entry in os.scandir(directory))
+    except OSError:
+        return frozenset()
+
+
+@lru_cache(maxsize=64)
+def installed_top_levels(directory: Path) -> frozenset[str]:
+    """The top-level names of the distributions installed *into* *directory* (``pip install -t``).
+
+    Read from each ``*.dist-info``'s ``top_level.txt``, else its ``RECORD``. Not
+    ``*.egg-info``: a development install describes the project's own packages that way.
+    """
+    names: set[str] = set()
+    try:
+        dist_infos = [entry for entry in os.scandir(directory) if entry.name.endswith(".dist-info")]
+    except OSError:
+        return frozenset()
+    for dist_info in dist_infos:
+        top_level = Path(dist_info.path) / "top_level.txt"
+        try:
+            if os.path.isfile(top_level):
+                names.update(line.strip() for line in top_level.read_text().splitlines() if line.strip())
+            else:
+                record = (Path(dist_info.path) / "RECORD").read_text()
+                names.update(line.split(",", 1)[0].split("/", 1)[0] for line in record.splitlines())
+        except (OSError, UnicodeDecodeError):
+            continue
+    tops = {name.removesuffix(".py") for name in names}
+    return frozenset(name for name in tops if name.isidentifier() and name != "__pycache__")
+
+
+def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
+    """The files inside *root* that importing *name* from each of *roots* would load.
+
+    Filesystem checks only, never an import; a package directory wins over a module
+    file, as in Python. A standard-library name is looked up too: with a project
+    directory first on ``sys.path``, a local ``profile/`` shadows the standard library's
+    unless Python loaded it first, which depends on the process.
+    """
+    relative = package_name_to_path(name)
+    top = name.partition(".")[0]
+    found = []
+    for base in roots:
+        entries = top_level_entries(base)
+        if top not in entries and f"{top}.py" not in entries:
+            continue  # one listing per root answers most candidates, the standard library's included
+        if top in installed_top_levels(base):
+            continue  # third-party code installed into the project (``pip install -t .``)
+        # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.
+        file = next((f for f in (base / relative / "__init__.py", base / f"{relative}.py") if os.path.isfile(f)), None)
+        if file is not None and (real := file.resolve()).is_relative_to(root):
+            found.append(str(real))
+    return list(dict.fromkeys(found))
 
 
 def resolve_files_to_modules(

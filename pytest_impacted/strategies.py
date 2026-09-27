@@ -6,7 +6,7 @@ import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -14,8 +14,8 @@ import networkx as nx
 
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
-from pytest_impacted.graph import build_dep_tree, resolve_impacted_tests
-from pytest_impacted.parsing import is_conftest_module, is_test_module, normalize_path
+from pytest_impacted.graph import build_dep_tree, is_test_node, resolve_impacted_tests
+from pytest_impacted.parsing import is_conftest_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_application_files
 
 
@@ -225,7 +225,7 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
     """
     matches = []
     for test_module in dep_tree.nodes:
-        if not is_test_module(test_module):
+        if not is_test_node(dep_tree, test_module):
             continue
         path = _module_path(test_module, dep_tree, root_dir)
         if path is not None and _is_under(path, directory):
@@ -307,7 +307,7 @@ def _relative(path: Path, root_dir: Path) -> str:
 
 def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
     """All test modules, announcing *reason* — the answer when a change can reach any test."""
-    all_test_modules = sorted(node for node in dep_tree.nodes if is_test_module(node))
+    all_test_modules = sorted(node for node in dep_tree.nodes if is_test_node(dep_tree, node))
     notify(f"{reason}. Marking all {len(all_test_modules)} test modules as impacted.", session)
     return all_test_modules
 
@@ -527,7 +527,7 @@ class PytestImpactStrategy(ImpactStrategy):
 
         # AST-based analysis, from the same traversal; modules outside the graph
         # keep resolve_impacted_tests' conservative handling.
-        impacted_tests = [node for node in reached if is_test_module(node)]
+        impacted_tests = [node for node in reached if is_test_node(dep_tree, node)]
         impacted_tests += resolve_impacted_tests([m for m in impacted_modules if m not in dep_tree], dep_tree)
 
         if root_dir is not None:
@@ -595,13 +595,28 @@ def _changes_by_role(
     *,
     application: bool,
 ) -> list[str]:
-    """The changed graph modules that are application code — or, with ``application=False``, test code."""
+    """The changed graph modules that are application code — or, with ``application=False``, test code.
+
+    A module no walk names (``external``: a shared library, a fixture helper, a deleted
+    module) is application code when application code depends on it.
+    """
     roles = _CodeRoles(ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
 
-    def is_application_code(module: str) -> bool:
+    def is_application_file(module: str) -> bool:
         # A node without a file cannot be placed: it counts as test code, which is followed.
         path = _module_path(module, dep_tree, root_dir)
         return path is not None and roles.is_application_code(path)
+
+    @cache
+    def application_depends_on() -> set[str]:
+        # Everything application code reaches through its imports, in one walk up the graph.
+        sources = [node for node in dep_tree if not dep_tree.nodes[node].get("external") and is_application_file(node)]
+        return set().union(*nx.bfs_layers(dep_tree.reverse(copy=False), sources))
+
+    def is_application_code(module: str) -> bool:
+        if not dep_tree.nodes[module].get("external"):
+            return is_application_file(module)
+        return module in application_depends_on()
 
     return [module for module in impacted_modules if module in dep_tree and is_application_code(module) == application]
 

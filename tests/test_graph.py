@@ -10,7 +10,7 @@ import pytest
 
 from pytest_impacted import graph
 from pytest_impacted.strategies import cached_build_dep_tree
-from pytest_impacted.traversal import _Discovered, resolve_files_to_modules
+from pytest_impacted.traversal import _Discovered, path_to_package_name, resolve_files_to_modules
 
 
 @pytest.fixture
@@ -474,3 +474,496 @@ def test_a_file_reached_under_two_names_is_one_node(tmp_path):
     assert len(paths) == len(set(paths))
     # ``tests.helpers`` is an alias of ``app.tests.helpers``: the import still becomes an edge.
     assert "app.tests.test_a" in graph.resolve_impacted_tests(["app.core"], dep_tree)
+
+
+def write_files(root: Path, files: dict[str, str]) -> None:
+    for rel, source in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(source)
+
+
+def test_a_module_outside_the_analysed_dirs_that_they_import_is_a_node(tmp_path):
+    """``testing/`` is neither the package nor the tests dir, but a conftest imports it: an edit
+    there must reach the conftest, and what ``testing`` itself imports must reach it too."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "",
+            "testing/factories.py": "from app.core import Thing\nfrom testing.base import Base\n",
+            "testing/base.py": "",
+            "tests/conftest.py": "from testing.factories import make\n",
+            "tests/test_a.py": "import testing.factories\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.nodes["testing.factories"]["path"] == str((tmp_path / "testing/factories.py").resolve())
+    assert dep_tree.has_edge("testing.factories", "tests.conftest")
+    assert dep_tree.has_edge("testing.factories", "tests.test_a")
+    assert dep_tree.has_edge("app.core", "testing.factories")
+    assert dep_tree.has_edge("testing.base", "testing.factories")
+
+
+def test_a_module_beside_the_package_in_src_layout_is_a_node(tmp_path):
+    """``src/`` is on ``sys.path`` for ``app``, so ``shared.x`` names ``src/shared/x.py``."""
+    write_files(
+        tmp_path,
+        {
+            "src/app/__init__.py": "",
+            "src/app/core.py": "from shared.x import helper\n",
+            "src/shared/x.py": "",
+            "tests/test_core.py": "import app.core\n",
+            "tests/test_other.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("shared.x", "app.core")
+    assert graph.resolve_impacted_tests(["shared.x"], dep_tree) == ["tests.test_core"]
+
+
+def test_a_local_package_named_like_a_standard_library_module_is_followed(tmp_path):
+    """With the rootdir first on ``sys.path``, ``profile.util`` loads the project's ``profile/``:
+    only modules Python loaded before the project's code ran are safe from it, and which those
+    are depends on the process, so a local file is always followed."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "import json\nfrom profile.util import y\n\ndef f():\n    from profile import gone\n",
+            "profile/__init__.py": "",
+            "profile/util.py": "",
+            "tests/test_core.py": "import app.core\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("profile.util", "app.core")
+    assert dep_tree.graph["unresolved"]["profile.gone"] == ["app.core"]
+
+
+def test_a_pytest_plugin_outside_the_analysed_dirs_is_a_flagged_node(tmp_path):
+    """A fixture plugin kept in ``testing/`` is loaded session-wide like any other plugin."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "testing/fixtures.py": "",
+            "tests/conftest.py": 'pytest_plugins = ["testing.fixtures"]\n',
+            "tests/test_a.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("testing.fixtures", "tests.conftest")
+    assert dep_tree.nodes["testing.fixtures"].get("pytest_plugin") is True
+
+
+def test_imports_that_name_no_module_are_recorded_for_their_importers(tmp_path):
+    """So a deleted module can be linked to what still imports it; a name inside a module file
+    (``from app.core import thing``) cannot be a module. A standard-library name can: a deleted
+    local module of that name shadowed it."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "import json\nfrom app import gone\n\ndef lazy():\n    import app.old\n",
+            "tests/test_a.py": "from app.core import thing\n",
+        },
+    )
+
+    unresolved = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path).graph["unresolved"]
+
+    assert unresolved["app.gone"] == ["app.core"]
+    assert unresolved["app.old"] == ["app.core"]
+    assert unresolved["json"] == ["app.core"]
+    assert "app.core.thing" not in unresolved
+    assert "app.core" not in unresolved  # a module the walks name
+
+
+@pytest.mark.parametrize(
+    ("package", "prefix"), [pytest.param("app", "", id="flat"), pytest.param("src/app", "src/", id="src_layout")]
+)
+def test_a_deleted_module_is_linked_to_what_still_imports_it(tmp_path, package, prefix):
+    write_files(
+        tmp_path,
+        {
+            f"{prefix}app/__init__.py": "",
+            f"{prefix}app/core.py": "def lazy():\n    from app import helpers\n",
+            "tests/test_core.py": "import app.core\n",
+            "tests/test_other.py": "",
+        },
+    )
+    dep_tree = graph.build_dep_tree(package, tests_package="tests", root_dir=tmp_path).copy()
+
+    linked = graph.link_changed_files([f"{prefix}app/helpers.py"], dep_tree, root_dir=tmp_path)
+
+    assert linked == ["app.helpers"]
+    assert dep_tree.nodes["app.helpers"]["path"] == str(tmp_path.resolve() / f"{prefix}app/helpers.py")
+    assert graph.resolve_files_to_nodes([f"{prefix}app/helpers.py"], dep_tree, root_dir=tmp_path) == ["app.helpers"]
+    assert graph.resolve_impacted_tests(["app.helpers"], dep_tree) == ["tests.test_core"]
+
+
+def test_a_changed_file_nothing_imports_is_linked_to_nothing(tmp_path):
+    """A script outside the analysed dirs gets a node with no dependents; files the graph has,
+    deleted files nothing imports, files outside the rootdir and non-Python files get none."""
+    write_files(tmp_path, {"project/app/__init__.py": "", "project/scripts/deploy.py": "", "other/x.py": ""})
+    root = tmp_path / "project"
+    dep_tree = graph.build_dep_tree("app", root_dir=root).copy()
+
+    linked = graph.link_changed_files(
+        ["scripts/deploy.py", "app/__init__.py", "scripts/gone.py", "../other/x.py", "README.md"],
+        dep_tree,
+        root_dir=root,
+    )
+
+    assert linked == ["scripts.deploy"]
+    assert not list(dep_tree.successors("scripts.deploy"))
+
+
+def test_one_name_found_under_two_import_roots_links_both_files(tmp_path):
+    """``import shared`` could load ``shared.py`` or ``src/shared.py``, depending on ``sys.path``."""
+    write_files(
+        tmp_path,
+        {
+            "src/app/__init__.py": "",
+            "src/app/core.py": "import shared\n",
+            "shared.py": "",
+            "src/shared.py": "",
+            "tests/test_core.py": "import app.core\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+
+    shared = {node for node, path in dep_tree.nodes(data="path") if path and Path(path).name == "shared.py"}
+    assert len(shared) == 2
+    assert all(dep_tree.has_edge(node, "app.core") for node in shared)
+
+
+def test_a_file_found_under_another_name_is_an_alias_of_its_node(tmp_path):
+    """The tests-dir walk names ``suite/unit/helpers.py`` ``unit.helpers``; imported as
+    ``suite.unit.helpers``, that spelling joins its aliases, as ``-p`` lookups expect."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "suite/unit/helpers.py": "", "suite/unit/test_a.py": "import suite.unit.helpers\n"},
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite/unit", root_dir=tmp_path)
+
+    assert dep_tree.graph["aliases"]["suite.unit.helpers"] == "unit.helpers"
+    assert dep_tree.has_edge("unit.helpers", "unit.test_a")
+
+
+def test_a_package_directory_wins_over_a_module_file_of_the_same_name(tmp_path):
+    """As in Python: ``import shared`` loads ``shared/__init__.py`` when ``shared.py`` is beside it."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "app/core.py": "import shared\n", "shared/__init__.py": "", "shared.py": ""},
+    )
+
+    dep_tree = graph.build_dep_tree("app", root_dir=tmp_path)
+
+    assert dep_tree.nodes["shared"]["path"] == str((tmp_path / "shared/__init__.py").resolve())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_module_linked_in_from_outside_the_project_is_no_node(tmp_path):
+    """Git reports no change to a file outside the project, so it would only be an unreachable node."""
+    project = tmp_path / "project"
+    write_files(project, {"app/__init__.py": "", "app/core.py": "import vendored.lib\n"})
+    write_files(tmp_path, {"elsewhere/lib.py": ""})
+    (project / "vendored").symlink_to(tmp_path / "elsewhere")
+
+    dep_tree = graph.build_dep_tree("app", root_dir=project)
+
+    assert "vendored.lib" not in dep_tree
+
+
+@pytest.mark.parametrize(
+    ("package", "tests_dir", "files", "deleted", "importer"),
+    [
+        pytest.param(
+            "app",
+            "backend/tests",
+            {"app/__init__.py": "", "backend/tests/test_a.py": "def test_a():\n    from tests.helpers import h\n"},
+            "backend/tests/helpers.py",
+            "tests.test_a",
+            id="a_nested_tests_dir_walked_as_tests",
+        ),
+        pytest.param(
+            "src/app",
+            "tests",
+            {"src/app/core.py": "def f():\n    from app import utils\n", "tests/test_core.py": "import app.core\n"},
+            "src/app/utils.py",
+            "src.app.core",
+            id="a_namespace_package_in_src",
+        ),
+    ],
+)
+def test_a_deleted_module_is_named_the_way_the_walks_name_its_neighbours(
+    tmp_path, package, tests_dir, files, deleted, importer
+):
+    """The names a changed file can have are rooted where the walks root theirs."""
+    write_files(tmp_path, files)
+    dep_tree = graph.build_dep_tree(package, tests_package=tests_dir, root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files([deleted], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, importer)
+
+
+def test_a_module_beside_a_namespace_package_in_src_is_a_node(tmp_path):
+    """``src/app`` has no ``__init__.py``, yet it imports as ``app``: ``src/`` is on ``sys.path``."""
+    write_files(
+        tmp_path, {"src/app/core.py": "import shared\n", "src/shared.py": "", "tests/test_core.py": "import app.core\n"}
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.nodes["shared"]["path"] == str((tmp_path / "src/shared.py").resolve())
+
+
+def test_a_linked_file_takes_no_name_already_in_use(tmp_path):
+    """``tests.x`` is an alias of ``app/tests/x.py``: a changed ``tests/x.py`` must not take it,
+    nor the last-resort name another node already has."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/tests/x.py": "", "tests/x.py": "", "other/x.py": ""})
+    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path).copy()
+    dep_tree.add_node("other.x", path="/elsewhere/x.py")
+    dep_tree.add_node(".other.x", path="/elsewhere/x/__init__.py")
+
+    linked = graph.link_changed_files(["tests/x.py", "other/x.py"], dep_tree, root_dir=tmp_path)
+
+    names_in_use = set(dep_tree.graph["aliases"]) | {"app.tests.x", "other.x", ".other.x"}
+    assert len(linked) == 2 and not names_in_use & set(linked)
+    assert dep_tree.nodes[".other.x"]["path"] == "/elsewhere/x/__init__.py"
+
+
+def test_a_file_found_after_an_alias_of_its_name_gets_its_own_name(tmp_path):
+    """``backend.tests.helpers`` finds the walked ``backend/tests/helpers.py`` (named ``tests.helpers``)
+    under the rootdir and a second file under ``backend/``: that one must not take the alias."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "backend/tests/helpers.py": "",
+            "backend/tests/test_a.py": "import backend.tests.helpers\n",
+            "backend/backend/tests/helpers.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="backend/tests", root_dir=tmp_path)
+
+    aliases = dep_tree.graph["aliases"]
+    assert not set(aliases) & set(dep_tree.nodes)
+    assert len({path for _, path in dep_tree.nodes(data="path") if path and path.endswith("helpers.py")}) == 2
+
+
+def test_a_name_that_named_a_new_file_never_becomes_an_alias(tmp_path):
+    """The other order: the first root finds a new file, named ``x``; the second finds a walked one."""
+    write_files(tmp_path, {"a/x.py": "", "b/x.py": ""})
+    walked = str((tmp_path / "b/x.py").resolve())
+    linker = graph._Linker(_Discovered({"b.x": walked}, {}, {}), [tmp_path / "a", tmp_path / "b"], tmp_path.resolve())
+
+    assert linker.targets("x") == ["x", "b.x"]
+    assert "x" not in linker.aliases
+
+
+@pytest.mark.parametrize("metadata", ["top_level.txt", "RECORD"])
+def test_a_distribution_installed_into_the_project_is_not_followed(tmp_path, metadata):
+    """``pip install -t .`` puts ``vendored/`` and its ``.dist-info`` in the rootdir: third-party code.
+    A wheel without ``top_level.txt`` (flit, hatchling) lists its files in ``RECORD``."""
+    record = "vendored/__init__.py,sha256=x,0\nvendored/deep.py,sha256=y,0\nsingle.py,sha256=z,0\n"
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "import vendored\nimport single\n",
+            "single.py": "",
+            "vendored/__init__.py": "import vendored.deep\n",
+            "vendored/deep.py": "",
+            "vendored-1.0.dist-info/METADATA": "Name: vendored\n",
+            f"vendored-1.0.dist-info/{metadata}": "vendored\nsingle\n" if metadata == "top_level.txt" else record,
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", root_dir=tmp_path)
+
+    assert not [node for node in dep_tree if node.startswith(("vendored", "single"))]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_name_reached_through_a_symlink_roots_no_import_root(tmp_path):
+    """``pkg.alias.mod`` names ``shared/mod.py`` through ``pkg/alias -> ../shared``: that name does
+    not spell the file's path, so it says nothing about which directory is on ``sys.path``."""
+    write_files(tmp_path, {"pkg/__init__.py": "", "shared/mod.py": "", "tests/test_a.py": ""})
+    (tmp_path / "pkg/alias").symlink_to(tmp_path / "shared")
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.graph["import_roots"] == [str(tmp_path.resolve())]
+
+
+def test_other_names_of_a_linked_file_are_aliases(tmp_path):
+    """Named ``myplugin`` under ``backend/`` (the tests walk's root), still ``-p backend.myplugin``."""
+    write_files(tmp_path, {"app/__init__.py": "", "backend/tests/test_a.py": "", "backend/myplugin.py": ""})
+    dep_tree = graph.build_dep_tree("app", tests_package="backend/tests", root_dir=tmp_path).copy()
+
+    (node,) = graph.link_changed_files(["backend/myplugin.py"], dep_tree, root_dir=tmp_path)
+
+    assert {dep_tree.graph["aliases"].get(name, name) for name in ("myplugin", "backend.myplugin")} == {node}
+
+
+@pytest.mark.parametrize(
+    ("package", "tests_dir", "files", "found"),
+    [
+        pytest.param(
+            "app",
+            "qa/src/tests",
+            {
+                "qa/src/tests/__init__.py": "",
+                "qa/src/tests/test_a.py": "from src.support import helper\n",
+                "qa/src/support.py": "",
+            },
+            "src.support",
+            id="between_the_rootdir_and_a_tests_dir",
+        ),
+        pytest.param(
+            "src/app",
+            "tests",
+            {"packages/app/__init__.py": "", "packages/app/core.py": "import shared\n", "src/shared.py": ""},
+            "shared",
+            id="above_a_symlinked_package",
+        ),
+    ],
+)
+def test_every_directory_an_import_can_resolve_from_is_a_root(tmp_path, package, tests_dir, files, found):
+    write_files(tmp_path, {"app/__init__.py": "", "tests/test_a.py": "", **files})
+    if package == "src/app":
+        (tmp_path / "src/app").symlink_to(tmp_path / "packages/app")
+
+    dep_tree = graph.build_dep_tree(package, tests_package=tests_dir, root_dir=tmp_path)
+
+    assert found in dep_tree
+
+
+def test_a_regular_package_between_the_rootdir_and_a_naming_root_is_no_import_root(tmp_path):
+    """``app/sub/tests`` is walked as ``tests.x``, rooted at ``app/sub/``; ``app/`` above it is a package,
+    so ``import types`` is not ``app/types.py``."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/types.py": "",
+            "app/sub/__init__.py": "",
+            "app/sub/tests/test_a.py": "import types\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="app/sub/tests", root_dir=tmp_path)
+
+    assert str((tmp_path / "app").resolve()) not in dep_tree.graph["import_roots"]
+    assert not dep_tree.has_edge("app.types", "app.sub.tests.test_a")
+
+
+def test_a_deleted_module_of_a_local_package_named_like_the_stdlib_is_linked(tmp_path):
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "def f():\n    from platform.auth import login\n",
+            "platform/__init__.py": "",
+            "tests/test_core.py": "import app.core\n",
+        },
+    )
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files(["platform/auth.py"], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, "app.core")
+
+
+def test_a_naming_root_inside_a_regular_package_is_kept(tmp_path):
+    """``app/tests`` is walked as ``tests.x``, rooted at ``app/``: with ``pythonpath = app`` a deleted
+    ``tests.fixtures_data`` and ``import settings_local`` resolve from there, package or not."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/settings_local.py": "",
+            "app/tests/test_a.py": "def test_a():\n    from tests.fixtures_data import X\n",
+            "app/tests/test_b.py": "import settings_local\n",
+        },
+    )
+    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files(["app/tests/fixtures_data.py"], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, "app.tests.test_a")
+    assert dep_tree.has_edge("app.settings_local", "app.tests.test_b")
+
+
+def test_an_analysed_directory_given_as_an_absolute_path_does_not_crash(tmp_path):
+    write_files(tmp_path, {"app/__init__.py": "", "tests/__init__.py": "", "tests/test_a.py": ""})
+
+    tests_package = path_to_package_name(str(tmp_path / "tests"))  # as the API names ``--impacted-tests-dir``
+
+    dep_tree = graph.build_dep_tree("app", tests_package=tests_package, root_dir=tmp_path)
+
+    assert str(tmp_path.resolve()) in dep_tree.graph["import_roots"]
+
+
+@pytest.mark.parametrize(
+    ("tests_dir", "files", "deleted", "importer"),
+    [
+        pytest.param(
+            "app/tests",
+            {"app/__init__.py": "", "app/settings.py": "", "app/tests/test_a.py": "import settings\n"},
+            "settings.py",
+            "app.tests.test_a",
+            id="a_name_another_root_resolves",
+        ),
+        pytest.param(
+            "tests/unit",
+            {
+                "app/__init__.py": "",
+                "app/core.py": "def f():\n    from utils import strings\n",
+                "utils/other.py": "",
+                "tests/__init__.py": "",
+                "tests/utils.py": "",
+                "tests/unit/__init__.py": "",
+                "tests/unit/test_a.py": "import app.core\n",
+            },
+            "utils/strings.py",
+            "app.core",
+            id="a_submodule_of_a_name_another_root_resolves_to_a_file",
+        ),
+    ],
+)
+def test_a_deleted_module_is_linked_even_when_another_root_has_its_name(tmp_path, tests_dir, files, deleted, importer):
+    """Which file ``import settings`` loads depends on ``sys.path``: one found elsewhere must not hide
+    the import from a deleted file of that name."""
+    write_files(tmp_path, files)
+    dep_tree = graph.build_dep_tree("app", tests_package=tests_dir, root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files([deleted], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, importer)
+
+
+def test_a_test_file_an_extension_adds_is_judged_by_its_file_name(tmp_path):
+    """Without a ``test`` attribute, an ``external`` node falls back to its file's name, and a stem with
+    dots (``test_flow.v2.py``, collectable with ``--import-mode=importlib``) is still ``test_``-prefixed."""
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("mypkg.generated_cases", path=str(tmp_path / "gen/test_generated_cases.py"), external=True)
+    dep_tree.add_node("checks.flow", path=str(tmp_path / "checks/test_flow.v2.py"), external=True)
+    dep_tree.add_node("mypkg.helper", path=str(tmp_path / "gen/helper.py"), external=True)
+
+    assert graph.is_test_node(dep_tree, "mypkg.generated_cases")
+    assert graph.is_test_node(dep_tree, "checks.flow")
+    assert not graph.is_test_node(dep_tree, "mypkg.helper")
