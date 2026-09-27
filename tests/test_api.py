@@ -8,7 +8,7 @@ import pytest
 
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
-from pytest_impacted.strategies import ImpactStrategy
+from pytest_impacted.strategies import ImpactStrategy, cached_build_dep_tree, run_copy
 
 
 @pytest.mark.parametrize(
@@ -544,6 +544,40 @@ def test_get_impacted_tests_does_not_pollute_cached_dep_tree(
     assert "leak" not in base_graph.nodes
 
 
+class _AliasEnricher:
+    """Registers an alias for a node it adds, as an extension naming a generated module might."""
+
+    seen = None
+
+    def enrich_dep_tree(self, dep_tree, **kwargs):
+        dep_tree.add_node("pkg.generated")
+        dep_tree.graph["aliases"]["generated"] = "pkg.generated"
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        self.seen = dep_tree.graph["aliases"].get("generated")
+        return []
+
+
+@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/mod.py"])
+def test_an_alias_added_during_enrichment_stays_out_of_the_cached_graph(_mock_find_impacted_files, tmp_path):
+    """``DiGraph.copy()`` shares graph-level values: the run must get its own ``aliases`` too."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg/__init__.py").touch()
+    (tmp_path / "pkg/mod.py").touch()
+    enricher = _AliasEnricher()
+
+    get_impacted_tests(
+        impacted_git_mode=GitMode.UNSTAGED,
+        impacted_base_branch="main",
+        root_dir=tmp_path,
+        ns_module="pkg",
+        strategy=enricher,
+    )
+
+    assert enricher.seen == "pkg.generated"  # the run's own graph has it
+    assert "generated" not in cached_build_dep_tree("pkg", root_dir=tmp_path).graph["aliases"]
+
+
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_nodes")
 @patch("pytest_impacted.api.resolve_modules_to_files")
@@ -640,3 +674,14 @@ def test_changed_files_resolve_against_the_run_graph_before_enrichment(mock_find
 
     assert [step for step, _ in calls] == ["resolve", "enrich"]
     assert calls[0][1] is calls[1][1] is strategy.find_impacted_tests.call_args.kwargs["dep_tree"]
+
+
+def test_a_run_copy_shares_no_graph_level_value_with_the_cached_graph():
+    cached = nx.DiGraph()
+    cached.graph["lists"] = {"a": [1]}
+
+    copy = run_copy(cached)
+    copy.graph["lists"]["a"].append(2)
+
+    assert cached.graph["lists"] == {"a": [1]}
+    assert copy.graph["aliases"] == {}  # every run graph has one, as enrichers expect

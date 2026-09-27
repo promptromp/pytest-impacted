@@ -210,7 +210,8 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
     test discovery behavior.
     """
     base_path = root / package_name_to_path(package)
-    if not base_path.is_dir():
+    # os.path, not Path.is_dir(): a directory inside an unsearchable one is missing, rather than raising.
+    if not os.path.isdir(base_path):
         return {}
 
     results: dict[str, str] = {}
@@ -273,7 +274,9 @@ discover_submodules.cache_clear = _discover_submodules.cache_clear  # type: igno
 class ProjectModules(NamedTuple):
     """The modules of a project: one canonical name per file, plus the other names that reach it."""
 
-    #: Canonical dotted name -> absolute file path. Each file appears once.
+    #: Canonical dotted name -> absolute file path. Each file appears once. A conftest
+    #: above the packages with no free importable name is keyed with a leading dot
+    #: (:data:`LAST_RESORT_PREFIX`); parse it under :func:`import_base` of its name.
     modules: dict[str, str]
     #: Another importable name -> the canonical name of the same file.
     aliases: dict[str, str]
@@ -438,7 +441,8 @@ def discover_project_modules(
     Conftests above the two directories are modules too (see
     :func:`_discover_ancestor_conftests`): pytest loads them, so they are graph nodes,
     and an edit to one must resolve to its node like any other module. They are named
-    last, around every name already in use.
+    last, around every name already in use; one left with no free name is keyed with a
+    leading dot (see :class:`ProjectModules`).
     """
     modules, aliases, _ = _discover_project(package, tests_package, root_dir)
     return ProjectModules(modules, aliases)
@@ -490,7 +494,8 @@ def discover_application_files(
     left out. A tests dir holding the whole package cannot tell tests from the
     application and is ignored — decided on the configured directories, not on the two
     walks' results, which differ wherever the package walk follows a symlink the tests
-    walk does not.
+    walk does not. Conftests inside the package are included; callers exclude them by
+    file name (see ``strategies._CodeRoles``).
     """
     root = canonical_root(root_dir)
     application = set(discover_submodules(package, require_init=True, root_dir=root).values())

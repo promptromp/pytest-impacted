@@ -109,6 +109,8 @@ pytest --impacted \
        --impacted-tests-dir=tests
 ```
 
+If your tests live inside the package (`my_package/tests`), pass that directory too: without it, their fixture modules count as application code, and a conftest importing a changed one selects nothing beneath it unless `--impacted-conftest-imports` is set.
+
 ### Monorepo / src-Layout Support
 
 The plugin works in monorepos where the Python project is nested in a subdirectory (the `.git` directory doesn't need to be in the project directory — parent directories are searched automatically). All paths are resolved against pytest's `rootdir` (or the CLI's `--root-dir`), not the directory you run from, so `--impacted-module` and `--impacted-tests-dir` are relative to that root.
@@ -143,14 +145,14 @@ fi
 ```
 
 The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `--root-dir`, `--tests-dir`,
-`--verbose`, `--no-dep-files`, `--invalidate-all`, `--conftest-imports` and `--disable-ext`. If your tests live outside the package,
+`--verbose`, `--no-dep-files`, `--invalidate-all`, `--conftest-imports` and `--disable-ext`, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
 In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit — and name it as the remote-tracking ref (`origin/main`): a PR checkout has no local `main`.
 
 ### Configuration via `pyproject.toml`
 
-All CLI options can be set as defaults in your `pyproject.toml` (or `pytest.ini`):
+All pytest options can be set as defaults in your `pyproject.toml` (or `pytest.ini`). The `impacted-tests` CLI reads no config file, so pass its flags explicitly.
 
 ```toml
 [tool.pytest.ini_options]
@@ -165,7 +167,7 @@ impacted_tests_dir = "tests"
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
 ```
 
-CLI flags override these defaults — except that a boolean set to `true` here cannot currently be switched off from the command line.
+Command-line flags override these defaults. A boolean set to `true` here has no flag to turn it off; override it with `-o`, e.g. `-o impacted_conftest_imports=false`.
 
 ### All Options
 
@@ -176,7 +178,7 @@ CLI flags override these defaults — except that a boolean set to `true` here c
 | `--impacted-git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--impacted-base-branch` | *(required for branch mode)* | Base branch/ref for branch-mode comparison |
 | `--impacted-no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
-| `--impacted-tests-dir` | `None` | Directory containing tests outside the package |
+| `--impacted-tests-dir` | `None` | Directory containing the tests: needed when they live outside the package, and recommended when inside it (`my_package/tests`), so their fixture modules count as test code |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |
 | `--impacted-conftest-imports` | `false` | Also select every test beneath a `conftest.py` that imports changed *application* code — see [below](#strategy-based-architecture) |

@@ -5,6 +5,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -124,7 +125,7 @@ def cached_build_dep_tree(
 
     Returns:
         NetworkX dependency graph. Do not mutate it — it is shared between
-        runs; callers take a copy (see :func:`~pytest_impacted.api.get_impacted_tests`).
+        runs; callers take a :func:`run_copy`.
 
     Note:
         The root is canonicalized *before* the cache lookup, so the default
@@ -132,6 +133,20 @@ def cached_build_dep_tree(
         key would.
     """
     return _cached_build_dep_tree(ns_module, tests_package, canonical_root(root_dir))
+
+
+def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:
+    """A copy of *dep_tree* that a run may mutate without touching the cached graph.
+
+    ``DiGraph.copy()`` copies nodes, edges and their attribute dicts, but shares
+    graph-level values such as ``graph["aliases"]``, so those are copied too, and a
+    graph built without aliases gets an empty dict. Node and edge attribute *values*
+    are still shared: keep them immutable (strings, booleans).
+    """
+    copy = dep_tree.copy()
+    copy.graph = deepcopy(dep_tree.graph)
+    copy.graph.setdefault("aliases", {})
+    return copy
 
 
 def clear_dep_tree_cache() -> None:
@@ -176,7 +191,8 @@ def _test_module_path(test_module: str, root_dir: Path) -> Path | None:
     module_path = "/".join(test_module.split("."))
     root_path = normalize_path(root_dir)
     for candidate in (root_path / (module_path + ".py"), root_path / module_path / "__init__.py"):
-        if candidate.exists():
+        # os.path, not Path.exists(): a file in an unsearchable directory is missing, rather than raising.
+        if os.path.isfile(candidate):
             return candidate
     return None
 
@@ -369,9 +385,9 @@ class ImpactStrategy(ABC):
 
         The hook receives the same context kwargs as :meth:`setup`
         (``ns_module``, ``tests_package``, ``root_dir``, ``session``) so
-        that scan-based enrichers can walk the source tree with
-        :func:`~pytest_impacted.traversal.discover_submodules` and
-        :func:`~pytest_impacted.parsing.parse_file_imports` before
+        that scan-based enrichers can scan the source tree — every node carries
+        its file in ``path``, and ``dep_tree.graph["aliases"]`` maps the other
+        names — with :func:`~pytest_impacted.parsing.parse_file_imports` before
         deciding which edges to add.
 
         Once all strategies have enriched the graph, the final graph is
@@ -384,10 +400,10 @@ class ImpactStrategy(ABC):
         in place with :meth:`networkx.DiGraph.add_edge` and similar.
 
         Args:
-            dep_tree: The per-run dependency graph, mutable. A shallow
-                copy of the LRU-cached base graph produced by
-                :func:`~pytest_impacted.strategies.cached_build_dep_tree`,
-                so mutations do not persist across pytest runs.
+            dep_tree: The per-run dependency graph, mutable. A :func:`run_copy`
+                of the LRU-cached base graph produced by
+                :func:`~pytest_impacted.strategies.cached_build_dep_tree`, so
+                mutations do not persist across pytest runs.
             ns_module: The namespace module being analyzed.
             tests_package: Optional tests package name.
             root_dir: Project root (the pytest rootdir); may be below the git root.
@@ -446,7 +462,8 @@ class ImpactStrategy(ABC):
 
         Args:
             changed_files: List of file paths that have changed
-            impacted_modules: List of Python modules corresponding to changed files
+            impacted_modules: The ``dep_tree`` nodes the changed ``.py`` files resolve to,
+                by node ``path``, before enrichment; conftests above the packages included
             ns_module: The namespace module being analyzed
             tests_package: Optional tests package name
             root_dir: Project root (the pytest rootdir); may be below the git root

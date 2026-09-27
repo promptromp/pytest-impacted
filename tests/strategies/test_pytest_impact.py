@@ -1,9 +1,12 @@
 """Unit-tests for the strategies module."""
 
+import os
+import sys
 import tempfile
 from pathlib import Path
 
 import networkx as nx
+import pytest
 
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
@@ -106,3 +109,18 @@ def test_nested_conftest_directories_collapse(tmp_path):
     outer, inner, sibling = tmp_path / "tests", tmp_path / "tests/db", tmp_path / "other"
 
     assert set(_outermost({inner, outer, sibling})) == {outer.resolve(), sibling.resolve()}
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_a_node_without_a_path_in_a_listable_but_unsearchable_directory(tmp_path):
+    """Rebuilding a node's file from its name must not raise where ``os.path`` says the file is missing."""
+    dep_tree = nx.DiGraph([("app.x", "tests.data.test_x")])
+    locked = tmp_path / "tests/data"
+    locked.mkdir(parents=True)
+    locked.chmod(0o644)
+    try:
+        found = find_test_modules_under(tmp_path / "tests", dep_tree, root_dir=tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert found == []

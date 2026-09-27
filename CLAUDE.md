@@ -33,7 +33,8 @@ dropped from names, plus the package's own `__init__.py` under its importable na
 (`pkgutil` lists children only; without it, `from pkg import X` had no edge, nor did
 anything the `__init__` re-exports); `False` uses `Path.rglob` for test directories,
 which frequently lack `__init__.py`, naming modules by path. Picking the wrong one
-silently finds nothing.
+silently names modules differently (`app.tests.x` under `True`, `tests.x` under `False`) or
+skips directories that are not identifiers (`my-dir/`), so imports stop matching nodes.
 Despite the name, `True` also walks sub-directories *without* `__init__.py`
 (`_namespace_portions`): since PEP 420 they import as namespace packages, and `pkgutil`
 skips them. A directory shadowed by a same-named module (`tests.py` beside `tests/`) is
@@ -46,8 +47,9 @@ only while it stays inside the project and does not point back up the tree. Chec
 
 **One file is one graph node, under one canonical name.** `_discover_project` (behind the
 public `discover_project_modules`) is the only place the package walk, the tests-dir walk
-and the ancestor conftests are merged — `build_dep_tree` and both `resolve_*` functions go
-through it. The package walk's name is canonical (for a file the
+and the ancestor conftests are merged — `build_dep_tree`, `resolve_files_to_modules` and
+`resolve_modules_to_files` go through it (a run resolves its changed files through the graph
+instead, below). The package walk's name is canonical (for a file the
 walk reaches twice through a symlinked directory, the name not through the link); every
 other name the file imports under is an *alias*: `tests.x` for `app/tests/x.py`, and a name
 rooted at any directory above the module's first regular package (`company.app.x`,
@@ -63,12 +65,13 @@ must resolve to the module name `my_package`, or AST-parsed imports will not mat
 discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
-(`cached_build_dep_tree → .copy() → resolve_files_to_nodes → enrich_dep_tree → setup →
+(`cached_build_dep_tree → run_copy → resolve_files_to_nodes → enrich_dep_tree → setup →
 find_impacted_tests → teardown`). Changed files resolve through the graph's own node
 `path`s, not a second discovery: a changed module the (cached) graph lacks would read as a
 production module outside it, and `resolve_impacted_tests` would select every test. The
 copy is load-bearing: without it, extension enrichment pollutes the LRU-cached base graph
-and the next run in the same process starts dirty. `teardown`
+and the next run in the same process starts dirty. `run_copy`, not `DiGraph.copy()`, which
+shares graph-level values such as `graph["aliases"]`. `teardown`
 runs in a `finally`.
 
 **`get_impacted_tests` contains no strategy-specific dispatch.** `api.py` assembles
@@ -136,10 +139,11 @@ in traversal, graph or strategy code — `canonical_root`'s `None` default is th
 it may appear.
 
 **Conftests above the analysed packages are graph nodes too.** Package discovery never
-sees a root-level `conftest.py`, so `discover_project_modules` adds them via
+sees a root-level `conftest.py`, so `_discover_project` adds them via
 `_discover_ancestor_conftests` (the public `discover_ancestor_conftests` drops their
-aliases), named the way package discovery names modules (`conftest`, `backend.conftest`,
-and `app.conftest` for `src/app/conftest.py`) so their relative imports resolve. They are
+aliases and contested names, and does not skip files the package walks name), named the
+way package discovery names modules (`conftest`, `backend.conftest`, and `app.conftest`
+for `src/app/conftest.py`) so their relative imports resolve. They are
 named around every name already in use, aliases included — taking a package file's alias
 would re-point its imports. Which file takes a contested name (`y.conftest` for
 `y/conftest.py` and `x/y/conftest.py`) only names its node: an import of it is an edge to

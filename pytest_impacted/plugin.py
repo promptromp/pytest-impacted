@@ -380,14 +380,15 @@ def validate_config(config: Config):
 def validate_module(module_name: str, root_dir: Path) -> None:
     """Validate that --impacted-module refers to a Python package under *root_dir*."""
     module_dir = module_name.replace(".", os.sep)
-    if (root_dir / module_dir).is_dir():
+    # os.path, not Path.is_dir(): inside an unsearchable directory it is missing, rather than raising.
+    if os.path.isdir(root_dir / module_dir):
         return
 
     # The directory doesn't exist — try to give a helpful suggestion
     if "-" in module_name:
         suggestion = module_name.replace("-", "_")
         suggestion_dir = suggestion.replace(".", os.sep)
-        if (root_dir / suggestion_dir).is_dir():
+        if os.path.isdir(root_dir / suggestion_dir):
             raise UsageError(
                 f"Module '{module_name}' not found. Python module names use underscores, not hyphens. "
                 f"Did you mean: --impacted-module={suggestion}"
@@ -395,7 +396,7 @@ def validate_module(module_name: str, root_dir: Path) -> None:
 
     # Check for src-layout: module might be under src/
     src_dir = os.path.join("src", module_dir)
-    if (root_dir / src_dir).is_dir():
+    if os.path.isdir(root_dir / src_dir):
         raise UsageError(
             f"Module '{module_name}' not found under '{root_dir}', but found at '{src_dir}'. "
             f"For src-layout projects, use: --impacted-module=src/{module_dir}"
@@ -421,7 +422,7 @@ def _collect_ext_config(config: Config) -> dict[str, Any]:
 
 def validate_tests_dir(tests_dir: str, root_dir: Path) -> None:
     """Validate that --impacted-tests-dir refers to a directory under *root_dir*."""
-    if not (root_dir / tests_dir).is_dir():
+    if not os.path.isdir(root_dir / tests_dir):
         raise UsageError(
             f"Tests directory '{tests_dir}' does not exist under '{root_dir}'. "
             f"Please check the path passed to --impacted-tests-dir."

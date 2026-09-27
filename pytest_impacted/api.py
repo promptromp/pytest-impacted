@@ -19,6 +19,7 @@ from pytest_impacted.strategies import (
     ImpactStrategy,
     cached_build_dep_tree,
     get_default_strategies,
+    run_copy,
 )
 from pytest_impacted.traversal import (
     canonical_root,
@@ -30,8 +31,8 @@ from pytest_impacted.traversal import (
 def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
     """Check if the item path matches any of the impacted tests.
 
-    Kept for callers of the API; the plugin itself matches items by both the file
-    they were collected from and the file their test is defined in.
+    Public API. The plugin uses it as the legacy path-suffix match on ``item.location``,
+    alongside matching ``item.path`` and the resolved location (see ``plugin._impacted_items``).
     """
     return any(test == item_path or test.endswith(os.sep + item_path) for test in impacted_tests)
 
@@ -144,9 +145,10 @@ def get_impacted_tests(
 
     # Build the dependency graph once and pass it to the strategy pipeline.
     # The result is LRU-cached and must not be mutated, so we hand each run a
-    # shallow copy. Strategies that implement enrich_dep_tree() mutate the
-    # copy, leaving the cached base graph pristine for subsequent runs.
-    dep_tree = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir)).copy()
+    # copy. Strategies that implement enrich_dep_tree() mutate the copy,
+    # leaving the cached base graph pristine for subsequent runs.
+    cached = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir))
+    dep_tree = run_copy(cached)
 
     # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
     impacted_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)

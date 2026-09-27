@@ -1,14 +1,19 @@
 """Unit tests for the CLI module."""
 
 import logging
+import os
+import sys
 from pathlib import Path
 from unittest.mock import ANY, patch
 
+import pytest
 from click.testing import CliRunner
 
 from pytest_impacted.cli import configure_logging, impacted_tests_cli
 from pytest_impacted.git import GitMode, GitUnavailableError
 from pytest_impacted.strategies import CompositeImpactStrategy
+
+from .git_helpers import edit_file
 
 
 class TestConfigureLogging:
@@ -89,9 +94,9 @@ class TestImpactedTestsCLI:
             call_kwargs = mock_get_impacted_tests.call_args[1]
             assert isinstance(call_kwargs["strategy"], CompositeImpactStrategy)
 
-            # Check that the impacted tests are printed to stdout
-            assert "tests/test_example.py" in result.output
-            assert "tests/test_other.py" in result.output
+            # Check that the impacted tests are printed to stdout (``result.output`` includes stderr)
+            assert "tests/test_example.py" in result.stdout
+            assert "tests/test_other.py" in result.stdout
 
     @patch("pytest_impacted.cli.build_strategy_with_extensions")
     @patch("pytest_impacted.cli.get_impacted_tests")
@@ -423,3 +428,41 @@ class TestImpactedTestsCLI:
             )
 
         assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize("tests_dir", ["suite", "./suite", "suite/"])
+def test_the_cli_prints_the_impacted_test_files_of_a_real_repo(make_git_project, monkeypatch, tmp_path, tests_dir):
+    """End to end, from elsewhere: ``--root-dir`` is honoured, and only test paths reach stdout."""
+    project = make_git_project(
+        {
+            "app/__init__.py": "",
+            "app/db.py": "X = 1\n",
+            "suite/test_db.py": "from app.db import X\n\ndef test_db():\n    assert X\n",
+            "suite/test_other.py": "def test_other():\n    assert True\n",
+        },
+        "[pytest]\n",
+    )
+    edit_file(project, "app/db.py")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        impacted_tests_cli, ["--root-dir", str(project.path), "--module", "app", "--tests-dir", tests_dir]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [str((project.path / "suite/test_db.py").resolve())]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_a_directory_in_a_listable_but_unsearchable_one_is_a_bad_parameter(tmp_path):
+    """``Path.is_dir()`` raises there on 3.11–3.13; the CLI must report the option, not crash."""
+    locked = tmp_path / "pkg/data"
+    locked.mkdir(parents=True)
+    locked.chmod(0o644)
+    try:
+        result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(tmp_path), "--module", "pkg/data/sub"])
+    finally:
+        locked.chmod(0o755)
+
+    assert result.exit_code == 2, result.output
+    assert "does not exist under root-dir" in result.output

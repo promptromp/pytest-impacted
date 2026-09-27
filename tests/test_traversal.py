@@ -10,6 +10,7 @@ import pytest
 
 from pytest_impacted import traversal
 from pytest_impacted.traversal import (
+    _ConftestCandidate,
     clear_discovery_cache,
     discover_ancestor_conftests,
     discover_application_files,
@@ -24,6 +25,10 @@ from pytest_impacted.traversal import (
 )
 
 
+# This repository's own package, found from this file rather than the working directory.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_package_name_to_path():
     """Test the package_name_to_path helper function."""
     assert package_name_to_path("simple") == "simple"
@@ -34,7 +39,7 @@ def test_package_name_to_path():
 def test_iter_namespace_with_string():
     """Test iter_namespace with string input."""
     # Test with a known package
-    modules = list(iter_namespace("pytest_impacted", scan_path="pytest_impacted"))
+    modules = list(iter_namespace("pytest_impacted", scan_path=str(REPO_ROOT / "pytest_impacted")))
     assert len(modules) > 0
 
     # pkgutil.iter_modules returns ModuleInfo objects, not ModuleType
@@ -47,7 +52,7 @@ def test_iter_namespace_with_string():
 
 def test_discover_submodules():
     """Test discover_submodules function."""
-    modules = discover_submodules("pytest_impacted")
+    modules = discover_submodules("pytest_impacted", root_dir=REPO_ROOT)
     assert isinstance(modules, dict)
     assert len(modules) > 0
     # Values are absolute file paths (strings), not ModuleType
@@ -58,9 +63,8 @@ def test_discover_submodules():
 
 def test_resolve_files_to_modules():
     """Test resolve_files_to_modules function."""
-    package_path = Path(importlib.import_module("pytest_impacted").__path__[0])
-    test_file = str(package_path / "traversal.py")
-    modules = resolve_files_to_modules([test_file], "pytest_impacted")
+    test_file = str(REPO_ROOT / "pytest_impacted" / "traversal.py")
+    modules = resolve_files_to_modules([test_file], "pytest_impacted", root_dir=REPO_ROOT)
     assert len(modules) == 1
     assert modules[0] == "pytest_impacted.traversal"
 
@@ -68,7 +72,7 @@ def test_resolve_files_to_modules():
 def test_resolve_modules_to_files():
     """Test resolve_modules_to_files function."""
     # Test with a known module
-    files = resolve_modules_to_files(["pytest_impacted.traversal"], ns_module="pytest_impacted")
+    files = resolve_modules_to_files(["pytest_impacted.traversal"], ns_module="pytest_impacted", root_dir=REPO_ROOT)
     assert len(files) == 1
     assert files[0].endswith("traversal.py")
 
@@ -155,17 +159,17 @@ def test_resolve_modules_to_files_edge_cases():
 
     # Test with multiple modules
     modules = ["pytest_impacted.traversal", "pytest_impacted.graph"]
-    files = resolve_modules_to_files(modules, ns_module="pytest_impacted")
+    files = resolve_modules_to_files(modules, ns_module="pytest_impacted", root_dir=REPO_ROOT)
     assert len(files) == 2
     assert all(isinstance(f, str) for f in files)
 
 
-def test_discover_submodules_empty(monkeypatch):
-    """Test discover_submodules for a package with no submodules."""
-    traversal.clear_discovery_cache()
-    monkeypatch.setattr("pytest_impacted.traversal.iter_namespace", lambda pkg, **kwargs: [])
-    result = discover_submodules("some_package")
-    assert result == {}
+def test_a_package_with_no_submodules_is_itself(tmp_path):
+    """Its own ``__init__.py`` is a module, so ``from pkg import name`` has something to link to."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg/__init__.py").touch()
+
+    assert discover_submodules("pkg", root_dir=tmp_path) == {"pkg": str((tmp_path / "pkg/__init__.py").resolve())}
 
 
 def test_resolve_files_to_modules_with_tests_package():
@@ -192,19 +196,6 @@ def test_resolve_files_to_modules_with_tests_package():
         modules = resolve_files_to_modules([test_file], "pytest_impacted", "tests")
         assert len(modules) == 1
         assert modules[0] == "tests.test_traversal"
-
-
-def test_resolve_files_to_modules_init_file():
-    """Test resolve_files_to_modules with __init__.py files."""
-    with pytest.MonkeyPatch.context() as m:
-
-        def mock_discover_submodules(package, **kwargs):
-            return {"mypkg": "/project/mypkg/__init__.py"}
-
-        m.setattr("pytest_impacted.traversal.discover_submodules", mock_discover_submodules)
-
-        modules = resolve_files_to_modules(["/project/mypkg/__init__.py"], "mypkg")
-        assert modules == ["mypkg"]
 
 
 def test_resolve_files_to_modules_relative_git_path():
@@ -534,6 +525,17 @@ def test_a_conftest_keeps_its_own_name_before_another_takes_it_as_an_alias(tmp_p
     assert "y.conftest" not in project.aliases
 
 
+def test_conftests_are_named_rank_by_rank():
+    """A name one conftest ranks later never takes the name another ranks first."""
+    first = _ConftestCandidate(["taken", "b.conftest"], ".first.conftest")
+    second = _ConftestCandidate(["b.conftest"], ".second.conftest")
+
+    named = traversal._name_conftests({"/first": first, "/second": second}, taken={"taken"})
+
+    assert named.modules == {"b.conftest": "/second", ".first.conftest": "/first"}
+    assert named.contested == {"taken": {".first.conftest"}, "b.conftest": {".first.conftest"}}
+
+
 def test_two_conftests_that_can_take_one_name_are_both_modules(tmp_path):
     """``y.conftest`` can mean ``y/conftest.py`` or, with ``x/`` on ``sys.path``, ``x/y/conftest.py``:
     one takes it, the other its next name or its last resort, and contests it."""
@@ -684,6 +686,9 @@ def test_an_unsearchable_package_directory_has_no_modules(tmp_path):
         pytest.param(lambda root: find_non_package_prefix("ns/data", root), id="its_package_prefix"),
         pytest.param(
             lambda root: resolve_files_to_modules(["pkg/data/gone.py"], "pkg", root_dir=root), id="a_file_in_it"
+        ),
+        pytest.param(
+            lambda root: discover_project_modules("pkg", "pkg/data/suite", root_dir=root), id="a_tests_dir_in_it"
         ),
     ],
 )

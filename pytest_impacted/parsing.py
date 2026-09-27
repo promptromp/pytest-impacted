@@ -135,8 +135,9 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         Sorted list of *candidate* absolute module names. ``from pkg import
         name`` contributes both ``pkg`` and ``pkg.name`` because the parser
         cannot tell a submodule from a symbol without importing ``pkg``;
-        callers filter against :func:`~pytest_impacted.traversal.discover_submodules`
-        as :func:`~pytest_impacted.graph.build_dep_tree` does.
+        callers map them through the aliases of
+        :func:`~pytest_impacted.traversal.discover_project_modules` and keep the known
+        modules, as :func:`~pytest_impacted.graph.build_dep_tree` does.
     """
     source = read_source(file_path)
     if source is None:

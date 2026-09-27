@@ -202,26 +202,31 @@ The dependency graph uses inverted edge direction: edges point from imported mod
 
 ## Extension utilities
 
-Beyond `resolve_impacted_tests`, two additional helpers are exported from the package root for extensions that need to do their own file or import analysis:
+Beyond `resolve_impacted_tests`, three additional helpers are exported from the package root for extensions that need to do their own file or import analysis:
 
 - **`discover_submodules(package, require_init=True, root_dir=None)`** — walks a Python package and returns a `{module_name: file_path}` dict of absolute paths, the package's own `__init__.py` included when it has one, keyed by the package's importable name (`app` for `src/app`). Uses the same filesystem-based discovery pytest-impacted uses internally (handles src-layout and sub-directories without `__init__.py`, which import as namespace packages, and LRU-caches results). Pass `require_init=False` for test directories that may not have `__init__.py` files at all, so module names follow the directory path, and pass the `root_dir` your hook received so the scan does not depend on the working directory. Prefer `discover_project_modules` below when you need the package and the tests dir together.
 
-- **`discover_project_modules(package, tests_package=None, root_dir=None)`** — the package and tests dir together, plus the conftests above them (pytest loads those too), as the core graph sees them, returned as a `ProjectModules(modules, aliases)` named tuple. `modules` maps each file's one canonical name to its path; `aliases` maps every other name the same file can be imported under to that canonical name — a tests dir inside the package is walked as both `app.tests.x` and `tests.x`, and `src/company/app` may be imported as `app.x` or `company.app.x`. Graph nodes carry canonical names only, so map an import through `aliases.get(name, name)` before adding an edge; the same mapping is on the graph as `dep_tree.graph["aliases"]`. This also means a test module in a tests dir inside the package is named `app.tests.test_x` in `impacted_modules` and in the graph, not `tests.test_x`. The conftests above the two directories (`conftest`, `backend.conftest`) are in `modules` too, though they are neither application code nor tests: check for the file name `conftest.py` before classifying a module. This is the right primitive for any extension that needs to scan the full source tree.
+- **`discover_project_modules(package, tests_package=None, root_dir=None)`** (since 0.32) — the package and tests dir together, plus the conftests above them (pytest loads those too), as the core graph sees them, returned as a `ProjectModules(modules, aliases)` named tuple. `modules` maps each file's one canonical name to its path; `aliases` maps every other name the same file can be imported under to that canonical name — a tests dir inside the package is walked as both `app.tests.x` and `tests.x`, and `src/company/app` may be imported as `app.x` or `company.app.x`. Graph nodes carry canonical names only, so map an import through `aliases.get(name, name)` before adding an edge; the same mapping is on the graph as `dep_tree.graph["aliases"]`. One exception: when two conftests above the package could both be imported under one name (`y.conftest` for `y/conftest.py` and, with `x/` on `sys.path`, for `x/y/conftest.py`), the core graph links an import of that name to each of them, because which file it means depends on `sys.path` and the import mode. That mapping is not public, so an edge built from `aliases` alone reaches only the file that holds the name. This also means a test module in a tests dir inside the package is named `app.tests.test_x` in `impacted_modules` and in the graph, not `tests.test_x`. The conftests above the two directories (`conftest`, `backend.conftest`; since 0.32.1) are in `modules` too, though they are neither application code nor tests: check for the file name `conftest.py` before classifying a module. One with no free importable name is keyed with a leading dot (`.mysite.conftest`); parse it under `name.removeprefix(".")`. Inside a hook, the graph you receive has the same files as nodes, each with its `path`, at no cost; use this function outside one.
 
-- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so filter the list against `discover_submodules()` the way `build_dep_tree()` does before treating an entry as a module. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`. Pass `is_package=True` for an `__init__.py` — relative imports in a package resolve against the package itself, not its parent, and `discover_submodules` hands you `__init__.py` paths for every regular package (a namespace package has no file, so it is not listed; its modules are).
+- **`parse_file_imports(file_path, module_name, is_package=False)`** — AST-parses a Python file and returns a sorted `list[str]` of *candidate* module names. For `from pkg import name` it returns both `pkg` and `pkg.name`: without importing `pkg` (which never happens at analysis time) the parser cannot tell a submodule from a symbol, so map each entry through the aliases and keep it only if it is a node of `dep_tree` (or in `modules` of `discover_project_modules()`), as `build_dep_tree()` does, before treating it as a module. Filtering against `discover_submodules()` alone drops imports of tests-dir modules, of the conftests above the package, and of alias spellings such as `company.app.x`. Relative imports are resolved to absolute names; conditional imports (`if TYPE_CHECKING`, `try`/`except`, `match`, function and class bodies) are included; `from pkg import *` contributes only `pkg`. Pass `is_package=True` for an `__init__.py` — relative imports in a package resolve against the package itself, not its parent, and `discover_submodules` hands you `__init__.py` paths for every regular package (a namespace package has no file, so it is not listed; its modules are).
 
 Example: a strategy that enumerates all source files and scans them for a custom pattern:
 
 ```python
-from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+from pytest_impacted import ImpactStrategy, parse_file_imports
 
 
 class MyScanningStrategy(ImpactStrategy):
-    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, root_dir=None, **kwargs):
-        # Walk every source file in the package, rooted where the core rooted it
-        modules = discover_submodules(ns_module, root_dir=root_dir)
-        for module_name, file_path in modules.items():
-            imports = parse_file_imports(file_path, module_name, is_package=file_path.endswith("__init__.py"))
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+        # Every file the core graph knows is a node with its ``path``; other spellings are aliases
+        aliases = dep_tree.graph["aliases"]
+        for module_name, file_path in dep_tree.nodes(data="path"):
+            if file_path is None:
+                continue  # a node an extension added without a file
+            candidates = parse_file_imports(
+                file_path, module_name.removeprefix("."), is_package=file_path.endswith("__init__.py")
+            )
+            imports = {aliases.get(name, name) for name in candidates if aliases.get(name, name) in dep_tree}
             # ... do something with imports ...
         return []
 ```
@@ -236,17 +241,21 @@ class MyScanningStrategy(ImpactStrategy):
 ### `setup` and `teardown` — one-time work per run
 
 ```python
-from pytest_impacted import ImpactStrategy, discover_submodules, parse_file_imports
+from pytest_impacted import ImpactStrategy, parse_file_imports
 
 
 class IndexingStrategy(ImpactStrategy):
     def setup(self, *, ns_module, tests_package=None, root_dir=None, session=None, dep_tree):
         # One-time O(source-tree) work happens here, not in find_impacted_tests
         self._index = {}
-        for module_name, file_path in discover_submodules(ns_module, root_dir=root_dir).items():
-            self._index[module_name] = parse_file_imports(
-                file_path, module_name, is_package=file_path.endswith("__init__.py")
+        aliases = dep_tree.graph["aliases"]
+        for module_name, file_path in dep_tree.nodes(data="path"):
+            if file_path is None:
+                continue
+            candidates = parse_file_imports(
+                file_path, module_name.removeprefix("."), is_package=file_path.endswith("__init__.py")
             )
+            self._index[module_name] = {aliases.get(n, n) for n in candidates if aliases.get(n, n) in dep_tree}
 
     def teardown(self):
         # Release per-run state. Fires even if find_impacted_tests raises.
@@ -271,14 +280,14 @@ class IndexingStrategy(ImpactStrategy):
 
 Some dependency relationships are invisible to static import analysis: runtime DI bindings, codegen outputs, plugin discovery, config-driven wiring. The `enrich_dep_tree` hook lets an extension add those relationships as explicit edges in the shared dependency graph **before** any strategy runs its impact analysis. The built-in AST strategy then traverses those synthetic edges exactly as if they had been real imports.
 
-Most real extensions need to look at the actual source code to decide which edges to add. `enrich_dep_tree` receives the same context kwargs as `setup` (`ns_module`, `tests_package`, `root_dir`, `session`) so you can walk the tree with [`discover_project_modules`](#extension-utilities) and [`parse_file_imports`](#extension-utilities) from inside the hook — a scan-then-enrich pattern that keeps all the logic in one place.
+Most real extensions need to look at the actual source code to decide which edges to add. `enrich_dep_tree` receives the same context kwargs as `setup` (`ns_module`, `tests_package`, `root_dir`, `session`) and the graph itself already names every file the core knows — each node carries its `path`, and `dep_tree.graph["aliases"]` maps the other spellings — so you can scan them (with [`parse_file_imports`](#extension-utilities) when you need a file's imports) from inside the hook: a scan-then-enrich pattern that keeps all the logic in one place.
 
 ```python
 import re
 from pathlib import Path
 
 import networkx as nx
-from pytest_impacted import ImpactStrategy, discover_project_modules, parse_file_imports
+from pytest_impacted import ImpactStrategy
 
 # Finds @binding("key") decorators used by microcosm-style DI frameworks.
 _BINDING_RE = re.compile(r'@binding\(["\']([^"\']+)["\']\)')
@@ -303,7 +312,7 @@ class DIBindingStrategy(ImpactStrategy):
         session=None,
     ) -> None:
         # 1. Enumerate every source file the core knows about.
-        modules = discover_project_modules(ns_module, tests_package, root_dir=root_dir).modules
+        modules = {name: path for name, path in dep_tree.nodes(data="path") if path}
 
         # 2. Scan each file for producers and consumers.
         producers: dict[str, str] = {}  # binding_key -> producer module
@@ -317,9 +326,6 @@ class DIBindingStrategy(ImpactStrategy):
                 producers[match.group(1)] = module_name
             for match in re.finditer(r"\bgraph\.(\w+)\b", source):
                 consumers.setdefault(match.group(1), set()).add(module_name)
-
-            # Reuse the core import parser to stay consistent with AST strategy.
-            parse_file_imports(file_path, module_name, is_package=file_path.endswith("__init__.py"))
 
         # 3. Add producer → consumer edges. The graph uses inverted
         #    direction, so "producer points at impacted consumer"
@@ -335,9 +341,9 @@ class DIBindingStrategy(ImpactStrategy):
         return []
 ```
 
-**When it fires.** `enrich_dep_tree` runs once per pytest invocation, on a **per-run copy** of the LRU-cached base graph, **before** any strategy's `setup` is called. The ordering is: build cached graph → copy → `enrich_dep_tree(all strategies)` → `setup(all strategies)` → `find_impacted_tests(all strategies)` → `teardown(all strategies)`.
+**When it fires.** `enrich_dep_tree` runs once per pytest invocation, on a **per-run copy** of the LRU-cached base graph, **before** any strategy's `setup` is called. The ordering is: build cached graph → copy → resolve the changed files to its nodes (`impacted_modules`) → `enrich_dep_tree(all strategies)` → `setup(all strategies)` → `find_impacted_tests(all strategies)` → `teardown(all strategies)`.
 
-**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached (maxsize=8) by `(ns_module, tests_package, canonical_root(root_dir))`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator calls `.copy()` on the cached graph before handing it to `enrich_dep_tree`, so the graph you mutate is yours for this run only.
+**Per-run copy matters.** `pytest_impacted.strategies.cached_build_dep_tree` is LRU-cached (maxsize=8) by `(ns_module, tests_package, canonical_root(root_dir))`. Without the copy, enrichment from one run would accumulate into every subsequent run within the same process (e.g. pytester-driven test suites). The orchestrator hands `enrich_dep_tree` a `pytest_impacted.strategies.run_copy()` of the cached graph — graph-level values such as `graph["aliases"]` included, which a plain `DiGraph.copy()` would share — so the graph you mutate is yours for this run only. Take a `run_copy` too if you call `cached_build_dep_tree` yourself and mutate the result.
 
 **Propagation and ordering.** `CompositeImpactStrategy` calls `enrich_dep_tree` on its children in list order, forwarding all context kwargs unchanged. Because the graph is mutated in place, edges added by one child are immediately visible to every later child's `enrich_dep_tree` call. Exceptions are logged at WARNING on `pytest_impacted.strategies` and swallowed — the fault-tolerance contract applies here too.
 
@@ -431,7 +437,7 @@ The extension system is designed to be fault-tolerant:
 - **Missing required options**: A `ConfigOption(required=True)` with no value skips the extension with a warning.
 - **Lifecycle hooks**: Exceptions from `enrich_dep_tree`, `setup` or `teardown` are logged and that phase is skipped for the strategy; the others carry on.
 
-These warnings are log records on the `pytest_impacted.extensions` / `pytest_impacted.strategies` loggers — not shown in pytest's terminal output by default (use `--log-cli-level=WARNING` to see them).
+A failure to load an entry point (an import error, or an entry point that is not a strategy class) happens while pytest registers options, before it configures logging, so it is printed to stderr on every run (an import error with its traceback). The other warnings are log records on the `pytest_impacted.extensions` / `pytest_impacted.strategies` loggers emitted during collection, not shown in pytest's terminal output by default (use `--log-cli-level=WARNING` to see them).
 
 An exception from `find_impacted_tests` is **not** caught: it propagates and fails the run, because silently dropping a strategy's answer could skip tests that should run. Handle your own errors there.
 

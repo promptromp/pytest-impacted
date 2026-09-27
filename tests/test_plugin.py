@@ -339,3 +339,24 @@ def test_validate_base_branch_skips_when_git_cannot_launch(monkeypatch):
     monkeypatch.setattr("pytest_impacted.plugin.find_repo", lambda _: repo)
 
     validate_base_branch("main", ".")  # Should not raise
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+@pytest.mark.parametrize(
+    "validate",
+    [
+        pytest.param(lambda root: validate_module("pkg.data.sub", root), id="module"),
+        pytest.param(lambda root: validate_module("pkg.data.my-sub", root), id="module_with_a_hyphen"),
+        pytest.param(lambda root: validate_tests_dir("pkg/data/suite", root), id="tests_dir"),
+    ],
+)
+def test_a_directory_in_a_listable_but_unsearchable_one_is_a_usage_error(tmp_path, validate):
+    """Checked before any discovery: ``Path.is_dir()`` raises there on 3.11–3.13, an INTERNALERROR."""
+    locked = tmp_path / "pkg/data"
+    locked.mkdir(parents=True)
+    locked.chmod(0o644)
+    try:
+        with pytest.raises(pytest.UsageError):
+            validate(tmp_path)
+    finally:
+        locked.chmod(0o755)
