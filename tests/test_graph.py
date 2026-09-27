@@ -10,7 +10,7 @@ import pytest
 
 from pytest_impacted import graph
 from pytest_impacted.strategies import cached_build_dep_tree
-from pytest_impacted.traversal import _Discovered, resolve_files_to_modules
+from pytest_impacted.traversal import _Discovered, path_to_package_name, resolve_files_to_modules
 
 
 @pytest.fixture
@@ -684,25 +684,6 @@ def test_a_module_linked_in_from_outside_the_project_is_no_node(tmp_path):
     assert "vendored.lib" not in dep_tree
 
 
-def test_a_helper_outside_the_walks_is_no_test_module(tmp_path):
-    """``tests/factories.py`` is named like test code, but it is a helper the tests dir's conftest
-    imports: only a file named like a test file (``test_*.py``) that exists counts as one."""
-    write_files(
-        tmp_path,
-        {
-            "app/__init__.py": "",
-            "tests/factories.py": "",
-            "backend/tests/conftest.py": "import tests.factories\n",
-            "backend/tests/test_a.py": "import tests.factories\n",
-        },
-    )
-
-    dep_tree = graph.build_dep_tree("app", tests_package="backend/tests", root_dir=tmp_path)
-
-    external = [node for node, flag in dep_tree.nodes(data="external") if flag]
-    assert external and not [node for node in external if graph.is_test_node(dep_tree, node)]
-
-
 @pytest.mark.parametrize(
     ("package", "tests_dir", "files", "deleted", "importer"),
     [
@@ -870,16 +851,23 @@ def test_every_directory_an_import_can_resolve_from_is_a_root(tmp_path, package,
     assert found in dep_tree
 
 
-def test_a_regular_package_is_never_an_import_root(tmp_path):
-    """``app/tests`` is walked as ``tests.x``, but ``app/`` is a package: ``import types`` is not ``app/types.py``."""
+def test_a_regular_package_between_the_rootdir_and_a_naming_root_is_no_import_root(tmp_path):
+    """``app/sub/tests`` is walked as ``tests.x``, rooted at ``app/sub/``; ``app/`` above it is a package,
+    so ``import types`` is not ``app/types.py``."""
     write_files(
         tmp_path,
-        {"app/__init__.py": "", "app/types.py": "", "app/tests/test_a.py": "import types\n"},
+        {
+            "app/__init__.py": "",
+            "app/types.py": "",
+            "app/sub/__init__.py": "",
+            "app/sub/tests/test_a.py": "import types\n",
+        },
     )
 
-    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path)
+    dep_tree = graph.build_dep_tree("app", tests_package="app/sub/tests", root_dir=tmp_path)
 
-    assert not dep_tree.has_edge("app.types", "app.tests.test_a")
+    assert str((tmp_path / "app").resolve()) not in dep_tree.graph["import_roots"]
+    assert not dep_tree.has_edge("app.types", "app.sub.tests.test_a")
 
 
 def test_a_deleted_module_of_a_local_package_named_like_the_stdlib_is_linked(tmp_path):
@@ -897,3 +885,33 @@ def test_a_deleted_module_of_a_local_package_named_like_the_stdlib_is_linked(tmp
     (linked,) = graph.link_changed_files(["platform/auth.py"], dep_tree, root_dir=tmp_path)
 
     assert dep_tree.has_edge(linked, "app.core")
+
+
+def test_a_naming_root_inside_a_regular_package_is_kept(tmp_path):
+    """``app/tests`` is walked as ``tests.x``, rooted at ``app/``: with ``pythonpath = app`` a deleted
+    ``tests.fixtures_data`` and ``import settings_local`` resolve from there, package or not."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/settings_local.py": "",
+            "app/tests/test_a.py": "def test_a():\n    from tests.fixtures_data import X\n",
+            "app/tests/test_b.py": "import settings_local\n",
+        },
+    )
+    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files(["app/tests/fixtures_data.py"], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, "app.tests.test_a")
+    assert dep_tree.has_edge("app.settings_local", "app.tests.test_b")
+
+
+def test_an_analysed_directory_given_as_an_absolute_path_does_not_crash(tmp_path):
+    write_files(tmp_path, {"app/__init__.py": "", "tests/__init__.py": "", "tests/test_a.py": ""})
+
+    tests_package = path_to_package_name(str(tmp_path / "tests"))  # as the API names ``--impacted-tests-dir``
+
+    dep_tree = graph.build_dep_tree("app", tests_package=tests_package, root_dir=tmp_path)
+
+    assert str(tmp_path.resolve()) in dep_tree.graph["import_roots"]

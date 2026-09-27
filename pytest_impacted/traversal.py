@@ -568,18 +568,16 @@ def import_roots(
 ) -> list[Path]:
     """The directories an import of a module no walk names is looked up from, the rootdir first.
 
-    Any directory between the rootdir and one the project's imports resolve from could be on
-    ``sys.path``: those down to each analysed directory's non-package prefix (``src/`` for
-    ``src/app``, even through a symlinked ``src/app``), and those down to where the walks'
-    own names are rooted (``backend/`` for a tests dir ``backend/tests`` walked as
-    ``tests.x``). Never a regular package, which would invent names like ``types`` for
-    ``pkg/types.py``.
+    The walks' own names say where they assume ``sys.path`` starts: ``app.x`` for
+    ``src/app/x.py`` is rooted at ``src/``, ``tests.x`` for ``app/tests/x.py`` at ``app/``
+    (package or not — the walk names it so). Each analysed directory's non-package prefix is
+    another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and any
+    directory between the rootdir and one of these could be on ``sys.path`` too, unless it is
+    a regular package, which would invent names like ``types`` for ``pkg/types.py``. Not
+    here: the directory of a rootless test module, which pytest inserts itself.
     """
     root = canonical_root(root_dir)
-    bases = {root: None}
-    for package in packages:
-        prefix, _ = find_non_package_prefix(package_name_to_path(package), root)
-        bases.setdefault(root / prefix)
+    naming: dict[Path, None] = {}
     named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
     for name, path in named:
         parts = tuple(name.split("."))
@@ -589,12 +587,14 @@ def import_roots(
         depth = len(parts) - 1 + (file.name == "__init__.py")
         # A name reached through a symlinked directory does not spell the file's real path.
         if depth < len(file.parents) and module_parts(file.relative_to(base := file.parents[depth])) == parts:
-            bases.setdefault(base)
-    roots = {root: None}
-    for base in bases:
-        steps = base.relative_to(root).parts
-        roots.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
-    return [directory for directory in roots if directory == root or not _is_regular_package(directory)]
+            naming.setdefault(base)
+    prefixes = [root / find_non_package_prefix(package_name_to_path(package), root)[0] for package in packages]
+    between: dict[Path, None] = {}
+    for base in (*naming, *prefixes):
+        if base.is_relative_to(root):  # an absolute path outside it names no directory under it
+            steps = base.relative_to(root).parts
+            between.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
+    return list(dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))]))
 
 
 @lru_cache(maxsize=64)

@@ -785,10 +785,16 @@ def test_test_modules_with_a_path_need_no_discovery(_mock_find_impacted_files, m
     mock_resolve_modules_to_files.assert_not_called()
 
 
-@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["tests/integration/test_flow.py"])
-def test_a_changed_test_file_outside_the_tests_walk_is_still_a_test(_mock_find_impacted_files, tmp_path):
-    """pytest collects ``tests/integration`` even when ``--impacted-tests-dir`` names ``tests/unit``."""
-    for rel in ("pkg/__init__.py", "tests/unit/test_a.py", "tests/integration/test_flow.py"):
+@pytest.mark.parametrize("changed", ["tests/integration/test_flow.py", "tests/integration/flow_tests.py"])
+def test_a_changed_test_file_outside_the_tests_walk_is_still_a_test(tmp_path, changed):
+    """pytest collects ``tests/integration`` even when ``--impacted-tests-dir`` names ``tests/unit``;
+    a linked file is judged by the same name rule as a walked one (``python_files`` may be anything)."""
+    with patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=[changed]):
+        _run_with_a_changed_test_file(tmp_path, changed)
+
+
+def _run_with_a_changed_test_file(tmp_path, changed):
+    for rel in ("pkg/__init__.py", "tests/unit/test_a.py", changed):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
 
@@ -800,4 +806,4 @@ def test_a_changed_test_file_outside_the_tests_walk_is_still_a_test(_mock_find_i
         tests_dir="tests/unit",
     )
 
-    assert result == [str((tmp_path / "tests/integration/test_flow.py").resolve())]
+    assert result == [str((tmp_path / changed).resolve())]

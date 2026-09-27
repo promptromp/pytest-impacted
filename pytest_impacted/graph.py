@@ -71,22 +71,16 @@ def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
 def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
     """Whether graph node *node* is a test module to run.
 
-    A node the walks found is judged by its name (:func:`is_test_module`). A node outside
-    them (``external``) — a helper something imports, or a changed file linked in for the
-    run — only when its file exists and is named the way pytest collects one
-    (``test_*.py``, ``*_test.py``): ``tests/factories.py`` is a helper, and a deleted test
-    module is nothing to run.
+    Its ``test`` attribute says so when set: a module no walk names is named from wherever
+    it was found, so it is judged by its path under the rootdir instead, and a deleted file
+    linked in for the run is nothing to run. Otherwise its name decides (:func:`is_test_module`).
     """
-    attributes = dep_tree.nodes[node]
-    if not attributes.get("external"):
-        return is_test_module(node)
-    path = attributes.get("path")
-    return path is not None and _is_test_file_name(Path(path).name) and os.path.isfile(path)
+    return dep_tree.nodes[node].get("test", is_test_module(node))
 
 
-def _is_test_file_name(name: str) -> bool:
-    """pytest's default ``python_files``: ``test_*.py`` and ``*_test.py``."""
-    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+def _is_test_file(path: Path, root: Path) -> bool:
+    """Whether the file at *path* is a test module, judged by its name from the rootdir, as a walk would."""
+    return os.path.exists(path) and is_test_module(".".join(module_parts(path.relative_to(root))))
 
 
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
@@ -239,7 +233,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
         aliases.update({name: node for name in names if name != node and name not in taken})
         taken.update(names)
         taken.add(node)
-        dep_tree.add_node(node, path=str(path), external=True)
+        dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
         dep_tree.add_edges_from((node, importer) for importer in importers)
         known.add(str(path))
         added.append(node)
@@ -363,7 +357,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
         digraph.nodes[plugin]["pytest_plugin"] = True
     for name in linker.external:
-        digraph.nodes[name]["external"] = True
+        digraph.nodes[name].update(external=True, test=_is_test_file(Path(linker.modules[name]), root))
 
     # Other names each module imports under (see discover_project_modules), for names
     # that come from outside the source, such as ``-p`` plugins.
