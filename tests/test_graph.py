@@ -583,6 +583,7 @@ def test_imports_that_name_no_module_are_recorded_for_their_importers(tmp_path):
     assert unresolved["app.old"] == ["app.core"]
     assert unresolved["json"] == ["app.core"]
     assert "app.core.thing" not in unresolved
+    assert "app.core" not in unresolved  # a module the walks name
 
 
 @pytest.mark.parametrize(
@@ -915,3 +916,54 @@ def test_an_analysed_directory_given_as_an_absolute_path_does_not_crash(tmp_path
     dep_tree = graph.build_dep_tree("app", tests_package=tests_package, root_dir=tmp_path)
 
     assert str(tmp_path.resolve()) in dep_tree.graph["import_roots"]
+
+
+@pytest.mark.parametrize(
+    ("tests_dir", "files", "deleted", "importer"),
+    [
+        pytest.param(
+            "app/tests",
+            {"app/__init__.py": "", "app/settings.py": "", "app/tests/test_a.py": "import settings\n"},
+            "settings.py",
+            "app.tests.test_a",
+            id="a_name_another_root_resolves",
+        ),
+        pytest.param(
+            "tests/unit",
+            {
+                "app/__init__.py": "",
+                "app/core.py": "def f():\n    from utils import strings\n",
+                "utils/other.py": "",
+                "tests/__init__.py": "",
+                "tests/utils.py": "",
+                "tests/unit/__init__.py": "",
+                "tests/unit/test_a.py": "import app.core\n",
+            },
+            "utils/strings.py",
+            "app.core",
+            id="a_submodule_of_a_name_another_root_resolves_to_a_file",
+        ),
+    ],
+)
+def test_a_deleted_module_is_linked_even_when_another_root_has_its_name(tmp_path, tests_dir, files, deleted, importer):
+    """Which file ``import settings`` loads depends on ``sys.path``: one found elsewhere must not hide
+    the import from a deleted file of that name."""
+    write_files(tmp_path, files)
+    dep_tree = graph.build_dep_tree("app", tests_package=tests_dir, root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files([deleted], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, importer)
+
+
+def test_a_test_file_an_extension_adds_is_judged_by_its_file_name(tmp_path):
+    """Without a ``test`` attribute, an ``external`` node falls back to its file's name, and a stem with
+    dots (``test_flow.v2.py``, collectable with ``--import-mode=importlib``) is still ``test_``-prefixed."""
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("mypkg.generated_cases", path=str(tmp_path / "gen/test_generated_cases.py"), external=True)
+    dep_tree.add_node("checks.flow", path=str(tmp_path / "checks/test_flow.v2.py"), external=True)
+    dep_tree.add_node("mypkg.helper", path=str(tmp_path / "gen/helper.py"), external=True)
+
+    assert graph.is_test_node(dep_tree, "mypkg.generated_cases")
+    assert graph.is_test_node(dep_tree, "checks.flow")
+    assert not graph.is_test_node(dep_tree, "mypkg.helper")

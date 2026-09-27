@@ -807,3 +807,8 @@ def _run_with_a_changed_test_file(tmp_path, changed):
     )
 
     assert result == [str((tmp_path / changed).resolve())]
+
+
+def test_a_changed_test_file_with_a_dotted_stem_outside_the_tests_walk_is_a_test(tmp_path):
+    with patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["checks/test_flow.v2.py"]):
+        _run_with_a_changed_test_file(tmp_path, "checks/test_flow.v2.py")

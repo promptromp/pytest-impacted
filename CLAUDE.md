@@ -62,21 +62,25 @@ hand each consumer the same test twice.
 **Modules no walk finds join the graph by import, and changed ones per run.** An import
 candidate matching no module, alias or contested name is looked up on disk (`os.path`
 only) by `graph._Linker` under `import_roots`: the rootdir; every directory the walks' own
-names are rooted at, derived from those names, even a regular package (`app/` for `app/tests`
-walked as `tests.x`) — dropping one loses the imports the walk itself assumes; each analysed
+names are rooted at, derived from those names, even a regular package (`app/` for
+`app/tests` walked as `tests.x`) — dropping one loses imports the walk itself assumes,
+keeping one can only over-select (`import types` reaching `app/types.py`); each analysed
 dir's non-package prefix; and the directories in between that are not regular packages. A
 standard-library name is looked up too (a local `profile/` shadows it), but not a
 distribution installed into a root (`pip install -t .`). A file found becomes an `external`
 node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`
-entries included). Whether a node is a test is `is_test_node`, not `is_test_module`, wherever
-the graph is at hand: an external node carries a `test` attribute judged by its path from
-the rootdir (it is named from wherever it was found), false for a deleted file. Candidates still unmatched are kept in
-`graph["unresolved"]`, and `link_changed_files` gives each changed `.py` the run's graph
-lacks — deleted, or never walked — a node on the run's copy, linked to what still imports
-it. So the graph has more nodes than `discover_project_modules`: never judge graph
-membership by discovery. An `external` node is application code when application code
-depends on it (`_changes_by_role`), so #85's opt-in still governs a shared library that
-reaches a conftest through the app; otherwise it is test code, which is followed.
+entries included). Every candidate the *walks* do not define goes into `graph["unresolved"]`
+(`_may_name_a_module`, judged by the walks alone), found on disk or not: which file an
+import means depends on `sys.path`, so a hit under one root must never hide it from a
+deleted file of that name under another. `link_changed_files` gives each changed `.py` the
+run's graph lacks — deleted, or never walked — a node on the run's copy, linked to those
+importers. So the graph has more nodes than `discover_project_modules`: never judge graph
+membership by discovery. Whether a node is a test is `is_test_node`, not `is_test_module`,
+wherever the graph is at hand: an external node carries a `test` attribute judged by its
+path from the rootdir (it is named from wherever it was found), false for a deleted file.
+An `external` node is application code when application code depends on it
+(`_changes_by_role`), so #85's opt-in still governs a shared library that reaches a
+conftest through the app; otherwise it is test code, which is followed.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`

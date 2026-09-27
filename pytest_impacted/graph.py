@@ -73,14 +73,27 @@ def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
 
     Its ``test`` attribute says so when set: a module no walk names is named from wherever
     it was found, so it is judged by its path under the rootdir instead, and a deleted file
-    linked in for the run is nothing to run. Otherwise its name decides (:func:`is_test_module`).
+    linked in for the run is nothing to run. Otherwise its name decides
+    (:func:`is_test_module`) — or, for an ``external`` node without the attribute (one an
+    extension added), its name or its file's.
     """
-    return dep_tree.nodes[node].get("test", is_test_module(node))
+    attributes = dep_tree.nodes[node]
+    if "test" in attributes:
+        return bool(attributes["test"])
+    path = attributes.get("path")
+    by_file = bool(attributes.get("external") and path) and is_test_module(_importable_stem(Path(path)))
+    return is_test_module(node) or by_file
 
 
 def _is_test_file(path: Path, root: Path) -> bool:
     """Whether the file at *path* is a test module, judged by its name from the rootdir, as a walk would."""
-    return os.path.exists(path) and is_test_module(".".join(module_parts(path.relative_to(root))))
+    parts = module_parts(path.relative_to(root))
+    return bool(parts) and os.path.exists(path) and is_test_module(".".join((*parts[:-1], _importable_stem(path))))
+
+
+def _importable_stem(path: Path) -> str:
+    """The module name pytest's importlib mode gives *path*: dots in the stem become underscores."""
+    return (path.parent.name if path.name == "__init__.py" else path.stem).replace(".", "_")
 
 
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
@@ -302,15 +315,20 @@ def _parse_project(linker: _Linker) -> tuple[dict[str, list[str]], dict[str, lis
             return imports, plugin_edges
 
 
-def _may_name_a_module(candidate: str, linker: _Linker) -> bool:
-    """Whether *candidate*, which names no module, could name one that is gone.
+def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
+    """Whether *candidate* could name a module no walk names — one that is gone, say.
 
-    Not a name defined in a module file (``pkg.mod.func`` for ``from pkg.mod import
-    func``). A standard-library name counts: a deleted local ``platform/`` or ``secrets.py``
-    shadowed it.
+    Judged by the walks alone: a file the lookup found under some import root does not
+    settle which file an import means, since that depends on ``sys.path``. Not a name the
+    walks define, nor one inside a module file they found (``pkg.mod.func`` for ``from
+    pkg.mod import func``). A standard-library name counts: a deleted local ``platform/``
+    or ``secrets.py`` shadowed it.
     """
+    named = walked.aliases.get(candidate, candidate), *walked.contested.get(candidate, ())
+    if any(name in walked.modules for name in named):
+        return False
     parent = candidate.rpartition(".")[0]
-    parent_path = linker.modules.get(linker.aliases.get(parent, parent))
+    parent_path = walked.modules.get(walked.aliases.get(parent, parent))
     return parent_path is None or parent_path.endswith("__init__.py")
 
 
@@ -349,7 +367,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
             targets = linker.targets(candidate)
             for target in targets:
                 digraph.add_edge(name, target)
-            if not targets and _may_name_a_module(candidate, linker):
+            if _may_name_a_module(candidate, discovered):
                 unresolved.setdefault(candidate, set()).add(name)
         for plugin in plugin_edges.get(name, ()):
             digraph.add_edge(name, plugin)
