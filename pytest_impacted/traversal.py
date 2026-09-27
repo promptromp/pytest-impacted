@@ -3,6 +3,7 @@
 import logging
 import os
 import pkgutil
+import sys
 from collections.abc import Callable, Iterable, Mapping
 from functools import cache, lru_cache
 from itertools import chain
@@ -558,6 +559,42 @@ def _rooted_names(
 def _is_regular_package(directory: Path) -> bool:
     """Whether *directory* has an ``__init__.py``; an unsearchable one has none, rather than raising."""
     return os.path.isfile(directory / "__init__.py")
+
+
+def import_roots(packages: Iterable[str], root_dir: str | Path | None = None) -> list[Path]:
+    """The directories an import of a module outside the walks is looked up from.
+
+    The rootdir, and each directory down to every analysed directory's non-package
+    prefix — ``src/`` for ``src/app``; ``src/`` and ``src/company/`` for
+    ``src/company/app`` — any of which can be on ``sys.path`` for the package's own
+    imports to work.
+    """
+    root = canonical_root(root_dir)
+    roots = [root]
+    for package in packages:
+        prefix, _ = find_non_package_prefix(package_name_to_path(package), root)
+        parts = Path(prefix).parts
+        roots += [root.joinpath(*parts[: end + 1]) for end in range(len(parts))]
+    return list(dict.fromkeys(roots))
+
+
+def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
+    """The files inside *root* that importing *name* from each of *roots* would load.
+
+    Filesystem checks only, never an import; a package directory wins over a module
+    file, as in Python. A standard-library name is never a local file: Python imported
+    it before the project's code ran.
+    """
+    if name.partition(".")[0] in sys.stdlib_module_names:
+        return []
+    relative = package_name_to_path(name)
+    found = []
+    for base in roots:
+        # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.
+        file = next((f for f in (base / relative / "__init__.py", base / f"{relative}.py") if os.path.isfile(f)), None)
+        if file is not None and (real := file.resolve()).is_relative_to(root):
+            found.append(str(real))
+    return list(dict.fromkeys(found))
 
 
 def resolve_files_to_modules(

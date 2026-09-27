@@ -595,13 +595,22 @@ def _changes_by_role(
     *,
     application: bool,
 ) -> list[str]:
-    """The changed graph modules that are application code — or, with ``application=False``, test code."""
+    """The changed graph modules that are application code — or, with ``application=False``, test code.
+
+    A module no walk names (``external``: a shared library, a fixture helper, a deleted
+    module) is application code when application code depends on it.
+    """
     roles = _CodeRoles(ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
 
-    def is_application_code(module: str) -> bool:
+    def is_application_file(module: str) -> bool:
         # A node without a file cannot be placed: it counts as test code, which is followed.
         path = _module_path(module, dep_tree, root_dir)
         return path is not None and roles.is_application_code(path)
+
+    def is_application_code(module: str) -> bool:
+        if not dep_tree.nodes[module].get("external"):
+            return is_application_file(module)
+        return any(is_application_file(node) for node in _reached([module], dep_tree) - {module})
 
     return [module for module in impacted_modules if module in dep_tree and is_application_code(module) == application]
 
