@@ -94,14 +94,13 @@ def _notify_untested(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Pa
     """
     root = canonical_root(root_dir)
 
-    def tested(node: str) -> bool:
+    def tested(node: str, file: str) -> bool:
         # An ``__init__.py`` changes its whole package: ``backend/__init__.py`` above the walks.
-        changed = [node, *package_members([dep_tree.nodes[node]["path"]], dep_tree, root)]
+        changed = [node, *package_members([file], dep_tree, root)]
         return any(is_test_node(dep_tree, reached) for reached in reached_from(changed, dep_tree))
 
-    untested = sorted(
-        Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix() for node in linked if not tested(node)
-    )
+    files = {node: Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix() for node in linked}
+    untested = sorted(file for node, file in files.items() if not tested(node, file))
     if untested:
         pronoun = "it" if len(untested) == 1 else "them"
         notify(f"Import analysis selects no tests for {untested}: no test depends on {pronoun}.", session)
@@ -199,17 +198,8 @@ def get_impacted_tests(
     # linked to whatever still imports it; say so for one no test depends on.
     _notify_untested(link_changed_files(impacted_files, dep_tree, root_dir=root_dir), dep_tree, root_dir, session)
 
-    # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
+    # Resolved through the graph, before enrichment, so every changed module is one of its nodes.
     changed_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
-    # Importing any module of a package runs its __init__.py first: a changed one changes them all.
-    members = package_members(impacted_files, dep_tree, root_dir=root_dir)
-    impacted_modules = list(dict.fromkeys([*changed_modules, *members]))
-    if not impacted_modules:
-        notify(
-            f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
-            "Continuing to strategy pipeline.",
-            session,
-        )
 
     # Enrichment phase — runs before setup so that setup and find_impacted_tests
     # both see the final graph (with any synthetic edges added by extensions).
@@ -221,6 +211,17 @@ def get_impacted_tests(
         root_dir=root_dir,
         session=session,
     )
+
+    # Importing any module of a package runs its __init__.py first: a changed one changes them
+    # all — after enrichment, so a node an extension added inside the package counts too.
+    inside = [module for module in package_members(impacted_files, dep_tree, root_dir) if module not in changed_modules]
+    impacted_modules = changed_modules + inside
+    if not impacted_modules:
+        notify(
+            f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
+            "Continuing to strategy pipeline.",
+            session,
+        )
 
     # Lifecycle: setup → find_impacted_tests → teardown. The try/finally
     # guarantees teardown runs even if find_impacted_tests raises, so
@@ -249,7 +250,12 @@ def get_impacted_tests(
     if not impacted_test_modules:
         warn(
             "No unit-test modules impacted by the changes could be detected. "
-            + f"Impacted Python modules were: {changed_modules}",
+            + f"Impacted Python modules were: {changed_modules}"
+            + (
+                f" and {len(inside)} {'module' if len(inside) == 1 else 'modules'} inside the changed packages"
+                if inside
+                else ""
+            ),
             session,
         )
         return None

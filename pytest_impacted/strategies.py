@@ -14,7 +14,7 @@ import networkx as nx
 
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
-from pytest_impacted.graph import build_dep_tree, is_test_node, reached_from, resolve_impacted_tests
+from pytest_impacted.graph import build_dep_tree, is_test_node, nodes_under, reached_from, resolve_impacted_tests
 from pytest_impacted.parsing import is_conftest_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_application_files
 
@@ -223,15 +223,16 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
     opted in, every conftest that imports changed application code too
     (:class:`ConftestImportImpactStrategy`).
     """
-    directory = directory.resolve()  # once, not per test module: an edited package root reaches every conftest
-    matches = []
-    for test_module in dep_tree.nodes:
-        if not is_test_node(dep_tree, test_module):
-            continue
-        path = _module_path(test_module, dep_tree, root_dir)
-        if path is not None and path.resolve().is_relative_to(directory):
-            matches.append(test_module)
-    return sorted(matches)
+    return sorted(nodes_under([directory.resolve()], _test_module_paths(dep_tree, root_dir)))
+
+
+def _test_module_paths(dep_tree: nx.DiGraph, root_dir: Path) -> dict[str, str]:
+    """``{test module: its resolved file}`` for every test module in *dep_tree* that has one."""
+    return {
+        node: str(path.resolve())
+        for node in dep_tree.nodes
+        if is_test_node(dep_tree, node) and (path := _module_path(node, dep_tree, root_dir)) is not None
+    }
 
 
 def _outermost(directories: set[Path]) -> list[Path]:
@@ -269,11 +270,8 @@ def _changed_conftest_dirs(changed_files: list[str], root_dir: Path) -> set[Path
 
 def _tests_under_conftests(conftest_dirs: set[Path], dep_tree: nx.DiGraph, root_dir: Path) -> list[str]:
     """The test modules in each conftest directory and below, nested directories collapsed first."""
-    return [
-        test_module
-        for conftest_dir in _outermost(conftest_dirs)
-        for test_module in find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir)
-    ]
+    # Each test module's file resolved once, not once per conftest: an edited package root reaches them all.
+    return sorted(nodes_under(_outermost(conftest_dirs), _test_module_paths(dep_tree, root_dir)))
 
 
 class _CodeRoles:
@@ -457,8 +455,9 @@ class ImpactStrategy(ABC):
             changed_files: List of file paths that have changed
             impacted_modules: The ``dep_tree`` nodes the changed ``.py`` files resolve to,
                 by node ``path``, before enrichment; conftests above the packages included,
-                and every module inside the package of a changed ``__init__.py``, which
-                importing any of them runs (:func:`~pytest_impacted.graph.package_members`)
+                and, after enrichment, every module inside the package of a changed
+                ``__init__.py``, which importing any of them runs
+                (:func:`~pytest_impacted.graph.package_members`)
             ns_module: The namespace module being analyzed
             tests_package: Optional tests package name
             root_dir: Project root (the pytest rootdir); may be below the git root

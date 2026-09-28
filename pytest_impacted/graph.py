@@ -108,8 +108,8 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
       erring on the side of caution per project philosophy.
 
     """
+    impacted_modules = list(impacted_modules)
     impacted_tests = []
-    all_test_modules_in_tree = [node for node in dep_tree.nodes if is_test_node(dep_tree, node)]
 
     for module in impacted_modules:
         if module in dep_tree.nodes:
@@ -129,7 +129,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
                 "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
                 module,
             )
-            impacted_tests.extend(all_test_modules_in_tree)
+            impacted_tests.extend(node for node in dep_tree.nodes if is_test_node(dep_tree, node))
 
     impacted_tests.extend(node for node in reached_from(impacted_modules, dep_tree) if is_test_node(dep_tree, node))
 
@@ -149,42 +149,70 @@ def reached_from(modules: Iterable[str], dep_tree: nx.DiGraph) -> set[str]:
 
 
 def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
-    """The nodes whose import runs a changed ``__init__.py`` — edited, added or deleted.
+    """The nodes inside the package of each changed ``__init__.py`` — edited, added or deleted.
 
     Importing a module runs every package ``__init__.py`` above it first — ``from app.core.x
     import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` — but names neither, so no
     import edge links them: a changed ``__init__.py`` changes every module in its package. A
     member is a node whose file is in the package's directory or below, or whose name is inside
-    a package there (or one of its aliases): a module symlinked into it lives elsewhere, and a
-    node an extension added may have no file. So is a module importing a name inside such a
-    package that no file answers (``graph["unresolved"]``): an optional import (``try: import
-    app.core.fast``) runs the package's ``__init__.py`` before it fails. An ``__init__.py``
-    outside the rootdir has none: imports start inside it.
+    the package's, or a package's there (or an alias of one): a module symlinked into it lives
+    elsewhere, and a node an extension added may have no file. (A module importing a missing
+    name inside the package is no member: :func:`build_dep_tree` links it to the package.)
+
+    *filenames* are POSIX paths relative to the rootdir, as git reports them. An ``__init__.py``
+    above the rootdir counts only through an unbroken chain of packages down to it, as pytest's
+    prepend mode imports a test module; otherwise imports start inside the rootdir.
     """
     root = canonical_root(root_dir)
-    inits = {
-        path
+    # The directory, resolved, not the file: an ``__init__.py`` may itself be a symlink.
+    directories = {
+        directory
         for file in filenames
         if PurePosixPath(file).name == "__init__.py"
-        if (path := (root / file).resolve()).is_relative_to(root)
+        if _runs_for_the_project(directory := (root / file).parent.resolve(), root)
     }
-    if not inits:
+    if not directories:
         return []
-    # Plain string prefixes, with the separator (``app/core/`` holds no ``app/core_utils.py``): pathlib is
-    # far slower, and node paths are resolved like these.
-    directories = tuple(f"{init.parent}{os.sep}" for init in inits)
-    members = {node for node, path in dep_tree.nodes(data="path") if path and path.startswith(directories)}
-    packages = {node for node in members if dep_tree.nodes[node]["path"].endswith(f"{os.sep}__init__.py")}
+    members = set(nodes_under(directories, {node: path for node, path in dep_tree.nodes(data="path") if path}))
+    roots = [Path(d) for d in dep_tree.graph.get("import_roots", [root])]
+    packages = {name for directory in directories for name in _importable_names(directory / "__init__.py", roots)}
+    packages |= {node for node in members if dep_tree.nodes[node]["path"].endswith(f"{os.sep}__init__.py")}
     packages |= {alias for alias, node in dep_tree.graph.get("aliases", {}).items() if node in packages}
 
     def inside_a_package(name: str) -> bool:
         parts = name.split(".")
         return any(".".join(parts[:end]) in packages for end in range(1, len(parts)))
 
-    members |= {node for node in dep_tree if inside_a_package(node)}
-    unresolved = dep_tree.graph.get("unresolved", {})
-    members |= {node for name, nodes in unresolved.items() if inside_a_package(name) for node in nodes}
-    return sorted(members)
+    return sorted(members | {node for node in dep_tree if inside_a_package(node)})
+
+
+def _runs_for_the_project(directory: Path, root: Path) -> bool:
+    """Whether importing the project's modules can run the ``__init__.py`` in *directory*."""
+    if directory.is_relative_to(root):
+        return True
+    below = [root, *root.parents[: len(root.parents) - len(directory.parents) - 1]]
+    return root.is_relative_to(directory) and all(os.path.exists(d / "__init__.py") for d in below)
+
+
+def nodes_under(directories: Iterable[Path], paths: dict[str, str]) -> list[str]:
+    """The nodes among *paths* (``{node: resolved file}``) whose file is in one of *directories*
+    (resolved) or below — the one "this directory and below" matcher.
+
+    Plain string prefixes ending in the separator (``app/core/`` holds no ``app/core_utils.py``):
+    pathlib is far slower on thousands of nodes.
+    """
+    prefixes = tuple(os.path.join(directory, "") for directory in directories)
+    return [node for node, path in paths.items() if path.startswith(prefixes)]
+
+
+def _package_above(name: str, linker: "_Linker") -> str | None:
+    """The nearest package node above module *name*, whose ``__init__.py`` importing it runs even when it is missing."""
+    parts = name.split(".")
+    for end in range(len(parts) - 1, 0, -1):
+        node = linker.aliases.get(prefix := ".".join(parts[:end]), prefix)
+        if linker.modules.get(node, "").endswith("__init__.py"):
+            return node
+    return None
 
 
 def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
@@ -281,6 +309,11 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             continue
         names = _importable_names(path, roots)
         importers = {importer for name in names for importer in unresolved.get(name, ())}
+        if path.name == "__init__.py":  # as build_dep_tree links an import of a missing module inside it
+            inside = tuple(f"{name}." for name in names)
+            importers |= {
+                importer for name, nodes in unresolved.items() if name.startswith(inside) for importer in nodes
+            }
         if not importers and not os.path.exists(path):
             continue
         node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
@@ -412,6 +445,10 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
                 digraph.add_edge(name, target)
             if _may_name_a_module(candidate, discovered):
                 unresolved.setdefault(candidate, set()).add(name)
+                # An optional import of a missing module (``try: import app.core.fast``) still
+                # runs the packages above it: an edge, so its importer is reached, not changed.
+                if not targets and (above := _package_above(candidate, linker)) not in (None, name):
+                    digraph.add_edge(name, above)
         for plugin in plugin_edges.get(name, ()):
             digraph.add_edge(name, plugin)
     # pytest registers plugins for the whole session; see PytestImpactStrategy.

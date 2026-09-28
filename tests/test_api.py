@@ -10,7 +10,13 @@ import pytest
 from pytest_impacted import graph
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
-from pytest_impacted.strategies import ImpactStrategy, cached_build_dep_tree, run_copy
+from pytest_impacted.strategies import (
+    CompositeImpactStrategy,
+    ImpactStrategy,
+    cached_build_dep_tree,
+    get_default_strategies,
+    run_copy,
+)
 
 from .git_helpers import write_files
 
@@ -1151,6 +1157,85 @@ def test_an_edited_init_selects_the_tests_importing_a_missing_optional_module_in
     result, _ = _run_with_notices(tmp_path, ["app/backends/__init__.py"], ns_module="app", tests_dir="tests")
 
     assert result == ["tests/test_fast.py"]
+
+
+@pytest.mark.parametrize(
+    ("conftest", "conftest_imports", "expected"),
+    [
+        pytest.param("from app.core import helper\n", False, ["suite/test_x.py"], id="a_symbol_default"),
+        pytest.param(
+            "from app.core import helper\n", True, ["suite/test_a.py", "suite/test_x.py"], id="a_symbol_opted_in"
+        ),
+        pytest.param(
+            "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+            False,
+            ["suite/test_x.py"],
+            id="optional_default",
+        ),
+        pytest.param(
+            "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+            True,
+            ["suite/test_a.py", "suite/test_x.py"],
+            id="optional_opted_in",
+        ),
+    ],
+)
+def test_a_conftest_reached_through_an_edited_init_is_still_opt_in(tmp_path, conftest, conftest_imports, expected):
+    """The conftest imports from the package: it is reached by application code, not changed test code."""
+    write_files(tmp_path, {**CONFTEST_REACHES_THE_PACKAGE, "suite/conftest.py": conftest})
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="suite", conftest_imports=conftest_imports
+    )
+
+    assert result == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_deleted_init_selects_the_tests_of_a_symlinked_module_and_an_optional_import(tmp_path):
+    files = {
+        **_package(""),
+        "shared/link.py": "",
+        "tests/test_link.py": "import app.core.link\n",
+        "tests/test_opt.py": "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+    }
+    write_files(tmp_path, files)
+    (tmp_path / "app/core/link.py").symlink_to(tmp_path / "shared/link.py")
+    (tmp_path / "app/core/__init__.py").unlink()
+
+    result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == _tests("deep", "leaf", "link", "opt", "x")
+
+
+def test_a_node_an_extension_adds_inside_an_edited_package_is_impacted(tmp_path):
+    """Members are found after enrichment: a generated module without a file, named inside ``app.core``."""
+
+    class Codegen:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.add_edge("app.core.generated", "tests.test_generated")
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {**_package(""), "tests/test_generated.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Codegen()])
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == _tests("deep", "generated", "leaf", "x")
+
+
+def test_the_warning_for_a_deleted_init_selecting_nothing_counts_the_modules_inside(tmp_path):
+    write_files(tmp_path, {"app/__init__.py": "", "app/core/x.py": "", "tests/test_a.py": ""})
+
+    with patch("pytest_impacted.api.warn") as warn:
+        result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == []
+    assert "[] and 1 module inside the changed packages" in warn.call_args.args[0]
 
 
 def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module_only(tmp_path):

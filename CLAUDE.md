@@ -84,18 +84,23 @@ An `external` node is application code when application code depends on it
 conftest through the app; otherwise it is test code, which is followed.
 
 **A changed `__init__.py` changes every module in its package** (`graph.package_members`, added
-to `impacted_modules` by `api.py`). Importing `app.core.x` runs `app/__init__.py` and
-`app/core/__init__.py` first, but names neither, so no import edge links them. Deliberately a
-rule on the *changed file*, not graph edges from a package to its modules: edges would also make
-every importer of `app.*` depend on everything `app/__init__.py` imports, turning an edit to any
-re-exported module into a near-full run. Members are found by path (the package directory and
-below; deleted and added `__init__.py` files included) and by name (inside any package node
-there, or an alias of one: a module symlinked in lives elsewhere, an extension's node may have
-no file), and so are the importers of a name inside such a package that no file answers
-(`graph["unresolved"]`: `try: import app.core.fast` runs `app/core/__init__.py`, then fails).
-Not above the rootdir: imports start inside it. A root `app/__init__.py` edit is
-thousands of changed modules, so every traversal from `impacted_modules` must be one
-multi-source walk (`graph.reached_from`), never one per module — `resolve_impacted_tests` was.
+to `impacted_modules` by `api.py` *after* enrichment, so an extension's node counts). Importing
+`app.core.x` runs `app/__init__.py` and `app/core/__init__.py` first, but names neither, so no
+import edge links them. Deliberately a rule on the *changed file*, not graph edges from a package
+to its modules: edges would also make every importer of `app.*` depend on everything
+`app/__init__.py` imports, turning an edit to any re-exported module into a near-full run.
+Members are found by path (the package directory and below; deleted and added `__init__.py`
+files included) and by name (inside the package's importable names, or any package node there,
+or an alias of one: a module symlinked in lives elsewhere, an extension's node may have no file).
+An import of a *missing* module (`try: import app.core.fast`) is different: it has no node to be
+a member, and its importer must be *reached*, never changed — a changed conftest selects its whole
+directory, bypassing `--impacted-conftest-imports`. So `build_dep_tree` adds an edge from the
+nearest package node above the missing name to the importer, and `link_changed_files` links a
+changed `__init__.py` the graph lacks to the importers of missing names inside it. Above the
+rootdir only through an unbroken chain of `__init__.py` files down to it (pytest's prepend mode
+then imports tests through it). A root `app/__init__.py` edit is thousands of changed modules,
+so every traversal from `impacted_modules` must be one multi-source walk (`graph.reached_from`),
+never one per module — `resolve_impacted_tests` was.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`
@@ -103,8 +108,8 @@ must resolve to the module name `my_package`, or AST-parsed imports will not mat
 discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
-(`cached_build_dep_tree → run_copy → link_changed_files → resolve_files_to_nodes +
-package_members → enrich_dep_tree → setup → find_impacted_tests → teardown`), and the impacted test modules
+(`cached_build_dep_tree → run_copy → link_changed_files → resolve_files_to_nodes →
+enrich_dep_tree → package_members → setup → find_impacted_tests → teardown`), and the impacted test modules
 map back to files through their node `path` too. Changed files resolve through the graph's own node
 `path`s, not a second discovery: a changed module the (cached) graph lacks would read as a
 production module outside it, and `resolve_impacted_tests` would select every test. The
@@ -295,9 +300,10 @@ hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for th
 reason.
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
-`*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and the
-"tests in this directory and below" conftest rule lives in `find_test_modules_under`. Do
-not add a second matcher or a second directory walk.
+`*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and every
+"this directory and below" match — the conftest rule's `find_test_modules_under`, a changed
+package's members — goes through `graph.nodes_under` (resolved paths, string prefixes ending in
+the separator). Do not add a second matcher or a second directory walk.
 
 Third-party strategies are discovered via the `pytest_impacted.strategies` entry
 point group and composed in by `api.build_strategy_with_extensions()` — the
