@@ -1135,6 +1135,32 @@ def test_package_members_include_a_module_symlinked_into_the_package(tmp_path):
     assert "app.plugins.p" in graph.package_members(["app/__init__.py"], dep_tree, root_dir=tmp_path)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_package_members_of_an_init_added_above_the_analysed_package_include_a_symlinked_module(tmp_path):
+    """``company/`` becomes a regular package above ``--impacted-module=src/company/app``: ``app.plugins.p``
+    imports through it too, though its file is elsewhere and no alias of it names ``company``."""
+    write_files(tmp_path, {"src/company/app/__init__.py": "", "src/company/app/x.py": "", "shared/plugins/p.py": ""})
+    (tmp_path / "src/company/app/plugins").symlink_to(tmp_path / "shared/plugins", target_is_directory=True)
+    dep_tree = graph.build_dep_tree("src/company/app", root_dir=tmp_path).copy()
+    (tmp_path / "src/company/__init__.py").touch()
+    graph.link_changed_files(["src/company/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    members = graph.package_members(["src/company/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert members == ["app", "app.plugins.p", "app.x", "company"]
+
+
+def test_package_members_include_a_node_an_extension_named_by_the_packages_alias(tmp_path):
+    """``company.app`` is an alias of ``app`` (``src/company/`` is no package): ``company.app.gen`` is inside it."""
+    write_files(tmp_path, {"src/company/app/__init__.py": "", "src/company/app/x.py": ""})
+    dep_tree = graph.build_dep_tree("src/company/app", root_dir=tmp_path).copy()
+    dep_tree.add_nodes_from(["company.app.gen", "company.appendix"])
+
+    members = graph.package_members(["src/company/app/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert members == ["app", "app.x", "company.app.gen"]
+
+
 def test_package_members_of_an_init_above_the_analysed_package(tmp_path):
     """``backend/__init__.py`` is above ``--impacted-module=backend/app``: no walk reaches it, nor is it a node."""
     write_files(tmp_path, {"backend/__init__.py": "", "backend/app/__init__.py": "", "backend/app/x.py": ""})

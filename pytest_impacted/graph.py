@@ -154,9 +154,10 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     Importing a module runs every package ``__init__.py`` above it first — ``from app.core.x
     import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` — but names neither, so no
     import edge links them: a changed ``__init__.py`` changes every module in its package. A
-    member is a node whose file is in the package's directory or below, or whose name or alias
-    is inside the package node's name or aliases: a module symlinked into the package lives
-    elsewhere, and a node an extension added may have no file.
+    member is a node whose file is in the package's directory or below, or whose name is inside
+    a package there (or one of its aliases): a module symlinked into it lives elsewhere, and a
+    node an extension added may have no file. An ``__init__.py`` outside the rootdir has none:
+    imports start inside it.
     """
     root = canonical_root(root_dir)
     inits = {
@@ -165,23 +166,18 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
         if PurePosixPath(file).name == "__init__.py"
         if (path := (root / file).resolve()).is_relative_to(root)
     }
-    if not inits:
-        return []
     directories = {init.parent for init in inits}
     members = {
         node for node, path in dep_tree.nodes(data="path") if path and not directories.isdisjoint(Path(path).parents)
     }
-    aliases = dep_tree.graph.get("aliases", {})
-    packages = {node for node, path in dep_tree.nodes(data="path") if path and Path(path) in inits}
-    packages |= {alias for alias, node in aliases.items() if node in packages}
+    packages = {node for node in members if Path(dep_tree.nodes[node]["path"]).name == "__init__.py"}
+    packages |= {alias for alias, node in dep_tree.graph.get("aliases", {}).items() if node in packages}
 
     def inside_a_package(name: str) -> bool:
         parts = name.split(".")
         return any(".".join(parts[:end]) in packages for end in range(1, len(parts)))
 
-    members |= {node for node in dep_tree if inside_a_package(node)}
-    members |= {node for alias, node in aliases.items() if node in dep_tree and inside_a_package(alias)}
-    return sorted(members)
+    return sorted(members | {node for node in dep_tree if inside_a_package(node)})
 
 
 def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
