@@ -83,14 +83,28 @@ An `external` node is application code when application code depends on it
 (`_changes_by_role`), so #85's opt-in still governs a shared library that reaches a
 conftest through the app; otherwise it is test code, which is followed.
 
+**A changed `__init__.py` changes every module in its package** (`graph.package_members`, added
+to `impacted_modules` by `api.py`). Importing `app.core.x` runs `app/__init__.py` and
+`app/core/__init__.py` first, but names neither, so no import edge links them. Deliberately a
+rule on the *changed file*, not graph edges from a package to its modules: edges would also make
+every importer of `app.*` depend on everything `app/__init__.py` imports, turning an edit to any
+re-exported module into a near-full run. Members are found by path (the package directory and
+below; deleted and added `__init__.py` files included) and by name (inside any package node
+there, or an alias of one: a module symlinked in lives elsewhere, an extension's node may have
+no file), and so are the importers of a name inside such a package that no file answers
+(`graph["unresolved"]`: `try: import app.core.fast` runs `app/core/__init__.py`, then fails).
+Not above the rootdir: imports start inside it. A root `app/__init__.py` edit is
+thousands of changed modules, so every traversal from `impacted_modules` must be one
+multi-source walk (`graph.reached_from`), never one per module — `resolve_impacted_tests` was.
+
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`
 must resolve to the module name `my_package`, or AST-parsed imports will not match
 discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
-(`cached_build_dep_tree → run_copy → link_changed_files → resolve_files_to_nodes →
-enrich_dep_tree → setup → find_impacted_tests → teardown`), and the impacted test modules
+(`cached_build_dep_tree → run_copy → link_changed_files → resolve_files_to_nodes +
+package_members → enrich_dep_tree → setup → find_impacted_tests → teardown`), and the impacted test modules
 map back to files through their node `path` too. Changed files resolve through the graph's own node
 `path`s, not a second discovery: a changed module the (cached) graph lacks would read as a
 production module outside it, and `resolve_impacted_tests` would select every test. The

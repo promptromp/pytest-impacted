@@ -149,15 +149,17 @@ def reached_from(modules: Iterable[str], dep_tree: nx.DiGraph) -> set[str]:
 
 
 def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
-    """The nodes inside the package of each changed ``__init__.py`` — edited, added or deleted.
+    """The nodes whose import runs a changed ``__init__.py`` — edited, added or deleted.
 
     Importing a module runs every package ``__init__.py`` above it first — ``from app.core.x
     import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` — but names neither, so no
     import edge links them: a changed ``__init__.py`` changes every module in its package. A
     member is a node whose file is in the package's directory or below, or whose name is inside
     a package there (or one of its aliases): a module symlinked into it lives elsewhere, and a
-    node an extension added may have no file. An ``__init__.py`` outside the rootdir has none:
-    imports start inside it.
+    node an extension added may have no file. So is a module importing a name inside such a
+    package that no file answers (``graph["unresolved"]``): an optional import (``try: import
+    app.core.fast``) runs the package's ``__init__.py`` before it fails. An ``__init__.py``
+    outside the rootdir has none: imports start inside it.
     """
     root = canonical_root(root_dir)
     inits = {
@@ -166,6 +168,8 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
         if PurePosixPath(file).name == "__init__.py"
         if (path := (root / file).resolve()).is_relative_to(root)
     }
+    if not inits:
+        return []
     directories = {init.parent for init in inits}
     members = {
         node for node, path in dep_tree.nodes(data="path") if path and not directories.isdisjoint(Path(path).parents)
@@ -177,7 +181,10 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
         parts = name.split(".")
         return any(".".join(parts[:end]) in packages for end in range(1, len(parts)))
 
-    return sorted(members | {node for node in dep_tree if inside_a_package(node)})
+    members |= {node for node in dep_tree if inside_a_package(node)}
+    unresolved = dep_tree.graph.get("unresolved", {})
+    members |= {node for name, nodes in unresolved.items() if inside_a_package(name) for node in nodes}
+    return sorted(members)
 
 
 def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:

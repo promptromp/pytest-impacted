@@ -1137,6 +1137,22 @@ def test_an_edited_init_selects_the_tests_importing_a_module_symlinked_into_its_
     assert result == ["tests/test_p.py"]
 
 
+def test_an_edited_init_selects_the_tests_importing_a_missing_optional_module_inside_its_package(tmp_path):
+    """``try: import app.backends.fast`` runs ``app/backends/__init__.py``, whether or not ``fast`` exists."""
+    optional = "try:\n    import app.backends.fast\nexcept ImportError:\n    fast = None\n"
+    files = {
+        "app/__init__.py": "",
+        "app/backends/__init__.py": "",
+        "tests/test_fast.py": optional,
+        "tests/test_a.py": "",
+    }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["app/backends/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == ["tests/test_fast.py"]
+
+
 def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module_only(tmp_path):
     """A package's modules are impacted through its ``__init__``, but the message names what changed."""
     write_files(

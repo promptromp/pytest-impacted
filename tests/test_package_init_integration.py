@@ -1,7 +1,9 @@
-"""End-to-end tests for the analysed package's own ``__init__.py``, via pytester and a real git repo.
+"""End-to-end tests for package ``__init__.py`` files, via pytester and a real git repo.
 
 ``import app`` and ``from app import name`` run ``app/__init__.py``, so an edit to it — or
 to a module it imports and re-exports — must select the tests that import from the package.
+So does ``from app.core.x import f``, which runs ``app/__init__.py`` and ``app/core/__init__.py``
+first: an edit to either, adding one or deleting one, selects the tests importing anything inside.
 """
 
 import pytest

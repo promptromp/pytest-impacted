@@ -103,8 +103,10 @@ def test_build_dep_tree():
         assert dep_tree.has_edge("module_c", "module_b")
 
 
-def test_an_init_that_no_test_imports_from_impacts_nothing(tmp_path):
-    """``import pkg.core`` runs ``pkg/__init__.py`` too, but is not linked to it (a documented limit)."""
+def test_the_graph_links_no_init_to_the_modules_of_its_package(tmp_path):
+    """``import pkg.core`` runs ``pkg/__init__.py`` too, yet no edge says so: the run adds a changed
+    ``__init__``'s package members to the impacted modules instead (``package_members``). Edges would make
+    every importer of ``pkg.*`` depend on everything the ``__init__`` imports."""
     for rel, source in {"pkg/__init__.py": "", "pkg/core.py": "", "tests/test_core.py": "import pkg.core\n"}.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(source)
@@ -1171,6 +1173,18 @@ def test_package_members_of_an_init_above_the_analysed_package(tmp_path):
         "backend.app",
         "backend.app.x",
     ]
+
+
+@pytest.mark.parametrize("import_line", ["import app.core.fast", "from app.core.fast import run"])
+def test_package_members_include_the_importers_of_a_missing_module_inside_the_package(tmp_path, import_line):
+    """An optional import (``try: import app.core.fast``) runs ``app/core/__init__.py`` before it fails."""
+    guarded = f"try:\n    {import_line}\nexcept ImportError:\n    pass\n"
+    write_files(tmp_path, {**PACKAGE, "tests/test_fast.py": guarded, "tests/test_other.py": "import app.corex.y\n"})
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    members = graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert members == sorted([*CORE, "tests.test_fast"])
 
 
 def test_resolve_impacted_tests_judges_each_node_once_however_many_modules_changed():
