@@ -235,16 +235,6 @@ def _test_module_paths(dep_tree: nx.DiGraph, root_dir: Path) -> dict[str, str]:
     }
 
 
-def _outermost(directories: set[Path]) -> list[Path]:
-    """Drop every directory nested inside another one: its tests are already covered."""
-    resolved = sorted({directory.resolve() for directory in directories}, key=lambda d: len(d.parts))
-    kept: list[Path] = []
-    for directory in resolved:
-        if not any(directory.is_relative_to(outer) for outer in kept):
-            kept.append(directory)
-    return kept
-
-
 def _conftest_dirs(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
     """Directories of the conftests among *nodes*."""
     return {
@@ -271,7 +261,8 @@ def _changed_conftest_dirs(changed_files: list[str], root_dir: Path) -> set[Path
 def _tests_under_conftests(conftest_dirs: set[Path], dep_tree: nx.DiGraph, root_dir: Path) -> list[str]:
     """The test modules in each conftest directory and below, nested directories collapsed first."""
     # Each test module's file resolved once, not once per conftest: an edited package root reaches them all.
-    return sorted(nodes_under(_outermost(conftest_dirs), _test_module_paths(dep_tree, root_dir)))
+    directories = {directory.resolve() for directory in conftest_dirs}
+    return sorted(nodes_under(directories, _test_module_paths(dep_tree, root_dir)))
 
 
 class _CodeRoles:

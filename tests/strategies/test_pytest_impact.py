@@ -10,7 +10,7 @@ import pytest
 
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
-    _outermost,
+    _tests_under_conftests,
     find_test_modules_under,
 )
 
@@ -104,11 +104,16 @@ def test_only_a_file_named_exactly_conftest_counts(tmp_path):
     assert result == []
 
 
-def test_nested_conftest_directories_collapse(tmp_path):
-    """A directory inside another selected one adds nothing, so it is not scanned again."""
-    outer, inner, sibling = tmp_path / "tests", tmp_path / "tests/db", tmp_path / "other"
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_the_tests_under_a_conftest_directory_placed_through_a_symlinked_rootdir(tmp_path):
+    """A conftest an extension added without a ``path`` is placed under the rootdir as given, a symlink."""
+    (tmp_path / "real/tests").mkdir(parents=True)
+    (tmp_path / "real/tests/test_a.py").touch()
+    (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.test_a", path=str((tmp_path / "real/tests/test_a.py").resolve()))
 
-    assert set(_outermost({inner, outer, sibling})) == {outer.resolve(), sibling.resolve()}
+    assert _tests_under_conftests({tmp_path / "link/tests"}, dep_tree, tmp_path / "link") == ["tests.test_a"]
 
 
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")

@@ -90,17 +90,18 @@ import edge links them. Deliberately a rule on the *changed file*, not graph edg
 to its modules: edges would also make every importer of `app.*` depend on everything
 `app/__init__.py` imports, turning an edit to any re-exported module into a near-full run.
 Members are found by path (the package directory and below; deleted and added `__init__.py`
-files included) and by name (inside the package's importable names, or any package node there,
-or an alias of one: a module symlinked in lives elsewhere, an extension's node may have no file).
+files included) and by name (inside the package's importable names, or any package node's
+there: a module symlinked in lives elsewhere, an extension's node may have no file).
 An import of a *missing* module (`try: import app.core.fast`) is different: it has no node to be
 a member, and its importer must be *reached*, never changed — a changed conftest selects its whole
-directory, bypassing `--impacted-conftest-imports`. So `build_dep_tree` adds an edge from the
-nearest package node above the missing name to the importer, and `link_changed_files` links a
-changed `__init__.py` the graph lacks to the importers of missing names inside it. Above the
-rootdir only through an unbroken chain of `__init__.py` files down to it (pytest's prepend mode
-then imports tests through it). A root `app/__init__.py` edit is thousands of changed modules,
-so every traversal from `impacted_modules` must be one multi-source walk (`graph.reached_from`),
-never one per module — `resolve_impacted_tests` was.
+directory, bypassing `--impacted-conftest-imports`. So `build_dep_tree` adds an edge to the
+importer from the nearest node above the missing name (a package, or a module file: `import
+app.x.y` runs `app/x.py`) — only for a missing one, since a module found is a member already —
+and `link_changed_files` links a changed `__init__.py` the graph lacks to the importers of
+missing names inside it. Above the rootdir only through an unbroken chain of `__init__.py`
+files down to it (pytest's prepend mode then imports tests through it). A root `app/__init__.py`
+edit is thousands of changed modules, so every traversal from `impacted_modules` must be one
+multi-source walk (`graph.reached_from`), never one per module — `resolve_impacted_tests` was.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`

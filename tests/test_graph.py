@@ -1195,6 +1195,26 @@ def test_an_import_of_a_missing_module_depends_on_the_package_above_it(tmp_path,
     assert "tests.test_fast" not in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
 
 
+def test_an_import_of_a_missing_module_inside_a_module_file_depends_on_that_module(tmp_path):
+    """``import app.core.x.y`` runs ``app/core/x.py``, then fails: ``x`` is no package."""
+    write_files(
+        tmp_path, {**PACKAGE, "tests/test_y.py": "try:\n    import app.core.x.y.z\nexcept ImportError:\n    pass\n"}
+    )
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert list(dep_tree.successors("app.core.x")) == ["tests.test_y"]
+
+
+def test_an_import_of_a_module_found_outside_the_walks_is_no_edge_from_its_package(tmp_path):
+    """Like a walked module, a found one is a member of its package: no edge from ``shared`` (a facade)."""
+    files = {**PACKAGE, "app/core/x.py": "import shared\n", "shared/__init__.py": "", "shared/util.py": ""}
+    write_files(tmp_path, {**files, "tests/test_u.py": "import shared.util\n"})
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert "tests.test_u" not in set(dep_tree.successors("shared"))
+    assert "shared.util" in graph.package_members(["shared/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
 def test_an_import_of_a_missing_module_outside_the_project_depends_on_nothing(tmp_path):
     write_files(
         tmp_path, {**PACKAGE, "tests/test_fast.py": "try:\n    import numpy.fast\nexcept ImportError:\n    pass\n"}

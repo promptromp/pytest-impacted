@@ -155,9 +155,9 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` — but names neither, so no
     import edge links them: a changed ``__init__.py`` changes every module in its package. A
     member is a node whose file is in the package's directory or below, or whose name is inside
-    the package's, or a package's there (or an alias of one): a module symlinked into it lives
-    elsewhere, and a node an extension added may have no file. (A module importing a missing
-    name inside the package is no member: :func:`build_dep_tree` links it to the package.)
+    the package's or a package node's there: a module symlinked into it lives elsewhere, and a
+    node an extension added may have no file. (A module importing a missing
+    name inside the package is no member: :func:`build_dep_tree` links it to the node above.)
 
     *filenames* are POSIX paths relative to the rootdir, as git reports them. An ``__init__.py``
     above the rootdir counts only through an unbroken chain of packages down to it, as pytest's
@@ -177,7 +177,6 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     roots = [Path(d) for d in dep_tree.graph.get("import_roots", [root])]
     packages = {name for directory in directories for name in _importable_names(directory / "__init__.py", roots)}
     packages |= {node for node in members if dep_tree.nodes[node]["path"].endswith(f"{os.sep}__init__.py")}
-    packages |= {alias for alias, node in dep_tree.graph.get("aliases", {}).items() if node in packages}
 
     def inside_a_package(name: str) -> bool:
         parts = name.split(".")
@@ -205,12 +204,15 @@ def nodes_under(directories: Iterable[Path], paths: dict[str, str]) -> list[str]
     return [node for node, path in paths.items() if path.startswith(prefixes)]
 
 
-def _package_above(name: str, linker: "_Linker") -> str | None:
-    """The nearest package node above module *name*, whose ``__init__.py`` importing it runs even when it is missing."""
+def _module_above(name: str, linker: "_Linker") -> str | None:
+    """The nearest node above module *name*: importing *name* runs it first, even when *name* is missing.
+
+    A package's ``__init__.py``, or a module file (``import app.x.y`` runs ``app/x.py``, then fails).
+    """
     parts = name.split(".")
     for end in range(len(parts) - 1, 0, -1):
         node = linker.aliases.get(prefix := ".".join(parts[:end]), prefix)
-        if linker.modules.get(node, "").endswith("__init__.py"):
+        if node in linker.modules:
             return node
     return None
 
@@ -309,11 +311,9 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             continue
         names = _importable_names(path, roots)
         importers = {importer for name in names for importer in unresolved.get(name, ())}
-        if path.name == "__init__.py":  # as build_dep_tree links an import of a missing module inside it
-            inside = tuple(f"{name}." for name in names)
-            importers |= {
-                importer for name, nodes in unresolved.items() if name.startswith(inside) for importer in nodes
-            }
+        # An import of a missing module inside it runs it too (build_dep_tree links those to the nodes above).
+        inside = tuple(f"{name}." for name in names)
+        importers |= {importer for name, nodes in unresolved.items() if name.startswith(inside) for importer in nodes}
         if not importers and not os.path.exists(path):
             continue
         node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
@@ -447,7 +447,8 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
                 unresolved.setdefault(candidate, set()).add(name)
                 # An optional import of a missing module (``try: import app.core.fast``) still
                 # runs the packages above it: an edge, so its importer is reached, not changed.
-                if not targets and (above := _package_above(candidate, linker)) not in (None, name):
+                # Not for a module found: like a walked one, it is a member of its package.
+                if not targets and (above := _module_above(candidate, linker)) not in (None, name):
                     digraph.add_edge(name, above)
         for plugin in plugin_edges.get(name, ()):
             digraph.add_edge(name, plugin)
