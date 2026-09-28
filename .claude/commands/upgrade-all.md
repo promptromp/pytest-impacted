@@ -2,7 +2,7 @@
 description: Upgrade all dependencies, pre-commit hooks, and GitHub Actions to latest versions, then verify everything still works.
 ---
 
-Perform a comprehensive across-the-board upgrade of the current project and verify nothing broke. Execute the steps below in order. Use parallel tool calls where independent.
+Perform a comprehensive across-the-board upgrade of the current project and verify nothing broke. Execute the steps below in order.
 
 ## 1. Upgrade Python dependencies
 
@@ -29,9 +29,8 @@ If `.pre-commit-config.yaml` exists:
 If `.github/workflows/` exists:
 
 - Collect every distinct `uses: owner/repo@vN` reference across all workflow files (ignore local `./` actions)
-- For each, query the latest release tag via `gh api repos/{owner}/{repo}/releases/latest --jq .tag_name` — parallelize these calls in a single message
+- For each, query the latest release tag via `gh api repos/{owner}/{repo}/releases/latest --jq .tag_name`
 - When the latest **major** version is ahead of what's pinned, update the pin to the new major (e.g. `@v7` → `@v8`). Do **not** downgrade. Do **not** change pins that are already at or ahead of the latest major. Preserve existing pin style (tag vs. full SHA — if SHAs are used, warn the user and skip rather than blindly rewriting)
-- Apply edits with Edit tool, using `replace_all` when a version appears multiple times
 - Report which actions were bumped (action + old → new version), and list any that were already current
 
 Pay attention to unusual pins like `pypa/gh-action-pypi-publish@release/v1` — leave those alone since they track a rolling branch.
