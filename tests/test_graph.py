@@ -1130,6 +1130,14 @@ def test_package_members_include_a_node_an_extension_named_inside_the_package(tm
     )
 
 
+def test_package_members_include_a_node_whose_path_an_extension_set_as_a_path_object(tmp_path):
+    write_files(tmp_path, PACKAGE)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    dep_tree.add_node("codegen:models", path=tmp_path.resolve() / "app/core/gen_models.py")
+
+    assert "codegen:models" in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
 def test_package_members_are_graph_nodes_named_by_strings(tmp_path):
     """An extension may add any hashable node, and leave an alias to a node it removed."""
     write_files(tmp_path, PACKAGE)

@@ -1386,11 +1386,17 @@ def _bind_a_tuple_node(dep_tree):
     dep_tree.nodes[("binding", "Service")]["test"] = False
 
 
+def _bind_a_bare_tuple_node(dep_tree):
+    dep_tree.add_edge("app.core.x", ("binding", "Bare"))
+
+
 def _give_a_path_of_the_wrong_type(dep_tree):
     dep_tree.nodes["app.other"]["path"] = ("app/other.py", 0)
 
 
-@pytest.mark.parametrize("enrich", [_add_a_tuple_node, _bind_a_tuple_node, _give_a_path_of_the_wrong_type])
+@pytest.mark.parametrize(
+    "enrich", [_add_a_tuple_node, _bind_a_tuple_node, _bind_a_bare_tuple_node, _give_a_path_of_the_wrong_type]
+)
 @pytest.mark.parametrize("change", ["edit", "delete"])
 @pytest.mark.parametrize("conftest_imports", [False, True], ids=["default", "opted_in"])
 def test_an_edited_init_survives_any_node_or_path_an_extension_adds(tmp_path, enrich, change, conftest_imports):
