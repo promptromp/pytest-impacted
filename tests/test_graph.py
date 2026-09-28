@@ -1202,10 +1202,8 @@ def test_a_changed_init_is_linked_to_the_importers_of_a_missing_name_inside_its_
 
 
 def test_a_changed_init_optionally_importing_a_missing_module_of_its_own_is_linked_to_no_self(tmp_path):
-    write_files(
-        tmp_path,
-        {**PACKAGE, "app/core/__init__.py": "try:\n    from . import _speedups\nexcept ImportError:\n    pass\n"},
-    )
+    optional = "try:\n    import app.core._speedups\nexcept ImportError:\n    pass\n"
+    write_files(tmp_path, {**PACKAGE, "app/core/__init__.py": optional})
     dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
 
     graph.link_changed_files(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
