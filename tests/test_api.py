@@ -1270,14 +1270,25 @@ def test_an_edited_fixture_package_init_stays_test_code_though_application_code_
     assert result == ["suite/test_a.py"]
 
 
-@pytest.mark.parametrize("conftest_imports", [False, True], ids=["default", "opted_in"])
-def test_a_link_to_an_optional_importer_places_no_package(tmp_path, conftest_imports):
+OPTIONAL_SHARED = "try:\n    import shared.gone\nexcept ImportError:\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    ("core", "conftest_imports", "expected"),
+    [
+        pytest.param(OPTIONAL_SHARED, False, ["suite/test_a.py"], id="optional"),
+        pytest.param(OPTIONAL_SHARED, True, ["suite/test_a.py"], id="optional_opted_in"),
+        pytest.param("from shared import gone\n", False, [], id="the_package_too"),
+        pytest.param("from shared import gone\n", True, ["suite/test_a.py"], id="the_package_too_opted_in"),
+    ],
+)
+def test_a_link_to_an_optional_importer_places_no_package(tmp_path, core, conftest_imports, expected):
     """``app/core.py`` optionally imports ``shared.gone``: the edited ``shared/__init__.py`` is linked to it, but
-    only to reach it — it does not make ``shared`` application code, which would make the conftest rule opt-in."""
-    optional = "try:\n    import shared.gone\nexcept ImportError:\n    pass\n"
+    only to reach it — it does not make ``shared`` application code, which would make the conftest rule opt-in.
+    ``from shared import gone`` imports ``shared`` itself too, and that does place it, as on 0.33.0."""
     files = {
         "app/__init__.py": "",
-        "app/core.py": optional,
+        "app/core.py": core,
         "shared/__init__.py": "",
         "suite/conftest.py": "import shared\n",
     }
@@ -1287,7 +1298,7 @@ def test_a_link_to_an_optional_importer_places_no_package(tmp_path, conftest_imp
         tmp_path, ["shared/__init__.py"], ns_module="app", tests_dir="suite", conftest_imports=conftest_imports
     )
 
-    assert result == ["suite/test_a.py"]
+    assert result == expected
 
 
 def test_the_notice_is_judged_after_extensions_enrich_the_graph(tmp_path):

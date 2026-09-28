@@ -310,7 +310,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     taken = set(dep_tree) | set(aliases)
     unresolved = dep_tree.graph.get("unresolved", {})
     roots = sorted((Path(d) for d in dep_tree.graph.get("import_roots", [root])), key=lambda d: -len(d.parts))
-    inside = cache(lambda: _importers_inside(unresolved, dep_tree))
+    inside = cache(lambda: _importers_inside(unresolved))
     added = []
     for file in filenames:
         path = (root / file).resolve()
@@ -344,16 +344,14 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     return added
 
 
-def _importers_inside(unresolved: dict[str, list[str]], dep_tree: nx.DiGraph) -> dict[str, set[str]]:
-    """``{package name: modules importing a missing name inside it}``, from ``graph["unresolved"]``.
+def _importers_inside(unresolved: dict[str, list[str]]) -> dict[str, set[str]]:
+    """``{package name: modules importing a name inside it that no walk defines}``, from ``graph["unresolved"]``.
 
-    Only a name no node answers: one found outside the walks is a member of its package already.
+    A name found outside the walks is a member of its package too, so linking its importers only
+    repeats what the member reaches — harmless, since the link does not place the package.
     """
-    aliases = dep_tree.graph.get("aliases", {})
     inside: dict[str, set[str]] = {}
     for name, importers in unresolved.items():
-        if aliases.get(name, name) in dep_tree:
-            continue
         parts = name.split(".")
         for end in range(1, len(parts)):
             inside.setdefault(".".join(parts[:end]), set()).update(importers)
