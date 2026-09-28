@@ -1328,9 +1328,12 @@ def test_the_notice_survives_an_extension_removing_a_linked_node(tmp_path):
     write_files(tmp_path, {"app/__init__.py": "", "scripts/tool.py": "", "tests/test_a.py": ""})
     strategy = CompositeImpactStrategy([*get_default_strategies(), Prune()])
 
-    result, _ = _run_with_notices(tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy)
+    result, notices = _run_with_notices(
+        tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
 
     assert result == ["tests/test_a.py"]
+    assert not [notice for notice in notices if UNIMPORTED in notice]
 
 
 def test_an_extension_reading_the_path_of_every_impacted_module_finds_one(tmp_path):
