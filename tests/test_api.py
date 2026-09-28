@@ -1228,6 +1228,50 @@ def test_a_node_an_extension_adds_inside_an_edited_package_is_impacted(tmp_path)
     assert result == _tests("deep", "generated", "leaf", "x")
 
 
+@pytest.mark.parametrize("through_a_plugin", [False, True], ids=["a_test", "a_pytest_plugin"])
+def test_an_edit_reaching_an_init_selects_no_importer_of_a_namespace_portion_inside(tmp_path, through_a_plugin):
+    """``from app.ns import mod`` runs ``app/__init__.py``, which imports ``app.heavy``: like any importer of a
+    sub-module, it is not linked to what the ``__init__`` imports, or that facade would select nearly everything."""
+    files = {
+        "app/__init__.py": "from app.heavy import H\n",
+        "app/heavy.py": "",
+        "app/ns/mod.py": "",
+        "suite/test_ns.py": "from app.ns import mod\n",
+        "suite/test_heavy.py": "from app import H\n",
+    }
+    if through_a_plugin:
+        files |= {
+            "suite/conftest.py": 'pytest_plugins = ["suite.plugin"]\n',
+            "suite/plugin.py": "from app.ns import mod\n",
+        }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["app/heavy.py"], ns_module="app", tests_dir="suite")
+
+    assert result == ["suite/test_heavy.py"]
+
+
+def test_the_notice_is_judged_after_extensions_enrich_the_graph(tmp_path):
+    """An extension links the changed script to a test: some test depends on it after all."""
+
+    class Wiring:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.add_edge("scripts.tool", "tests.test_a")
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {"app/__init__.py": "", "scripts/tool.py": "", "tests/test_a.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Wiring()])
+
+    result, notices = _run_with_notices(
+        tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == ["tests/test_a.py"]
+    assert not [notice for notice in notices if UNIMPORTED in notice]
+
+
 def test_the_warning_for_a_deleted_init_selecting_nothing_counts_the_modules_inside(tmp_path):
     write_files(tmp_path, {"app/__init__.py": "", "app/core/x.py": "", "tests/test_a.py": ""})
 

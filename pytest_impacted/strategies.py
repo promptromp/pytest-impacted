@@ -14,7 +14,14 @@ import networkx as nx
 
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
-from pytest_impacted.graph import build_dep_tree, is_test_node, nodes_under, reached_from, resolve_impacted_tests
+from pytest_impacted.graph import (
+    _canonical,
+    build_dep_tree,
+    is_test_node,
+    nodes_under,
+    reached_from,
+    resolve_impacted_tests,
+)
 from pytest_impacted.parsing import is_conftest_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_application_files
 
@@ -207,14 +214,6 @@ def _module_path(module: str, dep_tree: nx.DiGraph, root_dir: Path) -> Path | No
     return Path(path) if path else _test_module_path(module, root_dir)
 
 
-def _is_under(path: Path, directory: Path) -> bool:
-    try:
-        path.resolve().relative_to(directory.resolve())
-    except ValueError:
-        return False
-    return True
-
-
 def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: Path) -> list[str]:
     """Return the sorted test modules whose files live in *directory* or any subdirectory.
 
@@ -227,9 +226,10 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
 
 
 def _test_module_paths(dep_tree: nx.DiGraph, root_dir: Path) -> dict[str, str]:
-    """``{test module: its resolved file}`` for every test module in *dep_tree* that has one."""
+    """``{test module: its file}`` for every test module in *dep_tree* that has one (see ``graph._canonical``)."""
+    root = canonical_root(root_dir)
     return {
-        node: str(path.resolve())
+        node: _canonical(str(path), root)
         for node in dep_tree.nodes
         if is_test_node(dep_tree, node) and (path := _module_path(node, dep_tree, root_dir)) is not None
     }
@@ -284,7 +284,8 @@ class _CodeRoles:
 def _relative(path: Path, root_dir: Path) -> str:
     """*path* relative to the project root, for messages."""
     root = canonical_root(root_dir)
-    return path.resolve().relative_to(root).as_posix() if _is_under(path, root) else str(path)
+    resolved = path.resolve()
+    return resolved.relative_to(root).as_posix() if resolved.is_relative_to(root) else str(path)
 
 
 def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:

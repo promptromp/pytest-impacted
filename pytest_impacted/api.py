@@ -195,8 +195,8 @@ def get_impacted_tests(
     dep_tree = run_copy(cached)
 
     # A changed file the graph lacks — deleted, or no walk reaches it — joins the run's copy,
-    # linked to whatever still imports it; say so for one no test depends on.
-    _notify_untested(link_changed_files(impacted_files, dep_tree, root_dir=root_dir), dep_tree, root_dir, session)
+    # linked to whatever still imports it (a changed __init__.py, to importers of missing names in it).
+    linked = link_changed_files(impacted_files, dep_tree, root_dir=root_dir)
 
     # Resolved through the graph, before enrichment, so every changed module is one of its nodes.
     changed_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
@@ -214,8 +214,11 @@ def get_impacted_tests(
 
     # Importing any module of a package runs its __init__.py first: a changed one changes them
     # all — after enrichment, so a node an extension added inside the package counts too.
-    inside = [module for module in package_members(impacted_files, dep_tree, root_dir) if module not in changed_modules]
+    changed = set(changed_modules)
+    inside = [module for module in package_members(impacted_files, dep_tree, root_dir) if module not in changed]
     impacted_modules = changed_modules + inside
+    # Say so for a linked file no test depends on — judged on the enriched graph.
+    _notify_untested(linked, dep_tree, root_dir, session)
     if not impacted_modules:
         notify(
             f"No impacted Python modules detected. Impacted files were: {impacted_files}. "

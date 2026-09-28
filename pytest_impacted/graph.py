@@ -19,6 +19,7 @@ from pytest_impacted.traversal import (
     LAST_RESORT_PREFIX,
     _discover_project,
     _Discovered,
+    _is_regular_package,
     canonical_root,
     import_base,
     import_roots,
@@ -110,6 +111,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     """
     impacted_modules = list(impacted_modules)
     impacted_tests = []
+    every_test = cache(lambda: [node for node in dep_tree.nodes if is_test_node(dep_tree, node)])
 
     for module in impacted_modules:
         if module in dep_tree.nodes:
@@ -129,7 +131,7 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
                 "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
                 module,
             )
-            impacted_tests.extend(node for node in dep_tree.nodes if is_test_node(dep_tree, node))
+            impacted_tests.extend(every_test())
 
     impacted_tests.extend(node for node in reached_from(impacted_modules, dep_tree) if is_test_node(dep_tree, node))
 
@@ -156,8 +158,8 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     import edge links them: a changed ``__init__.py`` changes every module in its package. A
     member is a node whose file is in the package's directory or below, or whose name is inside
     the package's or a package node's there: a module symlinked into it lives elsewhere, and a
-    node an extension added may have no file. (A module importing a missing
-    name inside the package is no member: :func:`build_dep_tree` links it to the node above.)
+    node an extension added may have no file. (A module importing a missing name inside the package
+    is no member but a dependent: see :func:`link_changed_files`.)
 
     *filenames* are POSIX paths relative to the rootdir, as git reports them. An ``__init__.py``
     above the rootdir counts only through an unbroken chain of packages down to it, as pytest's
@@ -173,10 +175,11 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     }
     if not directories:
         return []
-    members = set(nodes_under(directories, {node: path for node, path in dep_tree.nodes(data="path") if path}))
+    paths = {node: _canonical(path, root) for node, path in dep_tree.nodes(data="path") if path}
+    members = set(nodes_under(directories, paths))
     roots = [Path(d) for d in dep_tree.graph.get("import_roots", [root])]
     packages = {name for directory in directories for name in _importable_names(directory / "__init__.py", roots)}
-    packages |= {node for node in members if dep_tree.nodes[node]["path"].endswith(f"{os.sep}__init__.py")}
+    packages |= {node for node in members if paths[node].endswith(f"{os.sep}__init__.py")}
 
     def inside_a_package(name: str) -> bool:
         parts = name.split(".")
@@ -190,31 +193,27 @@ def _runs_for_the_project(directory: Path, root: Path) -> bool:
     if directory.is_relative_to(root):
         return True
     below = [root, *root.parents[: len(root.parents) - len(directory.parents) - 1]]
-    return root.is_relative_to(directory) and all(os.path.exists(d / "__init__.py") for d in below)
+    return root.is_relative_to(directory) and all(map(_is_regular_package, below))
+
+
+def _canonical(path: str, root: Path) -> str:
+    """*path* resolved, as every node's own is — unless it is inside the resolved rootdir already.
+
+    Discovery records resolved paths; an extension may not (the rootdir itself can be a symlink).
+    Resolving thousands of paths costs a syscall per part each, so only the others are.
+    """
+    return path if path.startswith(os.path.join(root, "")) else os.path.realpath(path)
 
 
 def nodes_under(directories: Iterable[Path], paths: dict[str, str]) -> list[str]:
-    """The nodes among *paths* (``{node: resolved file}``) whose file is in one of *directories*
-    (resolved) or below — the one "this directory and below" matcher.
+    """The nodes among *paths* (``{node: file}``, each :func:`_canonical`) whose file is in one of
+    *directories* (resolved) or below — the one "this directory and below" matcher.
 
     Plain string prefixes ending in the separator (``app/core/`` holds no ``app/core_utils.py``):
     pathlib is far slower on thousands of nodes.
     """
     prefixes = tuple(os.path.join(directory, "") for directory in directories)
     return [node for node, path in paths.items() if path.startswith(prefixes)]
-
-
-def _module_above(name: str, linker: "_Linker") -> str | None:
-    """The nearest node above module *name*: importing *name* runs it first, even when *name* is missing.
-
-    A package's ``__init__.py``, or a module file (``import app.x.y`` runs ``app/x.py``, then fails).
-    """
-    parts = name.split(".")
-    for end in range(len(parts) - 1, 0, -1):
-        node = linker.aliases.get(prefix := ".".join(parts[:end]), prefix)
-        if node in linker.modules:
-            return node
-    return None
 
 
 def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
@@ -290,42 +289,67 @@ def _last_resort_name(path: Path, root: Path) -> str:
 
 
 def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
-    """Give each changed ``.py`` file inside the rootdir that *dep_tree* lacks a node; return their names.
+    """Link each changed ``.py`` file inside the rootdir into *dep_tree*; return the nodes added.
 
     A module deleted since the graph was built, or created after it was cached, is no
     node, nor is an existing file no walk reaches and nothing imports. Each gets one on
     *dep_tree* — the run's copy, never the cached graph — with an edge to every module
     whose import of one of its names matched nothing (``graph["unresolved"]``). A deleted
     file nothing imports gets none: nothing is left for it to impact.
+
+    A changed ``__init__.py``, a node or not, also gets an edge to every module importing a
+    missing name inside its package (``try: import app.core.fast``): that import runs it before
+    failing, but there is no module to be a member of the package (:func:`package_members`). The
+    graph has no such edge, only the run's copy, from the ``__init__`` that changed: an edit to a
+    module the ``__init__`` imports must not reach every importer of a name inside it.
     """
     root = canonical_root(root_dir)
-    known = {path for _, path in dep_tree.nodes(data="path") if path}
+    by_path = {path: node for node, path in dep_tree.nodes(data="path") if path}
     aliases = dep_tree.graph.setdefault("aliases", {})
     taken = set(dep_tree) | set(aliases)
     unresolved = dep_tree.graph.get("unresolved", {})
     roots = sorted((Path(d) for d in dep_tree.graph.get("import_roots", [root])), key=lambda d: -len(d.parts))
+    inside = cache(lambda: _importers_inside(unresolved))
     added = []
     for file in filenames:
         path = (root / file).resolve()
-        if not file.endswith(".py") or str(path) in known or not path.is_relative_to(root):
+        if not file.endswith(".py") or not path.is_relative_to(root):
             continue
         names = _importable_names(path, roots)
-        importers = {importer for name in names for importer in unresolved.get(name, ())}
-        # An import of a missing module inside it runs it too (build_dep_tree links those to the nodes above).
-        inside = tuple(f"{name}." for name in names)
-        importers |= {importer for name, nodes in unresolved.items() if name.startswith(inside) for importer in nodes}
-        if not importers and not os.path.exists(path):
-            continue
-        node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
-        # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
-        aliases.update({name: node for name in names if name != node and name not in taken})
-        taken.update(names)
-        taken.add(node)
-        dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
-        dep_tree.add_edges_from((node, importer) for importer in importers)
-        known.add(str(path))
-        added.append(node)
+        node = by_path.get(str(path))
+        importers: set[str] = set()
+        if path.name == "__init__.py":
+            packages = {*names, *_node_names(node, aliases)}
+            importers = {importer for package in packages for importer in inside().get(package, ())}
+        if node is None:
+            importers |= {importer for name in names for importer in unresolved.get(name, ())}
+            if not importers and not os.path.exists(path):
+                continue
+            node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
+            # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
+            aliases.update({name: node for name in names if name != node and name not in taken})
+            taken.update(names)
+            taken.add(node)
+            dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
+            by_path[str(path)] = node
+            added.append(node)
+        dep_tree.add_edges_from((node, importer) for importer in importers if importer != node)
     return added
+
+
+def _node_names(node: str | None, aliases: dict[str, str]) -> set[str]:
+    """*node*'s name and aliases (none for no node)."""
+    return set() if node is None else {node, *(alias for alias, target in aliases.items() if target == node)}
+
+
+def _importers_inside(unresolved: dict[str, list[str]]) -> dict[str, set[str]]:
+    """``{package name: modules importing a missing name inside it}``, from ``graph["unresolved"]``."""
+    inside: dict[str, set[str]] = {}
+    for name, importers in unresolved.items():
+        parts = name.split(".")
+        for end in range(1, len(parts)):
+            inside.setdefault(".".join(parts[:end]), set()).update(importers)
+    return inside
 
 
 def _importable_names(path: Path, roots: list[Path]) -> list[str]:
@@ -445,11 +469,6 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
                 digraph.add_edge(name, target)
             if _may_name_a_module(candidate, discovered):
                 unresolved.setdefault(candidate, set()).add(name)
-                # An optional import of a missing module (``try: import app.core.fast``) still
-                # runs the packages above it: an edge, so its importer is reached, not changed.
-                # Not for a module found: like a walked one, it is a member of its package.
-                if not targets and (above := _module_above(candidate, linker)) not in (None, name):
-                    digraph.add_edge(name, above)
         for plugin in plugin_edges.get(name, ()):
             digraph.add_edge(name, plugin)
     # pytest registers plugins for the whole session; see PytestImpactStrategy.
