@@ -235,12 +235,12 @@ def nodes_under(directories: Iterable[Path], paths: dict[str, str]) -> list[str]
     """
     # normcase: as ``Path.relative_to`` does on Windows, which is case-insensitive (a no-op elsewhere).
     # A path that is one of the directories counts too, as with ``relative_to``.
-    directories = {os.path.normcase(os.path.normpath(directory)) for directory in directories}
-    prefixes = tuple(os.path.join(directory, "") for directory in directories)
+    exact = {os.path.normcase(os.path.normpath(directory)) for directory in directories}
+    prefixes = tuple(os.path.join(directory, "") for directory in exact)
     return [
         node
         for node, path in paths.items()
-        if (normal := os.path.normcase(path)).startswith(prefixes) or normal in directories
+        if (normal := os.path.normcase(path)).startswith(prefixes) or normal in exact
     ]
 
 
