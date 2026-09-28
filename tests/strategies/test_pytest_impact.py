@@ -105,6 +105,22 @@ def test_only_a_file_named_exactly_conftest_counts(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_the_tests_under_a_directory_include_nodes_placed_through_a_symlink_or_an_unnormalized_path(tmp_path):
+    """As 0.33.0 did: an extension's ``path`` may hold ``..``, and a pathless node is placed through the tree."""
+    (tmp_path / "real_tests").mkdir()
+    (tmp_path / "real_tests/test_a.py").touch()
+    (tmp_path / "real_tests/test_b.py").touch()
+    (tmp_path / "tests").symlink_to(tmp_path / "real_tests", target_is_directory=True)
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.test_a", path=f"{tmp_path.resolve()}/app/../real_tests/test_a.py")
+    dep_tree.add_node("tests.test_b")
+
+    found = find_test_modules_under(tmp_path / "real_tests", dep_tree, root_dir=tmp_path)
+
+    assert found == ["tests.test_a", "tests.test_b"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
 def test_the_tests_under_a_conftest_directory_placed_through_a_symlinked_rootdir(tmp_path):
     """A conftest an extension added without a ``path`` is placed under the rootdir as given, a symlink."""
     (tmp_path / "real/tests").mkdir(parents=True)

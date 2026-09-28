@@ -1244,6 +1244,14 @@ def test_package_members_include_an_extension_node_whose_path_goes_through_a_sym
     assert "codegen:models" in members
 
 
+def test_package_members_include_an_extension_node_whose_path_is_not_normalized(tmp_path):
+    write_files(tmp_path, PACKAGE)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    dep_tree.add_node("codegen:models", path=f"{tmp_path.resolve()}/app/corex/../core/gen_models.py")
+
+    assert "codegen:models" in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
 def test_resolve_impacted_tests_lists_every_test_once_however_many_modules_are_missing():
     """A missing production module means every test; a second one needs no second scan."""
     dep_tree = nx.DiGraph()

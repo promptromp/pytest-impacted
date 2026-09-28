@@ -99,7 +99,12 @@ def _notify_untested(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Pa
         changed = [node, *package_members([file], dep_tree, root)]
         return any(is_test_node(dep_tree, reached) for reached in reached_from(changed, dep_tree))
 
-    files = {node: Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix() for node in linked}
+    # Judged on the enriched graph: an extension may have removed a linked node, or its path.
+    files = {
+        node: Path(path).relative_to(root).as_posix()
+        for node in linked
+        if node in dep_tree and (path := dep_tree.nodes[node].get("path"))
+    }
     untested = sorted(file for node, file in files.items() if not tested(node, file))
     if untested:
         pronoun = "it" if len(untested) == 1 else "them"

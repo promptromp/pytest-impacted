@@ -1301,6 +1301,37 @@ def test_a_link_to_an_optional_importer_places_no_package(tmp_path, core, confte
     assert result == expected
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_an_edited_init_selects_the_tests_importing_a_sibling_symlinked_into_its_package(tmp_path):
+    """``app/core/linked -> ../other``: ``app/other/m.py`` is ``app.other.m``, imported as ``app.core.linked.m``
+    too (an alias) — which runs ``app/core/__init__.py``."""
+    files = {"app/__init__.py": "", "app/core/__init__.py": "", "app/other/m.py": "", "tests/test_b.py": ""}
+    write_files(tmp_path, {**files, "tests/test_m.py": "from app.core.linked.m import f\n"})
+    (tmp_path / "app/core/linked").symlink_to(tmp_path / "app/other", target_is_directory=True)
+
+    result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == ["tests/test_m.py"]
+
+
+def test_the_notice_survives_an_extension_removing_a_linked_node(tmp_path):
+    """No crash: the changed module is no node any more, which conservatively means every test."""
+
+    class Prune:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.remove_nodes_from([node for node in dep_tree if node.startswith("scripts")])
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {"app/__init__.py": "", "scripts/tool.py": "", "tests/test_a.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Prune()])
+
+    result, _ = _run_with_notices(tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy)
+
+    assert result == ["tests/test_a.py"]
+
+
 def test_the_notice_is_judged_after_extensions_enrich_the_graph(tmp_path):
     """An extension links the changed script to a test: some test depends on it after all."""
 

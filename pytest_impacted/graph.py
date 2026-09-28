@@ -156,10 +156,10 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     Importing a module runs every package ``__init__.py`` above it first — ``from app.core.x
     import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` — but names neither, so no
     import edge links them: a changed ``__init__.py`` changes every module in its package. A
-    member is a node whose file is in the package's directory or below, or whose name is inside
-    the package's or a package node's there: a module symlinked into it lives elsewhere, and a
-    node an extension added may have no file. (A module importing a missing name inside the package
-    is no member but a dependent: see :func:`link_changed_files`.)
+    member is a node whose file is in the package's directory or below, or whose name or an alias
+    is inside the package's or a package node's there: a module symlinked into it lives elsewhere,
+    and a node an extension added may have no file. (A module importing a missing name inside the
+    package is no member but a dependent: see :func:`link_changed_files`.)
 
     *filenames* are POSIX paths relative to the rootdir, as git reports them. An ``__init__.py``
     above the rootdir counts only through an unbroken chain of packages down to it, as pytest's
@@ -182,10 +182,18 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     packages |= {node for node in members if paths[node].endswith(f"{os.sep}__init__.py")}
 
     def inside_a_package(name: str) -> bool:
-        parts = name.split(".")
-        return any(".".join(parts[:end]) in packages for end in range(1, len(parts)))
+        return not packages.isdisjoint(_enclosing_packages(name))
 
-    return sorted(members | {node for node in dep_tree if inside_a_package(node)})
+    members |= {node for node in dep_tree if inside_a_package(node)}
+    # ``app/core/linked -> ../other``: ``app.other.m`` is imported as ``app.core.linked.m`` too.
+    members |= {node for alias, node in dep_tree.graph.get("aliases", {}).items() if inside_a_package(alias)}
+    return sorted(members)
+
+
+def _enclosing_packages(name: str) -> list[str]:
+    """The packages importing module *name* runs first: ``app``, ``app.core`` for ``app.core.x``."""
+    parts = name.split(".")
+    return [".".join(parts[:end]) for end in range(1, len(parts))]
 
 
 def _runs_for_the_project(directory: Path, root: Path) -> bool:
@@ -197,17 +205,20 @@ def _runs_for_the_project(directory: Path, root: Path) -> bool:
 
 
 def _canonical(path: str, root: Path) -> str:
-    """*path* resolved, as every node's own is — unless it is inside the resolved rootdir already.
+    """*path* normalised (``..``), and resolved when that leaves it outside the resolved rootdir.
 
-    Discovery records resolved paths; an extension may not (the rootdir itself can be a symlink).
-    Resolving thousands of paths costs a syscall per part each, so only the others are.
+    Discovery records resolved paths; an extension may not (pytest's rootdir itself can be a
+    symlink). Resolving thousands costs a syscall per part each, so the others stay as spelled —
+    right for membership, too: ``app/core/linked/gen.py`` imports through ``app.core``, wherever
+    ``linked`` points.
     """
-    return path if path.startswith(os.path.join(root, "")) else os.path.realpath(path)
+    normal = os.path.normpath(path)
+    return normal if normal.startswith(os.path.join(root, "")) else os.path.realpath(path)
 
 
 def nodes_under(directories: Iterable[Path], paths: dict[str, str]) -> list[str]:
-    """The nodes among *paths* (``{node: file}``, each :func:`_canonical`) whose file is in one of
-    *directories* (resolved) or below — the one "this directory and below" matcher.
+    """The nodes among *paths* (``{node: file}``, normalised as the caller needs) whose file is in
+    one of *directories* (resolved) or below — the one "this directory and below" matcher.
 
     Plain string prefixes ending in the separator (``app/core/`` holds no ``app/core_utils.py``):
     pathlib is far slower on thousands of nodes.
@@ -336,11 +347,9 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             added.append(node)
         # Only to reach them (``runs_init``), never to place the package as application code or test
         # code (see strategies._changes_by_role): that could make a conftest rule opt-in, fewer tests.
-        dep_tree.add_edges_from(
-            (node, runner, {"runs_init": True})
-            for runner in runners
-            if runner != node and not dep_tree.has_edge(node, runner)
-        )
+        if runs := [runner for runner in runners if runner != node and not dep_tree.has_edge(node, runner)]:
+            dep_tree.add_edges_from(((node, runner) for runner in runs), runs_init=True)
+            dep_tree.graph["runs_init"] = True
     return added
 
 
@@ -352,9 +361,8 @@ def _importers_inside(unresolved: dict[str, list[str]]) -> dict[str, set[str]]:
     """
     inside: dict[str, set[str]] = {}
     for name, importers in unresolved.items():
-        parts = name.split(".")
-        for end in range(1, len(parts)):
-            inside.setdefault(".".join(parts[:end]), set()).update(importers)
+        for package in _enclosing_packages(name):
+            inside.setdefault(package, set()).update(importers)
     return inside
 
 
