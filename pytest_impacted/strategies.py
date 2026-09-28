@@ -259,8 +259,12 @@ def _changed_conftest_dirs(changed_files: list[str], root_dir: Path) -> set[Path
 
 
 def _tests_under_conftests(conftest_dirs: set[Path], dep_tree: nx.DiGraph, root_dir: Path) -> list[str]:
-    """The test modules in each conftest directory and below, nested directories collapsed first."""
-    # Each test module's file resolved once, not once per conftest: an edited package root reaches them all.
+    """The test modules in each conftest directory and below.
+
+    Each test module's file is placed once, not once per directory: an edited package root reaches every conftest.
+    """
+    if not conftest_dirs:  # most runs: no scan of every test module's file
+        return []
     directories = {directory.resolve() for directory in conftest_dirs}
     return sorted(nodes_under(directories, _test_module_paths(dep_tree, root_dir)))
 
