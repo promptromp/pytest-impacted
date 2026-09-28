@@ -10,7 +10,6 @@ import pytest
 
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
-    _tests_under_conftests,
     find_test_modules_under,
 )
 
@@ -138,7 +137,7 @@ def test_the_tests_under_a_conftest_directory_placed_through_a_symlinked_rootdir
     dep_tree = nx.DiGraph()
     dep_tree.add_node("tests.test_a", path=str((tmp_path / "real/tests/test_a.py").resolve()))
 
-    assert _tests_under_conftests({tmp_path / "link/tests"}, dep_tree, tmp_path / "link") == ["tests.test_a"]
+    assert find_test_modules_under(tmp_path / "link/tests", dep_tree, root_dir=tmp_path / "link") == ["tests.test_a"]
 
 
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")

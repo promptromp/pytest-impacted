@@ -188,8 +188,8 @@ def test_code_under_a_symlinked_subpackage_is_still_application_code(tmp_path):
         pytest.param(
             "from app.helpers import make\n",
             FIXTURE.replace("from app.helpers import", "from app import"),
-            "app/__init__.py",
-            id="the_package_init",
+            "app/helpers.py",
+            id="through_the_package_init",
         ),
     ],
 )
@@ -198,7 +198,9 @@ def test_a_tests_dir_holding_the_whole_package_does_not_make_the_application_tes
 ):
     """``--impacted-tests-dir=app`` cannot tell tests from application code, so it is ignored for this.
 
-    The package's ``__init__.py`` is application code like the rest: a conftest importing it is left to the opt-in.
+    The package's ``__init__.py`` is application code like the rest: a conftest importing it, reached through a
+    module it re-exports, is left to the opt-in. (An edit to the ``__init__.py`` itself changes every module in the
+    package, since 0.34 — here its test modules too.)
     """
     root = make(
         tmp_path,
@@ -212,6 +214,21 @@ def test_a_tests_dir_holding_the_whole_package_does_not_make_the_application_tes
 
     assert find(PytestImpactStrategy(), root, changed, tests_package="app") == []
     assert find(ConftestImportImpactStrategy(), root, changed, tests_package="app") == ["app.test_db"]
+
+
+def test_a_changed_package_init_is_application_code(tmp_path):
+    """``app/__init__.py`` is application code like the rest: a conftest importing it is left to the opt-in."""
+    conftest = FIXTURE.replace("from app.helpers import", "from app import")
+    root = make(
+        tmp_path,
+        {**APP, **SUITE, "app/__init__.py": "from app.helpers import make\n", "suite/db/conftest.py": conftest},
+    )
+
+    assert find(PytestImpactStrategy(), root, "app/__init__.py") == []
+    assert find(ConftestImportImpactStrategy(), root, "app/__init__.py") == [
+        "suite.db.deep.test_deep",
+        "suite.db.test_db",
+    ]
 
 
 def test_a_subclass_need_not_call_the_base_initialiser(project):

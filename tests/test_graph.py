@@ -116,7 +116,8 @@ def test_the_graph_links_no_init_to_the_modules_of_its_package(tmp_path):
     assert graph.resolve_impacted_tests(["pkg"], dep_tree) == []
 
 
-def test_an_init_changed_beside_a_module_adds_no_tests_of_its_own(tmp_path):
+def test_resolving_an_init_node_reaches_only_its_importers(tmp_path):
+    """The graph level only: a changed ``__init__.py`` reaches its whole package through ``package_members``."""
     files = {
         "pkg/__init__.py": "",
         "pkg/core.py": "",
@@ -1269,6 +1270,41 @@ def test_package_members_include_an_extension_node_whose_path_is_not_normalized(
     write_files(tmp_path, PACKAGE)
     dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
     dep_tree.add_node("codegen:models", path=f"{tmp_path.resolve()}/app/corex/../core/gen_models.py")
+
+    assert "codegen:models" in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("layout", "changed", "delete", "every"),
+    [
+        pytest.param(
+            ["__init__.py", "mid/__init__.py", "mid/project/__init__.py"], "../../__init__.py", False, True, id="two_up"
+        ),
+        pytest.param(["__init__.py", "mid/project/__init__.py"], "../../__init__.py", False, False, id="a_gap_two_up"),
+        pytest.param(["mid/__init__.py", "mid/project/__init__.py"], "../__init__.py", True, True, id="deleted_one_up"),
+    ],
+)
+def test_package_members_of_an_init_far_above_the_rootdir(tmp_path, layout, changed, delete, every):
+    """Every directory from the changed ``__init__.py``'s down to the rootdir must be a package — its own need not
+    be any more (deleted)."""
+    project = tmp_path / "mid/project"
+    write_files(tmp_path, {**{f"mid/project/{rel}": "" for rel in PACKAGE}, **dict.fromkeys(layout, "")})
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=project)
+    if delete:
+        (project / changed).unlink()
+    absolute = str((project / changed).resolve())  # as git reports a file outside the rootdir
+
+    for spelled in (changed, absolute):
+        assert graph.package_members([spelled], dep_tree, root_dir=project) == (sorted(dep_tree) if every else [])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_package_members_include_an_extension_node_whose_path_goes_through_a_symlink_inside_the_package(tmp_path):
+    """``app/core/linked -> ../../build``: a path spelled through it is inside ``app.core``, wherever it points."""
+    write_files(tmp_path, {**PACKAGE, "build/gen.py": ""})
+    (tmp_path / "app/core/linked").symlink_to(tmp_path / "build", target_is_directory=True)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    dep_tree.add_node("codegen:models", path=str(tmp_path.resolve() / "app/core/linked/gen.py"))
 
     assert "codegen:models" in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
 
