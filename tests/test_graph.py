@@ -1094,13 +1094,16 @@ def test_package_members_are_the_nodes_inside_the_package_of_each_changed_init(t
     assert graph.package_members(changed, dep_tree, root_dir=tmp_path) == expected
 
 
-def test_package_members_of_an_init_outside_the_rootdir_are_none(tmp_path):
-    write_files(tmp_path, {"elsewhere/__init__.py": "", **{f"project/{rel}": src for rel, src in PACKAGE.items()}})
+@pytest.mark.parametrize("changed", ["../__init__.py", "../elsewhere/__init__.py"], ids=["above", "beside"])
+def test_package_members_of_an_init_outside_the_rootdir_are_none(tmp_path, changed):
+    """One above holds the project, but imports start inside it (a monorepo's service): they never run it."""
+    files = {"__init__.py": "", "elsewhere/__init__.py": "", **{f"project/{rel}": "" for rel in PACKAGE}}
+    write_files(tmp_path, files)
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path / "project")
 
-    changed = [str(tmp_path.resolve() / "elsewhere/__init__.py"), "../elsewhere/__init__.py"]
+    absolute = str((tmp_path / "project" / changed).resolve())
 
-    assert graph.package_members(changed, dep_tree, root_dir=tmp_path / "project") == []
+    assert graph.package_members([changed, absolute], dep_tree, root_dir=tmp_path / "project") == []
 
 
 def test_package_members_of_the_rootdirs_own_init_are_every_node(tmp_path):
