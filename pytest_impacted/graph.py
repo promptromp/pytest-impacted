@@ -350,9 +350,14 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             continue
         names = _importable_names(path, roots)
         node = by_path.get(str(path))
-        runners = (
-            {runner for name in names for runner in inside().get(name, ())} if path.name == "__init__.py" else set()
-        )
+        runners: set[str] = set()
+        if path.name == "__init__.py":
+            # Its node's names too: ``libs/core/__init__.py`` is ``app.core`` through ``app/core -> ../libs/core``.
+            package = {
+                *names,
+                *([node, *(alias for alias, target in aliases.items() if target == node)] if node else []),
+            }
+            runners = {runner for name in package for runner in inside().get(name, ())}
         if node is None:
             importers = {importer for name in names for importer in unresolved.get(name, ())}
             if not importers and not runners and not os.path.exists(path):

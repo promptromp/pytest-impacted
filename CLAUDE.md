@@ -312,9 +312,8 @@ reason.
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and every
 "this directory and below" match — the conftest rule's `find_test_modules_under`, a changed
-package's members — goes through `graph.nodes_under` (resolved directories against node paths
-each caller normalises — `realpath` for the conftest rule, `_canonical` for members — as string
-prefixes ending in the separator). Do not add a second matcher or a second directory walk.
+package's members — goes through `graph.nodes_under`. Do not add a second matcher or a second
+directory walk.
 
 Third-party strategies are discovered via the `pytest_impacted.strategies` entry
 point group and composed in by `api.build_strategy_with_extensions()` — the

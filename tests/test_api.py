@@ -1490,6 +1490,26 @@ def test_an_edited_init_reaches_an_optional_importer_when_the_tests_dir_is_insid
     assert result == ["app/tests/test_db.py"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_an_edited_init_reaches_an_optional_importer_through_a_symlinked_subpackage(tmp_path):
+    """``app/core -> ../libs/core``: git reports ``libs/core/__init__.py``, named ``libs.core`` from the
+    rootdir, but imported as ``app.core`` — the name its node has."""
+    files = {
+        "app/__init__.py": "",
+        "libs/core/__init__.py": "",
+        "libs/core/x.py": "",
+        "suite/test_x.py": "import app.core.x\n",
+        "suite/test_fast.py": "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+        "suite/test_a.py": "",
+    }
+    write_files(tmp_path, files)
+    (tmp_path / "app/core").symlink_to(tmp_path / "libs/core", target_is_directory=True)
+
+    result, _ = _run_with_notices(tmp_path, ["libs/core/__init__.py"], ns_module="app", tests_dir="suite")
+
+    assert result == ["suite/test_fast.py", "suite/test_x.py"]
+
+
 def test_an_init_changed_beside_a_module_selects_the_tests_of_the_whole_package(tmp_path):
     files = {
         "pkg/__init__.py": "",
@@ -1526,9 +1546,12 @@ def test_the_warning_counts_only_the_members_that_did_not_change_themselves(tmp_
 
     with patch("pytest_impacted.api.warn") as warn:
         result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+    with patch("pytest_impacted.api.warn") as warn_with_x:
+        _run_with_notices(tmp_path, ["app/core/__init__.py", "app/core/x.py"], ns_module="app", tests_dir="tests")
 
     assert result == []
     assert "['app.core'] and 2 modules inside the changed packages" in warn.call_args.args[0]
+    assert "['app.core', 'app.core.x'] and 1 module inside the changed packages" in warn_with_x.call_args.args[0]
 
 
 def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module_only(tmp_path):

@@ -1292,10 +1292,10 @@ def test_package_members_of_an_init_far_above_the_rootdir(tmp_path, layout, chan
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=project)
     if delete:
         (project / changed).unlink()
+    absolute = str((project / changed).resolve())  # as git reports a file outside the rootdir
 
-    members = graph.package_members([changed], dep_tree, root_dir=project)
-
-    assert members == (sorted(dep_tree) if every else [])
+    for spelled in (changed, absolute):
+        assert graph.package_members([spelled], dep_tree, root_dir=project) == (sorted(dep_tree) if every else [])
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
