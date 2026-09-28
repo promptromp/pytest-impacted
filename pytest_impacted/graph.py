@@ -4,7 +4,7 @@ import logging
 import os
 from collections.abc import Callable, Iterable
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import networkx as nx
 
@@ -19,6 +19,7 @@ from pytest_impacted.traversal import (
     LAST_RESORT_PREFIX,
     _discover_project,
     _Discovered,
+    _is_regular_package,
     canonical_root,
     import_base,
     import_roots,
@@ -81,8 +82,10 @@ def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
     if "test" in attributes:
         return bool(attributes["test"])
     path = attributes.get("path")
-    by_file = bool(attributes.get("external") and path) and is_test_module(_importable_stem(Path(path)))
-    return is_test_module(node) or by_file
+    by_file = bool(attributes.get("external") and isinstance(path, str | os.PathLike)) and is_test_module(
+        _importable_stem(Path(path))
+    )
+    return (isinstance(node, str) and is_test_module(node)) or by_file
 
 
 def _is_test_file(path: Path, root: Path) -> bool:
@@ -99,9 +102,8 @@ def _importable_stem(path: Path) -> str:
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     """Resolve impacted tests based on impacted modules.
 
-    The current logic is to do a DFS from the impacted module to find all nodes that depend on it.
-    We then check if these nodes are test modules.
-    We return the list of test modules that are impacted.
+    Every node that depends on an impacted module, directly or transitively
+    (:func:`reached_from`), that is a test module (:func:`is_test_node`).
 
     For modules not found in the dependency tree (e.g. a name an extension passes that is no node):
     - Test modules are included directly as impacted (they changed, so they should run).
@@ -109,40 +111,137 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
       erring on the side of caution per project philosophy.
 
     """
+    impacted_modules = list(impacted_modules)
     impacted_tests = []
-    all_test_modules_in_tree = [node for node in dep_tree.nodes if is_test_node(dep_tree, node)]
+    every_test = cache(lambda: [node for node in dep_tree.nodes if is_test_node(dep_tree, node)])
 
     for module in impacted_modules:
-        if module not in dep_tree.nodes:
+        if module in dep_tree.nodes:
+            continue
+        logger.warning(
+            "Module %s is marked as impacted but was not found in dependency tree "
+            "(a name that is no node of the graph).",
+            module,
+        )
+        if is_test_module(module):
+            # Test module changed but not in tree — include it directly.
+            impacted_tests.append(module)
+        else:
+            # Production module changed but not in tree — conservatively
+            # mark all known test modules as impacted.
             logger.warning(
-                "Module %s is marked as impacted but was not found in dependency tree "
-                "(a name that is no node of the graph).",
+                "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
                 module,
             )
-            if is_test_module(module):
-                # Test module changed but not in tree — include it directly.
-                impacted_tests.append(module)
-            else:
-                # Production module changed but not in tree — conservatively
-                # mark all known test modules as impacted.
-                logger.warning(
-                    "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
-                    module,
-                )
-                impacted_tests.extend(all_test_modules_in_tree)
-            continue
+            impacted_tests.extend(every_test())
 
-        dependent_nodes = [
-            node for node in nx.dfs_preorder_nodes(dep_tree, source=module) if is_test_node(dep_tree, node)
-        ]
-
-        impacted_tests.extend(dependent_nodes)
+    impacted_tests.extend(node for node in reached_from(impacted_modules, dep_tree) if is_test_node(dep_tree, node))
 
     # Remove duplicates and sort the list for good measure.
     # (although the order of the tests should not matter)
-    impacted_tests = sorted(set(impacted_tests))
+    return sorted(set(impacted_tests))
 
-    return impacted_tests
+
+def reached_from(modules: Iterable[str], dep_tree: nx.DiGraph) -> set[str]:
+    """Every node that depends, directly or transitively, on *modules* (those that are nodes included).
+
+    One multi-source traversal, not one per module: a package whose ``__init__.py`` changed
+    is thousands of changed modules sharing their dependents (:func:`package_members`).
+    """
+    sources = [module for module in modules if module in dep_tree]
+    return set().union(*nx.bfs_layers(dep_tree, sources))
+
+
+def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
+    """The nodes inside the package of each changed ``__init__.py`` — edited, added or deleted.
+
+    Importing a module runs every package ``__init__.py`` above it first — ``from app.core.x
+    import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` — but names neither, so no
+    import edge links them: a changed ``__init__.py`` changes every module in its package. A
+    member is a module node whose file is in the package's directory or below, or whose name or an
+    alias is inside the package's or a package node's there: a module symlinked into it lives
+    elsewhere, as may one an extension generates. (A module importing a missing name inside the
+    package is no member but a dependent: see :func:`link_changed_files`.)
+
+    *filenames* are POSIX paths relative to the rootdir, as git reports them. An ``__init__.py``
+    above the rootdir counts only through an unbroken chain of packages down to it, as pytest's
+    prepend mode imports a test module; otherwise imports start inside the rootdir.
+    """
+    root = canonical_root(root_dir)
+    # The directory, resolved, not the file: an ``__init__.py`` may itself be a symlink.
+    directories = {
+        directory
+        for file in filenames
+        if PurePosixPath(file).name == "__init__.py"
+        if _runs_for_the_project(directory := (root / file).parent.resolve(), root)
+    }
+    if not directories:
+        return []
+    # Module nodes with a file only: an extension may add any hashable node, and read the ``path``
+    # of every impacted module (all of 0.33.0's had one).
+    paths = {
+        node: _canonical(os.fspath(path), root)
+        for node, path in dep_tree.nodes(data="path")
+        if isinstance(node, str) and isinstance(path, str | os.PathLike)
+    }
+    members = set(nodes_under(directories, paths))
+    roots = [Path(d) for d in dep_tree.graph.get("import_roots", [root])]
+    packages = {name for directory in directories for name in _importable_names(directory / "__init__.py", roots)}
+    packages |= {node for node in members if paths[node].endswith(f"{os.sep}__init__.py")}
+
+    def inside_a_package(name: str) -> bool:
+        return not packages.isdisjoint(_enclosing_packages(name))
+
+    members |= {node for node in paths if inside_a_package(node)}
+    # ``app/core/linked -> ../other``: ``app.other.m`` is imported as ``app.core.linked.m`` too.
+    members |= {
+        node for alias, node in dep_tree.graph.get("aliases", {}).items() if node in paths and inside_a_package(alias)
+    }
+    return sorted(members)
+
+
+def _enclosing_packages(name: str) -> list[str]:
+    """The packages importing module *name* runs first: ``app``, ``app.core`` for ``app.core.x``."""
+    parts = name.split(".")
+    return [".".join(parts[:end]) for end in range(1, len(parts))]
+
+
+def _runs_for_the_project(directory: Path, root: Path) -> bool:
+    """Whether importing the project's modules can run the ``__init__.py`` in *directory*."""
+    if directory.is_relative_to(root):
+        return True
+    below = [root, *root.parents[: len(root.parents) - len(directory.parents) - 1]]
+    return root.is_relative_to(directory) and all(map(_is_regular_package, below))
+
+
+def _canonical(path: str, root: Path) -> str:
+    """*path* normalised (``..``), and resolved when that leaves it outside the resolved rootdir.
+
+    Discovery records resolved paths; an extension may not (pytest's rootdir itself can be a
+    symlink). Resolving thousands costs a syscall per part each, so the others stay as spelled —
+    right for membership, too: ``app/core/linked/gen.py`` imports through ``app.core``, wherever
+    ``linked`` points.
+    """
+    normal = os.path.normpath(path)
+    return normal if normal.startswith(os.path.join(root, "")) else os.path.realpath(path)
+
+
+def nodes_under(directories: Iterable[Path], paths: dict[str, str]) -> list[str]:
+    """The nodes among *paths* (``{node: file}``, normalised as the caller needs) whose file is in
+    one of *directories* (resolved) or below — the one "this directory and below" matcher.
+
+    Plain string prefixes ending in the separator (``app/core/`` holds no ``app/core_utils.py``):
+    pathlib is far slower on thousands of nodes.
+    """
+    # normcase: as ``Path.relative_to`` does on Windows, which is case-insensitive (a no-op elsewhere).
+    # A path that is one of the directories counts too, as with ``relative_to``.
+    exact = {os.path.normcase(os.path.normpath(directory)) for directory in directories}
+    prefixes = tuple(os.path.join(directory, "") for directory in exact)
+    return [
+        node
+        for node, path in paths.items()
+        if (normal := os.path.normcase(path)).startswith(prefixes) or normal in exact
+    ]
 
 
 def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
@@ -218,39 +317,70 @@ def _last_resort_name(path: Path, root: Path) -> str:
 
 
 def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
-    """Give each changed ``.py`` file inside the rootdir that *dep_tree* lacks a node; return their names.
+    """Link each changed ``.py`` file inside the rootdir into *dep_tree*; return the nodes added.
 
     A module deleted since the graph was built, or created after it was cached, is no
     node, nor is an existing file no walk reaches and nothing imports. Each gets one on
     *dep_tree* — the run's copy, never the cached graph — with an edge to every module
     whose import of one of its names matched nothing (``graph["unresolved"]``). A deleted
     file nothing imports gets none: nothing is left for it to impact.
+
+    A changed ``__init__.py``, a node or not, also gets an edge to every module importing a
+    missing name inside its package (``try: import app.core.fast``): that import runs it before
+    failing, but there is no module to be a member of the package (:func:`package_members`). The
+    graph has no such edge, only the run's copy, from the ``__init__`` that changed: an edit to a
+    module the ``__init__`` imports must not reach every importer of a name inside it. The edge
+    is flagged ``runs_init``: it reaches the importer, but does not place the package.
     """
     root = canonical_root(root_dir)
-    known = {path for _, path in dep_tree.nodes(data="path") if path}
+    by_path = {path: node for node, path in dep_tree.nodes(data="path") if path}
     aliases = dep_tree.graph.setdefault("aliases", {})
     taken = set(dep_tree) | set(aliases)
     unresolved = dep_tree.graph.get("unresolved", {})
     roots = sorted((Path(d) for d in dep_tree.graph.get("import_roots", [root])), key=lambda d: -len(d.parts))
+    inside = cache(lambda: _importers_inside(unresolved))
     added = []
     for file in filenames:
         path = (root / file).resolve()
-        if not file.endswith(".py") or str(path) in known or not path.is_relative_to(root):
+        if not file.endswith(".py") or not path.is_relative_to(root):
             continue
         names = _importable_names(path, roots)
-        importers = {importer for name in names for importer in unresolved.get(name, ())}
-        if not importers and not os.path.exists(path):
-            continue
-        node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
-        # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
-        aliases.update({name: node for name in names if name != node and name not in taken})
-        taken.update(names)
-        taken.add(node)
-        dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
-        dep_tree.add_edges_from((node, importer) for importer in importers)
-        known.add(str(path))
-        added.append(node)
+        node = by_path.get(str(path))
+        runners = (
+            {runner for name in names for runner in inside().get(name, ())} if path.name == "__init__.py" else set()
+        )
+        if node is None:
+            importers = {importer for name in names for importer in unresolved.get(name, ())}
+            if not importers and not runners and not os.path.exists(path):
+                continue
+            node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
+            # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
+            aliases.update({name: node for name in names if name != node and name not in taken})
+            taken.update(names)
+            taken.add(node)
+            dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
+            dep_tree.add_edges_from((node, importer) for importer in importers)
+            by_path[str(path)] = node
+            added.append(node)
+        # Only to reach them (``runs_init``), never to place the package as application code or test
+        # code (see strategies._changes_by_role): that could make a conftest rule opt-in, fewer tests.
+        if runs := [runner for runner in runners if runner != node and not dep_tree.has_edge(node, runner)]:
+            dep_tree.add_edges_from(((node, runner) for runner in runs), runs_init=True)
+            dep_tree.graph["runs_init"] = True
     return added
+
+
+def _importers_inside(unresolved: dict[str, list[str]]) -> dict[str, set[str]]:
+    """``{package name: modules importing a name inside it that no walk defines}``, from ``graph["unresolved"]``.
+
+    A name found outside the walks is a member of its package too, so linking its importers only
+    repeats what the member reaches — harmless, since the link does not place the package.
+    """
+    inside: dict[str, set[str]] = {}
+    for name, importers in unresolved.items():
+        for package in _enclosing_packages(name):
+            inside.setdefault(package, set()).update(importers)
+    return inside
 
 
 def _importable_names(path: Path, roots: list[Path]) -> list[str]:

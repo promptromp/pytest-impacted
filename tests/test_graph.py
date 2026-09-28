@@ -103,8 +103,10 @@ def test_build_dep_tree():
         assert dep_tree.has_edge("module_c", "module_b")
 
 
-def test_an_init_that_no_test_imports_from_impacts_nothing(tmp_path):
-    """``import pkg.core`` runs ``pkg/__init__.py`` too, but is not linked to it (a documented limit)."""
+def test_the_graph_links_no_init_to_the_modules_of_its_package(tmp_path):
+    """``import pkg.core`` runs ``pkg/__init__.py`` too, yet no edge says so: the run adds a changed
+    ``__init__``'s package members to the impacted modules instead (``package_members``). Edges would make
+    every importer of ``pkg.*`` depend on everything the ``__init__`` imports."""
     for rel, source in {"pkg/__init__.py": "", "pkg/core.py": "", "tests/test_core.py": "import pkg.core\n"}.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(source)
@@ -1059,3 +1061,311 @@ def test_an_import_root_that_cannot_be_listed_raises_nothing(tmp_path):
         (tmp_path / "qa").chmod(0o755)
 
     assert "tests.test_a" in dep_tree
+
+
+PACKAGE = {
+    "app/__init__.py": "",
+    "app/core/__init__.py": "",
+    "app/core/x.py": "",
+    "app/core/sub/__init__.py": "",
+    "app/core/sub/deep.py": "",
+    "app/core/ns/leaf.py": "",
+    "app/core_utils.py": "",
+    "app/corex/__init__.py": "",
+    "app/corex/y.py": "",
+    "tests/test_a.py": "",
+}
+CORE = ["app.core", "app.core.ns.leaf", "app.core.sub", "app.core.sub.deep", "app.core.x"]
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [
+        pytest.param(["app/core/__init__.py"], CORE, id="a_subpackage"),
+        pytest.param(["app/core/sub/__init__.py"], ["app.core.sub", "app.core.sub.deep"], id="a_nested_subpackage"),
+        pytest.param(["app/core/x.py", "app/core_utils.py", "setup.cfg"], [], id="no_init"),
+        pytest.param(["app/core/__init__.py", "app/core/sub/__init__.py"], CORE, id="nested_inits_once"),
+        pytest.param(["app/core/ns/__init__.py"], ["app.core.ns.leaf"], id="an_init_not_yet_walked"),
+        pytest.param(["app/core/nothing/__init__.py"], [], id="an_empty_package"),
+    ],
+)
+def test_package_members_are_the_nodes_inside_the_package_of_each_changed_init(tmp_path, changed, expected):
+    write_files(tmp_path, PACKAGE)
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert graph.package_members(changed, dep_tree, root_dir=tmp_path) == expected
+
+
+@pytest.mark.parametrize("changed", ["../__init__.py", "../elsewhere/__init__.py"], ids=["above", "beside"])
+def test_package_members_of_an_init_outside_the_rootdir_are_none(tmp_path, changed):
+    """One above holds the project, but imports start inside it (a monorepo's service): they never run it."""
+    files = {"__init__.py": "", "elsewhere/__init__.py": "", **{f"project/{rel}": "" for rel in PACKAGE}}
+    write_files(tmp_path, files)
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path / "project")
+
+    absolute = str((tmp_path / "project" / changed).resolve())
+
+    assert graph.package_members([changed, absolute], dep_tree, root_dir=tmp_path / "project") == []
+
+
+def test_package_members_of_the_rootdirs_own_init_are_every_node(tmp_path):
+    """A rootdir holding an ``__init__.py`` is a package too: imports through it run it."""
+    write_files(tmp_path, {**PACKAGE, "__init__.py": ""})
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert graph.package_members(["__init__.py"], dep_tree, root_dir=tmp_path) == sorted(dep_tree)
+
+
+def test_package_members_include_a_node_an_extension_named_inside_the_package(tmp_path):
+    """Its file is generated elsewhere, but its name is inside ``app.core``; ``app.corex.gen``'s is not. A node
+    without a ``path`` is never one: extensions may read the ``path`` of every impacted module."""
+    write_files(tmp_path, PACKAGE)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    build = str(tmp_path.resolve() / "build")
+    dep_tree.add_nodes_from(["app.core.generated", "app.corex.gen"], path=f"{build}/gen.py")
+    dep_tree.add_node("app.core.pathless")
+
+    assert graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path) == sorted(
+        [*CORE, "app.core.generated"]
+    )
+
+
+def test_package_members_include_a_node_whose_path_an_extension_set_as_a_path_object(tmp_path):
+    write_files(tmp_path, PACKAGE)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    dep_tree.add_node("codegen:models", path=tmp_path.resolve() / "app/core/gen_models.py")
+
+    assert "codegen:models" in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
+def test_package_members_are_graph_nodes_named_by_strings(tmp_path):
+    """An extension may add any hashable node, and leave an alias to a node it removed."""
+    write_files(tmp_path, PACKAGE)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    dep_tree.add_node(("codegen", "x"), path=str(tmp_path.resolve() / "app/core/x.json"), test=False)
+    dep_tree.graph["aliases"]["app.core.ghost"] = "removed.node"
+
+    assert graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path) == CORE
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_package_members_include_a_module_symlinked_into_the_package(tmp_path):
+    """``app/plugins -> ../shared/plugins``: ``app.plugins.p`` lives elsewhere, but imports through ``app``."""
+    write_files(tmp_path, {**PACKAGE, "shared/plugins/p.py": ""})
+    (tmp_path / "app/plugins").symlink_to(tmp_path / "shared/plugins", target_is_directory=True)
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert "app.plugins.p" in graph.package_members(["app/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_package_members_of_an_init_added_above_the_analysed_package_include_a_symlinked_module(tmp_path):
+    """``company/`` becomes a regular package above ``--impacted-module=src/company/app``: ``app.plugins.p``
+    imports through it too, though its file is elsewhere and no alias of it names ``company``."""
+    write_files(tmp_path, {"src/company/app/__init__.py": "", "src/company/app/x.py": "", "shared/plugins/p.py": ""})
+    (tmp_path / "src/company/app/plugins").symlink_to(tmp_path / "shared/plugins", target_is_directory=True)
+    dep_tree = run_copy(graph.build_dep_tree("src/company/app", root_dir=tmp_path))
+    (tmp_path / "src/company/__init__.py").touch()
+    graph.link_changed_files(["src/company/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    members = graph.package_members(["src/company/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert members == ["app", "app.plugins.p", "app.x", "company"]
+
+
+def test_package_members_include_a_node_an_extension_named_by_the_packages_alias(tmp_path):
+    """``company.app`` is an alias of ``app`` (``src/company/`` is no package): ``company.app.gen`` is inside it."""
+    write_files(tmp_path, {"src/company/app/__init__.py": "", "src/company/app/x.py": ""})
+    dep_tree = run_copy(graph.build_dep_tree("src/company/app", root_dir=tmp_path))
+    dep_tree.add_nodes_from(["company.app.gen", "company.appendix"], path=str(tmp_path.resolve() / "build/gen.py"))
+
+    members = graph.package_members(["src/company/app/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert members == ["app", "app.x", "company.app.gen"]
+
+
+def test_package_members_of_an_init_above_the_analysed_package(tmp_path):
+    """``backend/__init__.py`` is above ``--impacted-module=backend/app``: no walk reaches it, nor is it a node."""
+    write_files(tmp_path, {"backend/__init__.py": "", "backend/app/__init__.py": "", "backend/app/x.py": ""})
+    dep_tree = graph.build_dep_tree("backend/app", root_dir=tmp_path)
+
+    assert "backend" not in dep_tree
+    assert graph.package_members(["backend/__init__.py"], dep_tree, root_dir=tmp_path) == [
+        "backend.app",
+        "backend.app.x",
+    ]
+
+
+@pytest.mark.parametrize(
+    "import_line",
+    [
+        "import app.core.fast",
+        "from app.core.fast import run",
+        "import app.core.ns.fast",
+        "import app.core.gone.fast",
+        "import app.core.ns",
+    ],
+    ids=["missing", "from_missing", "in_a_namespace_portion", "in_a_missing_package", "a_namespace_portion"],
+)
+def test_a_changed_init_is_linked_to_the_importers_of_a_missing_name_inside_its_package(tmp_path, import_line):
+    """An optional import (``try: import app.core.fast``) runs ``app/core/__init__.py`` before it fails, but has
+    no node to be a member of the package. The run links the changed ``__init__`` to its importer instead; the
+    graph has no such edge, or an edit to anything the ``__init__`` imports would reach it (a facade)."""
+    guarded = f"try:\n    {import_line}\nexcept ImportError:\n    pass\n"
+    write_files(tmp_path, {**PACKAGE, "tests/test_fast.py": guarded})
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    assert list(dep_tree.predecessors("tests.test_fast")) == []
+
+    assert graph.link_changed_files(["app/core/__init__.py"], dep_tree, root_dir=tmp_path) == []
+
+    assert list(dep_tree.predecessors("tests.test_fast")) == ["app.core"]
+    assert dep_tree.edges["app.core", "tests.test_fast"] == {"runs_init": True}
+    assert "tests.test_fast" not in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
+def test_a_changed_init_optionally_importing_a_missing_module_of_its_own_is_linked_to_no_self(tmp_path):
+    optional = "try:\n    import app.core._speedups\nexcept ImportError:\n    pass\n"
+    write_files(tmp_path, {**PACKAGE, "app/core/__init__.py": optional})
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+
+    graph.link_changed_files(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert list(nx.selfloop_edges(dep_tree)) == []
+
+
+@pytest.mark.parametrize(
+    ("changed", "import_line"),
+    [
+        pytest.param("app/core/__init__.py", "import numpy.fast", id="outside_the_project"),
+        pytest.param("app/core/__init__.py", "import app.corex.fast", id="in_a_sibling_named_like_it"),
+        pytest.param("app/core/x.py", "import app.core.fast", id="beside_a_changed_module"),
+    ],
+)
+def test_a_changed_file_is_linked_to_no_importer_of_a_missing_name_outside_its_package(tmp_path, changed, import_line):
+    write_files(
+        tmp_path, {**PACKAGE, "tests/test_fast.py": f"try:\n    {import_line}\nexcept ImportError:\n    pass\n"}
+    )
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+
+    graph.link_changed_files([changed], dep_tree, root_dir=tmp_path)
+
+    assert list(dep_tree.predecessors("tests.test_fast")) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_package_members_include_an_extension_node_whose_path_goes_through_a_symlinked_rootdir(tmp_path):
+    """pytest's rootdir may be a symlink (``/tmp`` on macOS); an extension builds its ``path`` from it."""
+    write_files(tmp_path / "real", PACKAGE)
+    (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path / "link"))
+    dep_tree.add_node("codegen:models", path=str(tmp_path / "link/app/core/gen_models.py"))
+
+    members = graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path / "link")
+
+    assert "codegen:models" in members
+
+
+def test_package_members_include_an_extension_node_whose_path_is_not_normalized(tmp_path):
+    write_files(tmp_path, PACKAGE)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    dep_tree.add_node("codegen:models", path=f"{tmp_path.resolve()}/app/corex/../core/gen_models.py")
+
+    assert "codegen:models" in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
+def test_resolve_impacted_tests_lists_every_test_once_however_many_modules_are_missing():
+    """A missing production module means every test; a second one needs no second scan."""
+    dep_tree = nx.DiGraph()
+    nx.add_path(dep_tree, [f"pkg.m{i}" for i in range(20)] + ["tests.test_last"])
+    judged = []
+
+    def is_test_node(tree, node):
+        judged.append(node)
+        return node.startswith("tests.")
+
+    with patch.object(graph, "is_test_node", side_effect=is_test_node):
+        result = graph.resolve_impacted_tests([f"pkg.gone{i}" for i in range(50)], dep_tree)
+
+    assert result == ["tests.test_last"]
+    assert len(judged) <= 2 * len(dep_tree)
+
+
+@pytest.mark.parametrize("state", ["added", "deleted"])
+def test_a_linked_init_links_the_importers_of_a_missing_module_inside_its_package(tmp_path, state):
+    """``app/core/`` was, or becomes, a namespace package: no node for its ``__init__`` in the graph."""
+    files = {**PACKAGE, "tests/test_fast.py": "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n"}
+    write_files(tmp_path, files)
+    (tmp_path / "app/core/__init__.py").unlink()
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    if state == "added":
+        (tmp_path / "app/core/__init__.py").touch()
+
+    (linked,) = graph.link_changed_files(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests([linked], dep_tree) == ["tests.test_fast"]
+
+
+def test_resolve_impacted_tests_takes_any_iterable():
+    dep_tree = nx.DiGraph([("pkg.a", "tests.test_a")])
+
+    assert graph.resolve_impacted_tests((module for module in ["pkg.a"]), dep_tree) == ["tests.test_a"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_package_members_of_a_deleted_init_include_a_module_symlinked_into_the_package(tmp_path):
+    """No node is left for the ``__init__``: its package's names come from where it was."""
+    write_files(tmp_path, {**PACKAGE, "shared/link.py": ""})
+    (tmp_path / "app/core/link.py").symlink_to(tmp_path / "shared/link.py")
+    (tmp_path / "app/core/__init__.py").unlink()
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert "app.core.link" in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_package_members_of_a_symlinked_init_are_those_of_its_package(tmp_path):
+    """``app/core/__init__.py -> ../../shared/core_init.py``: the package is ``app/core``, not ``shared``."""
+    write_files(tmp_path, {**PACKAGE, "shared/core_init.py": "", "shared/other.py": ""})
+    (tmp_path / "app/core/__init__.py").unlink()
+    (tmp_path / "app/core/__init__.py").symlink_to(tmp_path / "shared/core_init.py")
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    members = graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert "app.core.x" in members
+    assert not [member for member in members if member.startswith("shared")]
+
+
+@pytest.mark.parametrize(
+    ("chain", "expected"),
+    [
+        pytest.param(["__init__.py", "project/__init__.py"], "every node", id="unbroken_to_the_rootdir"),
+        pytest.param(["__init__.py"], [], id="the_rootdir_is_no_package"),
+    ],
+)
+def test_package_members_of_an_init_above_the_rootdir_need_a_chain_of_packages_down_to_it(tmp_path, chain, expected):
+    """pytest's prepend mode imports ``project/tests/test_a.py`` as ``<parent>.project.tests.test_a`` when
+    every directory up to the parent is a package: the parent's ``__init__.py`` runs for every test."""
+    write_files(tmp_path, {**{f"project/{rel}": "" for rel in PACKAGE}, **dict.fromkeys(chain, "")})
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path / "project")
+
+    members = graph.package_members(["../__init__.py"], dep_tree, root_dir=tmp_path / "project")
+
+    assert members == (sorted(dep_tree) if expected == "every node" else expected)
+
+
+def test_resolve_impacted_tests_judges_each_node_once_however_many_modules_changed():
+    """One traversal from every changed module, not one each: a package-wide change is thousands of them."""
+    dep_tree = nx.DiGraph()
+    nx.add_path(dep_tree, [f"pkg.m{i}" for i in range(300)] + ["tests.test_last"])
+    judged = []
+
+    def is_test_node(tree, node):
+        judged.append(node)
+        return node.startswith("tests.")
+
+    with patch.object(graph, "is_test_node", side_effect=is_test_node):
+        result = graph.resolve_impacted_tests(list(dep_tree), dep_tree)
+
+    assert result == ["tests.test_last"]
+    assert len(judged) <= 2 * len(dep_tree)

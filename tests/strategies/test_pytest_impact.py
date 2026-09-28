@@ -10,7 +10,7 @@ import pytest
 
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
-    _outermost,
+    _tests_under_conftests,
     find_test_modules_under,
 )
 
@@ -104,11 +104,41 @@ def test_only_a_file_named_exactly_conftest_counts(tmp_path):
     assert result == []
 
 
-def test_nested_conftest_directories_collapse(tmp_path):
-    """A directory inside another selected one adds nothing, so it is not scanned again."""
-    outer, inner, sibling = tmp_path / "tests", tmp_path / "tests/db", tmp_path / "other"
+def test_the_tests_under_a_directory_include_a_node_whose_path_is_the_directory(tmp_path):
+    """As 0.33.0 did: a data-driven suite an extension registers as one node, its ``path`` the directory itself."""
+    (tmp_path / "tests/yaml_cases").mkdir(parents=True)
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.yaml_cases", path=str(tmp_path / "tests/yaml_cases"), test=True)
 
-    assert set(_outermost({inner, outer, sibling})) == {outer.resolve(), sibling.resolve()}
+    assert find_test_modules_under(tmp_path / "tests/yaml_cases", dep_tree, root_dir=tmp_path) == ["tests.yaml_cases"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_the_tests_under_a_directory_include_nodes_placed_through_a_symlink_or_an_unnormalized_path(tmp_path):
+    """As 0.33.0 did: an extension's ``path`` may hold ``..``, and a pathless node is placed through the tree."""
+    (tmp_path / "real_tests").mkdir()
+    (tmp_path / "real_tests/test_a.py").touch()
+    (tmp_path / "real_tests/test_b.py").touch()
+    (tmp_path / "tests").symlink_to(tmp_path / "real_tests", target_is_directory=True)
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.test_a", path=f"{tmp_path.resolve()}/app/../real_tests/test_a.py")
+    dep_tree.add_node("tests.test_b")
+
+    found = find_test_modules_under(tmp_path / "real_tests", dep_tree, root_dir=tmp_path)
+
+    assert found == ["tests.test_a", "tests.test_b"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_the_tests_under_a_conftest_directory_placed_through_a_symlinked_rootdir(tmp_path):
+    """A conftest an extension added without a ``path`` is placed under the rootdir as given, a symlink."""
+    (tmp_path / "real/tests").mkdir(parents=True)
+    (tmp_path / "real/tests/test_a.py").touch()
+    (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.test_a", path=str((tmp_path / "real/tests/test_a.py").resolve()))
+
+    assert _tests_under_conftests({tmp_path / "link/tests"}, dep_tree, tmp_path / "link") == ["tests.test_a"]
 
 
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")

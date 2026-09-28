@@ -14,7 +14,13 @@ import networkx as nx
 
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
-from pytest_impacted.graph import build_dep_tree, is_test_node, resolve_impacted_tests
+from pytest_impacted.graph import (
+    build_dep_tree,
+    is_test_node,
+    nodes_under,
+    reached_from,
+    resolve_impacted_tests,
+)
 from pytest_impacted.parsing import is_conftest_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_application_files
 
@@ -201,18 +207,13 @@ def _module_path(module: str, dep_tree: nx.DiGraph, root_dir: Path) -> Path | No
     """The source file of graph node *module*.
 
     Prefers the ``path`` recorded by :func:`~pytest_impacted.graph.build_dep_tree`,
-    which is right for src-layout too; nodes added by extensions may lack it.
+    which is right for src-layout too; nodes added by extensions may lack it — or be
+    any hashable, with any ``path`` value, which places nothing.
     """
     path = dep_tree.nodes[module].get("path")
-    return Path(path) if path else _test_module_path(module, root_dir)
-
-
-def _is_under(path: Path, directory: Path) -> bool:
-    try:
-        path.resolve().relative_to(directory.resolve())
-    except ValueError:
-        return False
-    return True
+    if path and isinstance(path, str | os.PathLike):
+        return Path(path)
+    return _test_module_path(module, root_dir) if isinstance(module, str) else None
 
 
 def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: Path) -> list[str]:
@@ -223,33 +224,19 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
     opted in, every conftest that imports changed application code too
     (:class:`ConftestImportImpactStrategy`).
     """
-    matches = []
-    for test_module in dep_tree.nodes:
-        if not is_test_node(dep_tree, test_module):
-            continue
-        path = _module_path(test_module, dep_tree, root_dir)
-        if path is not None and _is_under(path, directory):
-            matches.append(test_module)
-    return sorted(matches)
+    return _test_modules_under({directory}, dep_tree, root_dir)
 
 
-def _outermost(directories: set[Path]) -> list[Path]:
-    """Drop every directory nested inside another one: its tests are already covered."""
-    resolved = sorted({directory.resolve() for directory in directories}, key=lambda d: len(d.parts))
-    kept: list[Path] = []
-    for directory in resolved:
-        if not any(directory.is_relative_to(outer) for outer in kept):
-            kept.append(directory)
-    return kept
-
-
-def _reached(impacted_modules: list[str], dep_tree: nx.DiGraph) -> set[str]:
-    """Every node that depends, directly or transitively, on *impacted_modules* (sources included).
-
-    One multi-source traversal, so a large changeset does not re-walk shared descendants.
-    """
-    sources = [module for module in impacted_modules if module in dep_tree]
-    return set().union(*nx.bfs_layers(dep_tree, sources))
+def _test_modules_under(directories: set[Path], dep_tree: nx.DiGraph, root_dir: Path) -> list[str]:
+    """The sorted test modules in any of *directories* or below, each test module's file resolved once."""
+    if not directories:  # most runs: no scan of every test module's file
+        return []
+    paths = {
+        node: os.path.realpath(path)
+        for node in dep_tree.nodes
+        if is_test_node(dep_tree, node) and (path := _module_path(node, dep_tree, root_dir)) is not None
+    }
+    return sorted(nodes_under({directory.resolve() for directory in directories}, paths))
 
 
 def _conftest_dirs(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
@@ -259,7 +246,7 @@ def _conftest_dirs(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path) -
         for node in nodes
         # The name is a cheap pre-filter; the file name decides, as for changed
         # files, so a package named ``conftest`` is not one.
-        if is_conftest_module(node)
+        if isinstance(node, str) and is_conftest_module(node)
         if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
     }
 
@@ -276,12 +263,8 @@ def _changed_conftest_dirs(changed_files: list[str], root_dir: Path) -> set[Path
 
 
 def _tests_under_conftests(conftest_dirs: set[Path], dep_tree: nx.DiGraph, root_dir: Path) -> list[str]:
-    """The test modules in each conftest directory and below, nested directories collapsed first."""
-    return [
-        test_module
-        for conftest_dir in _outermost(conftest_dirs)
-        for test_module in find_test_modules_under(conftest_dir, dep_tree, root_dir=root_dir)
-    ]
+    """The test modules in each conftest directory and below (see :func:`find_test_modules_under`)."""
+    return _test_modules_under(conftest_dirs, dep_tree, root_dir)
 
 
 class _CodeRoles:
@@ -303,7 +286,8 @@ class _CodeRoles:
 def _relative(path: Path, root_dir: Path) -> str:
     """*path* relative to the project root, for messages."""
     root = canonical_root(root_dir)
-    return path.resolve().relative_to(root).as_posix() if _is_under(path, root) else str(path)
+    resolved = path.resolve()
+    return resolved.relative_to(root).as_posix() if resolved.is_relative_to(root) else str(path)
 
 
 def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
@@ -464,7 +448,10 @@ class ImpactStrategy(ABC):
         Args:
             changed_files: List of file paths that have changed
             impacted_modules: The ``dep_tree`` nodes the changed ``.py`` files resolve to,
-                by node ``path``, before enrichment; conftests above the packages included
+                by node ``path``, before enrichment; conftests above the packages included,
+                and, after enrichment, every module inside the package of a changed
+                ``__init__.py``, which importing any of them runs
+                (:func:`~pytest_impacted.graph.package_members`)
             ns_module: The namespace module being analyzed
             tests_package: Optional tests package name
             root_dir: Project root (the pytest rootdir); may be below the git root
@@ -520,7 +507,7 @@ class PytestImpactStrategy(ImpactStrategy):
         dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Find impacted tests including pytest-specific dependencies."""
-        reached = _reached(impacted_modules, dep_tree)
+        reached = reached_from(impacted_modules, dep_tree)
         if session_wide := _session_wide_changes(reached, dep_tree, session):
             # pytest registers plugins for the whole session: their fixtures and
             # hooks are visible to every test, wherever they were declared.
@@ -538,7 +525,7 @@ class PytestImpactStrategy(ImpactStrategy):
                 impacted_modules, dep_tree, ns_module, tests_package, root_dir, application=False
             )
             conftest_dirs = _changed_conftest_dirs(changed_files, root_dir)
-            conftest_dirs |= _conftest_dirs(_reached(test_code, dep_tree), dep_tree, root_dir)
+            conftest_dirs |= _conftest_dirs(reached_from(test_code, dep_tree), dep_tree, root_dir)
             impacted_tests += _tests_under_conftests(conftest_dirs, dep_tree, root_dir)
         return sorted(set(impacted_tests))
 
@@ -573,7 +560,7 @@ class ConftestImportImpactStrategy(ImpactStrategy):
         if root_dir is None:
             return []
         application = _changes_by_role(impacted_modules, dep_tree, ns_module, tests_package, root_dir, application=True)
-        conftest_dirs = _conftest_dirs(_reached(application, dep_tree), dep_tree, root_dir)
+        conftest_dirs = _conftest_dirs(reached_from(application, dep_tree), dep_tree, root_dir)
         if not self.report_only:
             return _tests_under_conftests(conftest_dirs, dep_tree, root_dir)
         if conftest_dirs:
@@ -610,9 +597,13 @@ def _changes_by_role(
 
     @cache
     def application_depends_on() -> set[str]:
-        # Everything application code reaches through its imports, in one walk up the graph.
+        # Everything application code reaches through its imports, in one walk up the graph —
+        # its imports alone: a changed __init__'s ``runs_init`` link only reaches, never places.
         sources = [node for node in dep_tree if not dep_tree.nodes[node].get("external") and is_application_file(node)]
-        return set().union(*nx.bfs_layers(dep_tree.reverse(copy=False), sources))
+        imports = dep_tree
+        if dep_tree.graph.get("runs_init"):  # only runs with a changed __init__ have any to skip
+            imports = nx.subgraph_view(dep_tree, filter_edge=lambda u, v: not dep_tree.edges[u, v].get("runs_init"))
+        return set().union(*nx.bfs_layers(nx.reverse_view(imports), sources))
 
     def is_application_code(module: str) -> bool:
         if not dep_tree.nodes[module].get("external"):

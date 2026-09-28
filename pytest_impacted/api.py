@@ -15,7 +15,13 @@ import networkx as nx
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
-from pytest_impacted.graph import is_test_node, link_changed_files, resolve_files_to_nodes
+from pytest_impacted.graph import (
+    is_test_node,
+    link_changed_files,
+    package_members,
+    reached_from,
+    resolve_files_to_nodes,
+)
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
@@ -80,18 +86,21 @@ def build_strategy_with_extensions(
     return CompositeImpactStrategy(builtin_strategies + ext_strategies)
 
 
-def _notify_untested(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
-    """Name the changed files linked in for the run that no test depends on, themselves included.
+def _notify_untested(linked: dict[str, str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
+    """Name the changed files linked in for the run (``{node: file}``) that no test depends on, themselves included.
 
     Only that: import analysis selects no tests for them, but another strategy still may
     (``setup.py`` is a dependency file, a changed ``conftest.py`` selects its directory).
+    Judged on the enriched graph, where an extension may have removed a linked node.
     """
     root = canonical_root(root_dir)
-    untested = sorted(
-        Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix()
-        for node in linked
-        if not any(is_test_node(dep_tree, reached) for reached in nx.dfs_preorder_nodes(dep_tree, node))
-    )
+
+    def tested(node: str, file: str) -> bool:
+        # An ``__init__.py`` changes its whole package: ``backend/__init__.py`` above the walks.
+        changed = [node, *package_members([file], dep_tree, root)]
+        return any(is_test_node(dep_tree, reached) for reached in reached_from(changed, dep_tree))
+
+    untested = sorted(file for node, file in linked.items() if node in dep_tree and not tested(node, file))
     if untested:
         pronoun = "it" if len(untested) == 1 else "them"
         notify(f"Import analysis selects no tests for {untested}: no test depends on {pronoun}.", session)
@@ -186,17 +195,15 @@ def get_impacted_tests(
     dep_tree = run_copy(cached)
 
     # A changed file the graph lacks — deleted, or no walk reaches it — joins the run's copy,
-    # linked to whatever still imports it; say so for one no test depends on.
-    _notify_untested(link_changed_files(impacted_files, dep_tree, root_dir=root_dir), dep_tree, root_dir, session)
+    # linked to whatever still imports it (a changed __init__.py, to importers of missing names in it).
+    # Named now, from the run's own paths (all inside the rootdir): an extension may move them.
+    linked = {
+        node: Path(dep_tree.nodes[node]["path"]).relative_to(canonical_root(root_dir)).as_posix()
+        for node in link_changed_files(impacted_files, dep_tree, root_dir=root_dir)
+    }
 
-    # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
-    impacted_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
-    if not impacted_modules:
-        notify(
-            f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
-            "Continuing to strategy pipeline.",
-            session,
-        )
+    # Resolved through the graph, before enrichment, so every changed module is one of its nodes.
+    changed_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
 
     # Enrichment phase — runs before setup so that setup and find_impacted_tests
     # both see the final graph (with any synthetic edges added by extensions).
@@ -208,6 +215,20 @@ def get_impacted_tests(
         root_dir=root_dir,
         session=session,
     )
+
+    # Importing any module of a package runs its __init__.py first: a changed one changes them
+    # all — after enrichment, so a node an extension added inside the package counts too.
+    changed = set(changed_modules)
+    inside = [module for module in package_members(impacted_files, dep_tree, root_dir) if module not in changed]
+    impacted_modules = changed_modules + inside
+    # Say so for a linked file no test depends on — judged on the enriched graph.
+    _notify_untested(linked, dep_tree, root_dir, session)
+    if not impacted_modules:
+        notify(
+            f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
+            "Continuing to strategy pipeline.",
+            session,
+        )
 
     # Lifecycle: setup → find_impacted_tests → teardown. The try/finally
     # guarantees teardown runs even if find_impacted_tests raises, so
@@ -236,7 +257,12 @@ def get_impacted_tests(
     if not impacted_test_modules:
         warn(
             "No unit-test modules impacted by the changes could be detected. "
-            + f"Impacted Python modules were: {impacted_modules}",
+            + f"Impacted Python modules were: {changed_modules}"
+            + (
+                f" and {len(inside)} {'module' if len(inside) == 1 else 'modules'} inside the changed packages"
+                if inside
+                else ""
+            ),
             session,
         )
         return None

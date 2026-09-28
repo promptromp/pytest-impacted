@@ -1,5 +1,6 @@
 """Unit-tests for the api module."""
 
+import sys
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
@@ -9,7 +10,13 @@ import pytest
 from pytest_impacted import graph
 from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
-from pytest_impacted.strategies import ImpactStrategy, cached_build_dep_tree, run_copy
+from pytest_impacted.strategies import (
+    CompositeImpactStrategy,
+    ImpactStrategy,
+    cached_build_dep_tree,
+    get_default_strategies,
+    run_copy,
+)
 
 from .git_helpers import write_files
 
@@ -927,3 +934,541 @@ def test_a_full_run_does_not_list_a_deleted_test_module(tmp_path):
     result, _ = _run_with_notices(tmp_path, ["uv.lock", "tests/test_base.py"], ns_module="pkg", tests_dir="tests")
 
     assert result == ["tests/test_child.py"]
+
+
+# An edited ``__init__.py`` runs first whenever anything inside its package is imported:
+# ``from app.core.x import f`` runs ``app/__init__.py`` and ``app/core/__init__.py``.
+
+
+def _package(prefix: str) -> dict[str, str]:
+    """``app`` under *prefix*, and tests outside it that each import one module from it by its full name."""
+    app = f"{prefix}app"
+    return {
+        f"{app}/__init__.py": "",
+        f"{app}/core/__init__.py": "import os\n",
+        f"{app}/core/x.py": "def f():\n    pass\n",
+        f"{app}/core/sub/__init__.py": "",
+        f"{app}/core/sub/deep.py": "",
+        f"{app}/core/ns/leaf.py": "",  # a namespace portion inside the package
+        f"{app}/core_utils.py": "",  # siblings whose names start like the package's
+        f"{app}/corex/__init__.py": "",
+        f"{app}/corex/y.py": "",
+        f"{app}/other.py": "",
+        "tests/test_x.py": "from app.core.x import f\n",
+        "tests/test_deep.py": "import app.core.sub.deep\n",
+        "tests/test_leaf.py": "import app.core.ns.leaf\n",
+        "tests/test_utils.py": "import app.core_utils\n",
+        "tests/test_corex.py": "import app.corex.y\n",
+        "tests/test_other.py": "import app.other\n",
+        "tests/test_none.py": "import os\n",
+    }
+
+
+def _tests(*names: str) -> list[str]:
+    return [f"tests/test_{name}.py" for name in sorted(names)]
+
+
+@pytest.mark.parametrize("prefix", ["", "src/"], ids=["flat", "src_layout"])
+@pytest.mark.parametrize(
+    ("edited", "expected"),
+    [
+        pytest.param("app/core/__init__.py", _tests("deep", "leaf", "x"), id="a_subpackage_init"),
+        pytest.param("app/core/sub/__init__.py", _tests("deep"), id="a_nested_subpackage_init"),
+        pytest.param("app/corex/__init__.py", _tests("corex"), id="a_sibling_named_like_it"),
+        pytest.param(
+            "app/__init__.py", _tests("corex", "deep", "leaf", "other", "utils", "x"), id="the_package_root_init"
+        ),
+        pytest.param("app/core/x.py", _tests("x"), id="a_module_is_not_a_package"),
+    ],
+)
+def test_an_edited_init_selects_the_tests_importing_anything_inside_its_package(tmp_path, prefix, edited, expected):
+    write_files(tmp_path, _package(prefix))
+
+    result, _ = _run_with_notices(tmp_path, [prefix + edited], ns_module=f"{prefix}app", tests_dir="tests")
+
+    assert result == expected
+
+
+@pytest.mark.parametrize("prefix", ["", "src/"], ids=["flat", "src_layout"])
+def test_a_deleted_init_selects_the_tests_importing_anything_inside_its_package(tmp_path, prefix):
+    """``app/core`` is a namespace package now: its modules still import, without the old ``__init__``."""
+    write_files(tmp_path, _package(prefix))
+    (tmp_path / f"{prefix}app/core/__init__.py").unlink()
+
+    result, _ = _run_with_notices(
+        tmp_path, [f"{prefix}app/core/__init__.py"], ns_module=f"{prefix}app", tests_dir="tests"
+    )
+
+    assert result == _tests("deep", "leaf", "x")
+
+
+def test_an_added_init_selects_the_tests_importing_anything_inside_its_package(tmp_path):
+    write_files(tmp_path, {**_package(""), "app/core/ns/__init__.py": ""})
+
+    result, _ = _run_with_notices(tmp_path, ["app/core/ns/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == _tests("leaf")
+
+
+TESTS_PACKAGE = {
+    "app/__init__.py": "",
+    "tests/__init__.py": "",
+    "tests/unit/__init__.py": "",
+    "tests/unit/test_a.py": "",
+    "tests/integration/test_b.py": "",  # a namespace portion: still ``tests.integration.test_b``
+}
+
+
+@pytest.mark.parametrize(
+    ("tests_dir", "edited", "expected"),
+    [
+        pytest.param(
+            "tests", "tests/__init__.py", ["tests/integration/test_b.py", "tests/unit/test_a.py"], id="the_tests_init"
+        ),
+        pytest.param("tests", "tests/unit/__init__.py", ["tests/unit/test_a.py"], id="a_nested_tests_init"),
+        pytest.param("tests/unit", "tests/__init__.py", ["tests/unit/test_a.py"], id="an_init_above_the_tests_dir"),
+    ],
+)
+def test_an_edited_init_in_the_tests_dir_selects_the_tests_inside_its_package(tmp_path, tests_dir, edited, expected):
+    write_files(tmp_path, TESTS_PACKAGE)
+
+    result, _ = _run_with_notices(tmp_path, [edited], ns_module="app", tests_dir=tests_dir)
+
+    assert [file for file in result if not file.endswith("__init__.py")] == expected
+
+
+ABOVE_THE_MODULE = {
+    "backend/__init__.py": "import os\n",
+    "backend/app/__init__.py": "",
+    "backend/app/x.py": "",
+    "suite/test_x.py": "import backend.app.x\n",
+    "suite/test_other.py": "",
+}
+
+
+def test_an_edited_init_above_the_analysed_package_selects_the_tests_importing_it(tmp_path):
+    """``import backend.app.x`` runs ``backend/__init__.py``, which no walk reaches: no notice either."""
+    write_files(tmp_path, ABOVE_THE_MODULE)
+
+    result, notices = _run_with_notices(tmp_path, ["backend/__init__.py"], ns_module="backend/app", tests_dir="suite")
+
+    assert result == ["suite/test_x.py"]
+    assert not [notice for notice in notices if UNIMPORTED in notice]
+
+
+def test_an_edited_init_above_both_analysed_dirs_selects_the_tests_inside_it(tmp_path):
+    files = {**ABOVE_THE_MODULE, "backend/tests/__init__.py": "", "backend/tests/test_y.py": "", "suite/test_x.py": ""}
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["backend/__init__.py"], ns_module="backend/app", tests_dir="backend/tests")
+
+    assert [file for file in result if not file.endswith("__init__.py")] == ["backend/tests/test_y.py"]
+
+
+def test_an_edited_init_whose_package_no_test_uses_is_named_in_the_notice(tmp_path):
+    write_files(tmp_path, {**ABOVE_THE_MODULE, "scripts/tools/__init__.py": "", "scripts/tools/run.py": ""})
+
+    result, notices = _run_with_notices(
+        tmp_path, ["scripts/tools/__init__.py"], ns_module="backend/app", tests_dir="suite"
+    )
+
+    assert result == []
+    assert [notice for notice in notices if UNIMPORTED in notice and "scripts/tools/__init__.py" in notice]
+
+
+CONFTEST_REACHES_THE_PACKAGE = {
+    "app/__init__.py": "",
+    "app/core/__init__.py": "",
+    "app/core/x.py": "def f():\n    pass\n",
+    "suite/conftest.py": "from app.core.x import f\n",
+    "suite/test_x.py": "import app.core.x\n",
+    "suite/test_a.py": "",
+}
+
+
+@pytest.mark.parametrize(
+    ("conftest_imports", "expected"),
+    [
+        pytest.param(False, ["suite/test_x.py"], id="default"),
+        pytest.param(True, ["suite/test_a.py", "suite/test_x.py"], id="opted_in"),
+    ],
+)
+def test_an_edited_init_is_application_code_to_a_conftest_importing_its_package(tmp_path, conftest_imports, expected):
+    write_files(tmp_path, CONFTEST_REACHES_THE_PACKAGE)
+
+    with patch("pytest_impacted.strategies.notify") as notify:
+        result, _ = _run_with_notices(
+            tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="suite", conftest_imports=conftest_imports
+        )
+
+    assert result == expected
+    named = [call for call in notify.call_args_list if "['suite/conftest.py']" in call.args[0]]
+    assert bool(named) is not conftest_imports
+
+
+def test_an_edited_init_of_a_package_holding_a_pytest_plugin_selects_every_test(tmp_path):
+    """``pytest_plugins = ["app.testing.fixtures"]`` runs ``app/testing/__init__.py`` for the whole session."""
+    files = {
+        "app/__init__.py": "",
+        "app/core.py": "",
+        "app/testing/__init__.py": "",
+        "app/testing/fixtures.py": "",
+        "suite/conftest.py": 'pytest_plugins = ["app.testing.fixtures"]\n',
+        "suite/test_core.py": "import app.core\n",
+        "suite/test_a.py": "",
+    }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["app/testing/__init__.py"], ns_module="app", tests_dir="suite")
+
+    assert result == ["suite/test_a.py", "suite/test_core.py"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_an_edited_init_selects_the_tests_importing_a_module_symlinked_into_its_package(tmp_path):
+    """``app/plugins -> ../shared/plugins``: ``import app.plugins.p`` runs ``app/__init__.py``, wherever the file is."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "shared/plugins/p.py": "",
+            "tests/test_p.py": "import app.plugins.p\n",
+            "tests/test_q.py": "",
+        },
+    )
+    (tmp_path / "app/plugins").symlink_to(tmp_path / "shared/plugins", target_is_directory=True)
+
+    result, _ = _run_with_notices(tmp_path, ["app/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == ["tests/test_p.py"]
+
+
+def test_an_edited_init_selects_the_tests_importing_a_missing_optional_module_inside_its_package(tmp_path):
+    """``try: import app.backends.fast`` runs ``app/backends/__init__.py``, whether or not ``fast`` exists."""
+    optional = "try:\n    import app.backends.fast\nexcept ImportError:\n    fast = None\n"
+    files = {
+        "app/__init__.py": "",
+        "app/backends/__init__.py": "",
+        "tests/test_fast.py": optional,
+        "tests/test_a.py": "",
+    }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["app/backends/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == ["tests/test_fast.py"]
+
+
+@pytest.mark.parametrize(
+    ("conftest", "conftest_imports", "expected"),
+    [
+        pytest.param("from app.core import helper\n", False, ["suite/test_x.py"], id="a_symbol_default"),
+        pytest.param(
+            "from app.core import helper\n", True, ["suite/test_a.py", "suite/test_x.py"], id="a_symbol_opted_in"
+        ),
+        pytest.param(
+            "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+            False,
+            ["suite/test_x.py"],
+            id="optional_default",
+        ),
+        pytest.param(
+            "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+            True,
+            ["suite/test_a.py", "suite/test_x.py"],
+            id="optional_opted_in",
+        ),
+    ],
+)
+def test_a_conftest_reached_through_an_edited_init_is_still_opt_in(tmp_path, conftest, conftest_imports, expected):
+    """The conftest imports from the package: it is reached by application code, not changed test code."""
+    write_files(tmp_path, {**CONFTEST_REACHES_THE_PACKAGE, "suite/conftest.py": conftest})
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="suite", conftest_imports=conftest_imports
+    )
+
+    assert result == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_deleted_init_selects_the_tests_of_a_symlinked_module_and_an_optional_import(tmp_path):
+    files = {
+        **_package(""),
+        "shared/link.py": "",
+        "tests/test_link.py": "import app.core.link\n",
+        "tests/test_opt.py": "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+    }
+    write_files(tmp_path, files)
+    (tmp_path / "app/core/link.py").symlink_to(tmp_path / "shared/link.py")
+    (tmp_path / "app/core/__init__.py").unlink()
+
+    result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == _tests("deep", "leaf", "link", "opt", "x")
+
+
+def test_a_node_an_extension_adds_inside_an_edited_package_is_impacted(tmp_path):
+    """Members are found after enrichment: a generated module, its file elsewhere, named inside ``app.core``."""
+
+    class Codegen:
+        def enrich_dep_tree(self, dep_tree, root_dir, **kwargs):
+            dep_tree.add_node("app.core.generated", path=str(root_dir.resolve() / "build/generated.py"))
+            dep_tree.add_edge("app.core.generated", "tests.test_generated")
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {**_package(""), "tests/test_generated.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Codegen()])
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == _tests("deep", "generated", "leaf", "x")
+
+
+@pytest.mark.parametrize("through_a_plugin", [False, True], ids=["a_test", "a_pytest_plugin"])
+def test_an_edit_reaching_an_init_selects_no_importer_of_a_namespace_portion_inside(tmp_path, through_a_plugin):
+    """``from app.ns import mod`` runs ``app/__init__.py``, which imports ``app.heavy``: like any importer of a
+    sub-module, it is not linked to what the ``__init__`` imports, or that facade would select nearly everything."""
+    files = {
+        "app/__init__.py": "from app.heavy import H\n",
+        "app/heavy.py": "",
+        "app/ns/mod.py": "",
+        "suite/test_ns.py": "from app.ns import mod\n",
+        "suite/test_heavy.py": "from app import H\n",
+    }
+    if through_a_plugin:
+        files |= {
+            "suite/conftest.py": 'pytest_plugins = ["suite.plugin"]\n',
+            "suite/plugin.py": "from app.ns import mod\n",
+        }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["app/heavy.py"], ns_module="app", tests_dir="suite")
+
+    assert result == ["suite/test_heavy.py"]
+
+
+def test_an_edited_fixture_package_init_stays_test_code_though_application_code_imports_a_module_of_it(tmp_path):
+    """``testing.fixtures`` is found, a member of the package: no link from ``testing`` to its importers, which
+    would make ``testing`` look like something application code depends on, and the conftest rule opt-in."""
+    files = {
+        "app/__init__.py": "",
+        "app/core.py": "from suite.helpers import make\n",
+        "testing/__init__.py": "",
+        "testing/fixtures.py": "",
+        "conftest.py": "from testing import fixtures\n",
+        "suite/helpers.py": "import testing.fixtures\n\ndef make():\n    pass\n",
+        "suite/test_a.py": "",
+    }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["testing/__init__.py"], ns_module="app", tests_dir="suite")
+
+    assert result == ["suite/test_a.py"]
+
+
+OPTIONAL_SHARED = "try:\n    import shared.gone\nexcept ImportError:\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    ("core", "conftest_imports", "expected"),
+    [
+        pytest.param(OPTIONAL_SHARED, False, ["suite/test_a.py"], id="optional"),
+        pytest.param(OPTIONAL_SHARED, True, ["suite/test_a.py"], id="optional_opted_in"),
+        pytest.param("from shared import gone\n", False, [], id="the_package_too"),
+        pytest.param("from shared import gone\n", True, ["suite/test_a.py"], id="the_package_too_opted_in"),
+    ],
+)
+def test_a_link_to_an_optional_importer_places_no_package(tmp_path, core, conftest_imports, expected):
+    """``app/core.py`` optionally imports ``shared.gone``: the edited ``shared/__init__.py`` is linked to it, but
+    only to reach it — it does not make ``shared`` application code, which would make the conftest rule opt-in.
+    ``from shared import gone`` imports ``shared`` itself too, and that does place it, as on 0.33.0."""
+    files = {
+        "app/__init__.py": "",
+        "app/core.py": core,
+        "shared/__init__.py": "",
+        "suite/conftest.py": "import shared\n",
+    }
+    write_files(tmp_path, {**files, "suite/test_a.py": ""})
+
+    result, _ = _run_with_notices(
+        tmp_path, ["shared/__init__.py"], ns_module="app", tests_dir="suite", conftest_imports=conftest_imports
+    )
+
+    assert result == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_an_edited_init_selects_the_tests_importing_a_sibling_symlinked_into_its_package(tmp_path):
+    """``app/core/linked -> ../other``: ``app/other/m.py`` is ``app.other.m``, imported as ``app.core.linked.m``
+    too (an alias) — which runs ``app/core/__init__.py``."""
+    files = {"app/__init__.py": "", "app/core/__init__.py": "", "app/other/m.py": "", "tests/test_b.py": ""}
+    write_files(tmp_path, {**files, "tests/test_m.py": "from app.core.linked.m import f\n"})
+    (tmp_path / "app/core/linked").symlink_to(tmp_path / "app/other", target_is_directory=True)
+
+    result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == ["tests/test_m.py"]
+
+
+def test_the_notice_survives_an_extension_removing_a_linked_node(tmp_path):
+    """No crash: the changed module is no node any more, which conservatively means every test."""
+
+    class Prune:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.remove_nodes_from([node for node in dep_tree if node.startswith("scripts")])
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {"app/__init__.py": "", "scripts/tool.py": "", "tests/test_a.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Prune()])
+
+    result, notices = _run_with_notices(
+        tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == ["tests/test_a.py"]
+    assert not [notice for notice in notices if UNIMPORTED in notice]
+
+
+def test_an_extension_reading_the_path_of_every_impacted_module_finds_one(tmp_path):
+    """A pathless node an extension adds inside the edited package is no member: 0.33.0's modules all had one."""
+    seen = []
+
+    class Reader:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.add_edge("app.core.generated", "tests.test_x")
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+            seen.extend(Path(dep_tree.nodes[module]["path"]).name for module in impacted_modules)
+            return []
+
+    write_files(tmp_path, _package(""))
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Reader()])
+
+    _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests", strategy=strategy)
+
+    assert "__init__.py" in seen
+
+
+def test_the_notice_survives_an_extension_moving_a_linked_node(tmp_path):
+    """Its file is named from the run's own path, before enrichment: an extension may point it anywhere."""
+
+    class Relocate:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.nodes["scripts.tool"]["path"] = "/elsewhere/tool.py"
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {"app/__init__.py": "", "scripts/tool.py": "", "tests/test_a.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Relocate()])
+
+    result, notices = _run_with_notices(
+        tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == []
+    assert [notice for notice in notices if UNIMPORTED in notice and "scripts/tool.py" in notice]
+
+
+def _add_a_tuple_node(dep_tree):
+    dep_tree.add_node(("generated", 1), test=False)
+
+
+def _bind_a_tuple_node(dep_tree):
+    dep_tree.add_edge("app.core.x", ("binding", "Service"))
+    dep_tree.nodes[("binding", "Service")]["test"] = False
+
+
+def _bind_a_bare_tuple_node(dep_tree):
+    dep_tree.add_edge("app.core.x", ("binding", "Bare"))
+
+
+def _give_a_path_of_the_wrong_type(dep_tree):
+    dep_tree.nodes["app.other"]["path"] = ("app/other.py", 0)
+
+
+@pytest.mark.parametrize(
+    "enrich", [_add_a_tuple_node, _bind_a_tuple_node, _bind_a_bare_tuple_node, _give_a_path_of_the_wrong_type]
+)
+@pytest.mark.parametrize("change", ["edit", "delete"])
+@pytest.mark.parametrize("conftest_imports", [False, True], ids=["default", "opted_in"])
+def test_an_edited_init_survives_any_node_or_path_an_extension_adds(tmp_path, enrich, change, conftest_imports):
+    """Any hashable node, any ``path`` value: the members of a changed package reach more of the graph than 0.33.0
+    did, and a deleted ``__init__`` linked to an optional importer places external nodes — neither may crash."""
+
+    class Odd:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            enrich(dep_tree)
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    files = {
+        "app/__init__.py": "",
+        "app/core/__init__.py": "",
+        "app/core/x.py": "",
+        "app/other.py": "",
+        "tests/test_fast.py": "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+        "tests/test_x.py": "import app.core.x\n",
+    }
+    write_files(tmp_path, files)
+    if change == "delete":
+        (tmp_path / "app/core/__init__.py").unlink()
+    strategy = CompositeImpactStrategy([*get_default_strategies(conftest_imports=conftest_imports), Odd()])
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == ["tests/test_fast.py", "tests/test_x.py"]
+
+
+def test_the_notice_is_judged_after_extensions_enrich_the_graph(tmp_path):
+    """An extension links the changed script to a test: some test depends on it after all."""
+
+    class Wiring:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.add_edge("scripts.tool", "tests.test_a")
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {"app/__init__.py": "", "scripts/tool.py": "", "tests/test_a.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Wiring()])
+
+    result, notices = _run_with_notices(
+        tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == ["tests/test_a.py"]
+    assert not [notice for notice in notices if UNIMPORTED in notice]
+
+
+def test_the_warning_for_a_deleted_init_selecting_nothing_counts_the_modules_inside(tmp_path):
+    write_files(tmp_path, {"app/__init__.py": "", "app/core/x.py": "", "tests/test_a.py": ""})
+
+    with patch("pytest_impacted.api.warn") as warn:
+        result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == []
+    assert "[] and 1 module inside the changed packages" in warn.call_args.args[0]
+
+
+def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module_only(tmp_path):
+    """A package's modules are impacted through its ``__init__``, but the message names what changed."""
+    write_files(
+        tmp_path, {"app/__init__.py": "", "app/core/__init__.py": "", "app/core/x.py": "", "tests/test_a.py": ""}
+    )
+
+    with patch("pytest_impacted.api.warn") as warn:
+        result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == []
+    assert "['app.core']" in warn.call_args.args[0]
