@@ -91,7 +91,9 @@ to its modules: edges would also make every importer of `app.*` depend on everyt
 `app/__init__.py` imports, turning an edit to any re-exported module into a near-full run.
 Members are found by path (the package directory and below; deleted and added `__init__.py`
 files included) and by name (inside the package's importable names, or any package node's
-there: a module symlinked in lives elsewhere, an extension's node may have no file).
+there: a module symlinked in lives elsewhere, as may one an extension generates). Only string
+nodes with a `path`: extensions may add any hashable node, and read the `path` of every impacted
+module, as 0.33.0's all had one.
 An import of a *missing* module (`try: import app.core.fast`) is different: it has no node to be
 a member, and its importer must be *reached*, never changed — a changed conftest selects its whole
 directory, bypassing `--impacted-conftest-imports`. Nor may it be a graph edge from the package:

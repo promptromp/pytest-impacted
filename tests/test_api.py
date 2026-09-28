@@ -1209,10 +1209,11 @@ def test_a_deleted_init_selects_the_tests_of_a_symlinked_module_and_an_optional_
 
 
 def test_a_node_an_extension_adds_inside_an_edited_package_is_impacted(tmp_path):
-    """Members are found after enrichment: a generated module without a file, named inside ``app.core``."""
+    """Members are found after enrichment: a generated module, its file elsewhere, named inside ``app.core``."""
 
     class Codegen:
-        def enrich_dep_tree(self, dep_tree, **kwargs):
+        def enrich_dep_tree(self, dep_tree, root_dir, **kwargs):
+            dep_tree.add_node("app.core.generated", path=str(root_dir.resolve() / "build/generated.py"))
             dep_tree.add_edge("app.core.generated", "tests.test_generated")
 
         def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
@@ -1330,6 +1331,47 @@ def test_the_notice_survives_an_extension_removing_a_linked_node(tmp_path):
     result, _ = _run_with_notices(tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy)
 
     assert result == ["tests/test_a.py"]
+
+
+def test_an_extension_reading_the_path_of_every_impacted_module_finds_one(tmp_path):
+    """A pathless node an extension adds inside the edited package is no member: 0.33.0's modules all had one."""
+    seen = []
+
+    class Reader:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.add_edge("app.core.generated", "tests.test_x")
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, *, dep_tree, **kwargs):
+            seen.extend(Path(dep_tree.nodes[module]["path"]).name for module in impacted_modules)
+            return []
+
+    write_files(tmp_path, _package(""))
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Reader()])
+
+    _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests", strategy=strategy)
+
+    assert "__init__.py" in seen
+
+
+def test_the_notice_survives_an_extension_moving_a_linked_node(tmp_path):
+    """Its file is named from the run's own path, before enrichment: an extension may point it anywhere."""
+
+    class Relocate:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.nodes["scripts.tool"]["path"] = "/elsewhere/tool.py"
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, {"app/__init__.py": "", "scripts/tool.py": "", "tests/test_a.py": ""})
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Relocate()])
+
+    result, notices = _run_with_notices(
+        tmp_path, ["scripts/tool.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == []
+    assert [notice for notice in notices if UNIMPORTED in notice and "scripts/tool.py" in notice]
 
 
 def test_the_notice_is_judged_after_extensions_enrich_the_graph(tmp_path):

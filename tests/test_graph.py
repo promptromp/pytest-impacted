@@ -1117,14 +1117,27 @@ def test_package_members_of_the_rootdirs_own_init_are_every_node(tmp_path):
 
 
 def test_package_members_include_a_node_an_extension_named_inside_the_package(tmp_path):
-    """No ``path`` to place it by, but its name is inside ``app.core``; ``app.corex.gen``'s is not."""
+    """Its file is generated elsewhere, but its name is inside ``app.core``; ``app.corex.gen``'s is not. A node
+    without a ``path`` is never one: extensions may read the ``path`` of every impacted module."""
     write_files(tmp_path, PACKAGE)
     dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
-    dep_tree.add_nodes_from(["app.core.generated", "app.corex.gen"])
+    build = str(tmp_path.resolve() / "build")
+    dep_tree.add_nodes_from(["app.core.generated", "app.corex.gen"], path=f"{build}/gen.py")
+    dep_tree.add_node("app.core.pathless")
 
     assert graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path) == sorted(
         [*CORE, "app.core.generated"]
     )
+
+
+def test_package_members_are_graph_nodes_named_by_strings(tmp_path):
+    """An extension may add any hashable node, and leave an alias to a node it removed."""
+    write_files(tmp_path, PACKAGE)
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+    dep_tree.add_node(("codegen", "x"), path=str(tmp_path.resolve() / "app/core/x.json"), test=False)
+    dep_tree.graph["aliases"]["app.core.ghost"] = "removed.node"
+
+    assert graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path) == CORE
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
@@ -1156,7 +1169,7 @@ def test_package_members_include_a_node_an_extension_named_by_the_packages_alias
     """``company.app`` is an alias of ``app`` (``src/company/`` is no package): ``company.app.gen`` is inside it."""
     write_files(tmp_path, {"src/company/app/__init__.py": "", "src/company/app/x.py": ""})
     dep_tree = run_copy(graph.build_dep_tree("src/company/app", root_dir=tmp_path))
-    dep_tree.add_nodes_from(["company.app.gen", "company.appendix"])
+    dep_tree.add_nodes_from(["company.app.gen", "company.appendix"], path=str(tmp_path.resolve() / "build/gen.py"))
 
     members = graph.package_members(["src/company/app/__init__.py"], dep_tree, root_dir=tmp_path)
 

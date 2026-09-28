@@ -86,11 +86,12 @@ def build_strategy_with_extensions(
     return CompositeImpactStrategy(builtin_strategies + ext_strategies)
 
 
-def _notify_untested(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
-    """Name the changed files linked in for the run that no test depends on, themselves included.
+def _notify_untested(linked: dict[str, str], dep_tree: nx.DiGraph, root_dir: str | Path, session: Any) -> None:
+    """Name the changed files linked in for the run (``{node: file}``) that no test depends on, themselves included.
 
     Only that: import analysis selects no tests for them, but another strategy still may
     (``setup.py`` is a dependency file, a changed ``conftest.py`` selects its directory).
+    Judged on the enriched graph, where an extension may have removed a linked node.
     """
     root = canonical_root(root_dir)
 
@@ -99,13 +100,7 @@ def _notify_untested(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Pa
         changed = [node, *package_members([file], dep_tree, root)]
         return any(is_test_node(dep_tree, reached) for reached in reached_from(changed, dep_tree))
 
-    # Judged on the enriched graph: an extension may have removed a linked node, or its path.
-    files = {
-        node: Path(path).relative_to(root).as_posix()
-        for node in linked
-        if node in dep_tree and (path := dep_tree.nodes[node].get("path"))
-    }
-    untested = sorted(file for node, file in files.items() if not tested(node, file))
+    untested = sorted(file for node, file in linked.items() if node in dep_tree and not tested(node, file))
     if untested:
         pronoun = "it" if len(untested) == 1 else "them"
         notify(f"Import analysis selects no tests for {untested}: no test depends on {pronoun}.", session)
@@ -201,7 +196,11 @@ def get_impacted_tests(
 
     # A changed file the graph lacks — deleted, or no walk reaches it — joins the run's copy,
     # linked to whatever still imports it (a changed __init__.py, to importers of missing names in it).
-    linked = link_changed_files(impacted_files, dep_tree, root_dir=root_dir)
+    # Named now, from the run's own paths (all inside the rootdir): an extension may move them.
+    linked = {
+        node: Path(dep_tree.nodes[node]["path"]).relative_to(canonical_root(root_dir)).as_posix()
+        for node in link_changed_files(impacted_files, dep_tree, root_dir=root_dir)
+    }
 
     # Resolved through the graph, before enrichment, so every changed module is one of its nodes.
     changed_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
