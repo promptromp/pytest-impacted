@@ -4,7 +4,7 @@ import logging
 import os
 from collections.abc import Callable, Iterable
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import networkx as nx
 
@@ -99,9 +99,8 @@ def _importable_stem(path: Path) -> str:
 def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     """Resolve impacted tests based on impacted modules.
 
-    The current logic is to do a DFS from the impacted module to find all nodes that depend on it.
-    We then check if these nodes are test modules.
-    We return the list of test modules that are impacted.
+    Every node that depends on an impacted module, directly or transitively
+    (:func:`reached_from`), that is a test module (:func:`is_test_node`).
 
     For modules not found in the dependency tree (e.g. a name an extension passes that is no node):
     - Test modules are included directly as impacted (they changed, so they should run).
@@ -113,36 +112,76 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     all_test_modules_in_tree = [node for node in dep_tree.nodes if is_test_node(dep_tree, node)]
 
     for module in impacted_modules:
-        if module not in dep_tree.nodes:
+        if module in dep_tree.nodes:
+            continue
+        logger.warning(
+            "Module %s is marked as impacted but was not found in dependency tree "
+            "(a name that is no node of the graph).",
+            module,
+        )
+        if is_test_module(module):
+            # Test module changed but not in tree — include it directly.
+            impacted_tests.append(module)
+        else:
+            # Production module changed but not in tree — conservatively
+            # mark all known test modules as impacted.
             logger.warning(
-                "Module %s is marked as impacted but was not found in dependency tree "
-                "(a name that is no node of the graph).",
+                "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
                 module,
             )
-            if is_test_module(module):
-                # Test module changed but not in tree — include it directly.
-                impacted_tests.append(module)
-            else:
-                # Production module changed but not in tree — conservatively
-                # mark all known test modules as impacted.
-                logger.warning(
-                    "Production module %s not in dependency tree; conservatively marking all test modules as impacted.",
-                    module,
-                )
-                impacted_tests.extend(all_test_modules_in_tree)
-            continue
+            impacted_tests.extend(all_test_modules_in_tree)
 
-        dependent_nodes = [
-            node for node in nx.dfs_preorder_nodes(dep_tree, source=module) if is_test_node(dep_tree, node)
-        ]
-
-        impacted_tests.extend(dependent_nodes)
+    impacted_tests.extend(node for node in reached_from(impacted_modules, dep_tree) if is_test_node(dep_tree, node))
 
     # Remove duplicates and sort the list for good measure.
     # (although the order of the tests should not matter)
-    impacted_tests = sorted(set(impacted_tests))
+    return sorted(set(impacted_tests))
 
-    return impacted_tests
+
+def reached_from(modules: Iterable[str], dep_tree: nx.DiGraph) -> set[str]:
+    """Every node that depends, directly or transitively, on *modules* (those that are nodes included).
+
+    One multi-source traversal, not one per module: a package whose ``__init__.py`` changed
+    is thousands of changed modules sharing their dependents (:func:`package_members`).
+    """
+    sources = [module for module in modules if module in dep_tree]
+    return set().union(*nx.bfs_layers(dep_tree, sources))
+
+
+def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:
+    """The nodes inside the package of each changed ``__init__.py`` — edited, added or deleted.
+
+    Importing a module runs every package ``__init__.py`` above it first — ``from app.core.x
+    import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` — but names neither, so no
+    import edge links them: a changed ``__init__.py`` changes every module in its package. A
+    member is a node whose file is in the package's directory or below, or whose name or alias
+    is inside the package node's name or aliases: a module symlinked into the package lives
+    elsewhere, and a node an extension added may have no file.
+    """
+    root = canonical_root(root_dir)
+    inits = {
+        path
+        for file in filenames
+        if PurePosixPath(file).name == "__init__.py"
+        if (path := (root / file).resolve()).is_relative_to(root)
+    }
+    if not inits:
+        return []
+    directories = {init.parent for init in inits}
+    members = {
+        node for node, path in dep_tree.nodes(data="path") if path and not directories.isdisjoint(Path(path).parents)
+    }
+    aliases = dep_tree.graph.get("aliases", {})
+    packages = {node for node, path in dep_tree.nodes(data="path") if path and Path(path) in inits}
+    packages |= {alias for alias, node in aliases.items() if node in packages}
+
+    def inside_a_package(name: str) -> bool:
+        parts = name.split(".")
+        return any(".".join(parts[:end]) in packages for end in range(1, len(parts)))
+
+    members |= {node for node in dep_tree if inside_a_package(node)}
+    members |= {node for alias, node in aliases.items() if node in dep_tree and inside_a_package(alias)}
+    return sorted(members)
 
 
 def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:

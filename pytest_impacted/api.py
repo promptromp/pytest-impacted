@@ -15,7 +15,13 @@ import networkx as nx
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
-from pytest_impacted.graph import is_test_node, link_changed_files, resolve_files_to_nodes
+from pytest_impacted.graph import (
+    is_test_node,
+    link_changed_files,
+    package_members,
+    reached_from,
+    resolve_files_to_nodes,
+)
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
@@ -87,10 +93,14 @@ def _notify_untested(linked: list[str], dep_tree: nx.DiGraph, root_dir: str | Pa
     (``setup.py`` is a dependency file, a changed ``conftest.py`` selects its directory).
     """
     root = canonical_root(root_dir)
+
+    def tested(node: str) -> bool:
+        # An ``__init__.py`` changes its whole package: ``backend/__init__.py`` above the walks.
+        changed = [node, *package_members([dep_tree.nodes[node]["path"]], dep_tree, root)]
+        return any(is_test_node(dep_tree, reached) for reached in reached_from(changed, dep_tree))
+
     untested = sorted(
-        Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix()
-        for node in linked
-        if not any(is_test_node(dep_tree, reached) for reached in nx.dfs_preorder_nodes(dep_tree, node))
+        Path(dep_tree.nodes[node]["path"]).relative_to(root).as_posix() for node in linked if not tested(node)
     )
     if untested:
         pronoun = "it" if len(untested) == 1 else "them"
@@ -190,7 +200,10 @@ def get_impacted_tests(
     _notify_untested(link_changed_files(impacted_files, dep_tree, root_dir=root_dir), dep_tree, root_dir, session)
 
     # Resolved through the graph, before enrichment, so every impacted module is one of its nodes.
-    impacted_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
+    changed_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
+    # Importing any module of a package runs its __init__.py first: a changed one changes them all.
+    members = package_members(impacted_files, dep_tree, root_dir=root_dir)
+    impacted_modules = list(dict.fromkeys([*changed_modules, *members]))
     if not impacted_modules:
         notify(
             f"No impacted Python modules detected. Impacted files were: {impacted_files}. "
@@ -236,7 +249,7 @@ def get_impacted_tests(
     if not impacted_test_modules:
         warn(
             "No unit-test modules impacted by the changes could be detected. "
-            + f"Impacted Python modules were: {impacted_modules}",
+            + f"Impacted Python modules were: {changed_modules}",
             session,
         )
         return None

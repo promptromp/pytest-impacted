@@ -14,7 +14,7 @@ import networkx as nx
 
 from pytest_impacted.display import notify
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
-from pytest_impacted.graph import build_dep_tree, is_test_node, resolve_impacted_tests
+from pytest_impacted.graph import build_dep_tree, is_test_node, reached_from, resolve_impacted_tests
 from pytest_impacted.parsing import is_conftest_module, normalize_path
 from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_application_files
 
@@ -243,15 +243,6 @@ def _outermost(directories: set[Path]) -> list[Path]:
     return kept
 
 
-def _reached(impacted_modules: list[str], dep_tree: nx.DiGraph) -> set[str]:
-    """Every node that depends, directly or transitively, on *impacted_modules* (sources included).
-
-    One multi-source traversal, so a large changeset does not re-walk shared descendants.
-    """
-    sources = [module for module in impacted_modules if module in dep_tree]
-    return set().union(*nx.bfs_layers(dep_tree, sources))
-
-
 def _conftest_dirs(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
     """Directories of the conftests among *nodes*."""
     return {
@@ -464,7 +455,9 @@ class ImpactStrategy(ABC):
         Args:
             changed_files: List of file paths that have changed
             impacted_modules: The ``dep_tree`` nodes the changed ``.py`` files resolve to,
-                by node ``path``, before enrichment; conftests above the packages included
+                by node ``path``, before enrichment; conftests above the packages included,
+                and every module inside the package of a changed ``__init__.py``, which
+                importing any of them runs (:func:`~pytest_impacted.graph.package_members`)
             ns_module: The namespace module being analyzed
             tests_package: Optional tests package name
             root_dir: Project root (the pytest rootdir); may be below the git root
@@ -520,7 +513,7 @@ class PytestImpactStrategy(ImpactStrategy):
         dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Find impacted tests including pytest-specific dependencies."""
-        reached = _reached(impacted_modules, dep_tree)
+        reached = reached_from(impacted_modules, dep_tree)
         if session_wide := _session_wide_changes(reached, dep_tree, session):
             # pytest registers plugins for the whole session: their fixtures and
             # hooks are visible to every test, wherever they were declared.
@@ -538,7 +531,7 @@ class PytestImpactStrategy(ImpactStrategy):
                 impacted_modules, dep_tree, ns_module, tests_package, root_dir, application=False
             )
             conftest_dirs = _changed_conftest_dirs(changed_files, root_dir)
-            conftest_dirs |= _conftest_dirs(_reached(test_code, dep_tree), dep_tree, root_dir)
+            conftest_dirs |= _conftest_dirs(reached_from(test_code, dep_tree), dep_tree, root_dir)
             impacted_tests += _tests_under_conftests(conftest_dirs, dep_tree, root_dir)
         return sorted(set(impacted_tests))
 
@@ -573,7 +566,7 @@ class ConftestImportImpactStrategy(ImpactStrategy):
         if root_dir is None:
             return []
         application = _changes_by_role(impacted_modules, dep_tree, ns_module, tests_package, root_dir, application=True)
-        conftest_dirs = _conftest_dirs(_reached(application, dep_tree), dep_tree, root_dir)
+        conftest_dirs = _conftest_dirs(reached_from(application, dep_tree), dep_tree, root_dir)
         if not self.report_only:
             return _tests_under_conftests(conftest_dirs, dep_tree, root_dir)
         if conftest_dirs:

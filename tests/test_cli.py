@@ -453,6 +453,28 @@ def test_the_cli_prints_the_impacted_test_files_of_a_real_repo(make_git_project,
     assert result.stdout.splitlines() == [str((project.path / "suite/test_db.py").resolve())]
 
 
+def test_the_cli_prints_the_tests_importing_anything_inside_an_edited_package(make_git_project, monkeypatch, tmp_path):
+    project = make_git_project(
+        {
+            "src/app/__init__.py": "",
+            "src/app/core/__init__.py": "READY = True\n",
+            "src/app/core/db.py": "X = 1\n",
+            "suite/test_db.py": "from app.core.db import X\n\ndef test_db():\n    assert X\n",
+            "suite/test_other.py": "def test_other():\n    assert True\n",
+        },
+        "[pytest]\n",
+    )
+    edit_file(project, "src/app/core/__init__.py")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        impacted_tests_cli, ["--root-dir", str(project.path), "--module", "src/app", "--tests-dir", "suite"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [str((project.path / "suite/test_db.py").resolve())]
+
+
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
 def test_a_directory_in_a_listable_but_unsearchable_one_is_a_bad_parameter(tmp_path):
     """``Path.is_dir()`` raises there on 3.11–3.13; the CLI must report the option, not crash."""
