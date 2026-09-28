@@ -301,7 +301,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     missing name inside its package (``try: import app.core.fast``): that import runs it before
     failing, but there is no module to be a member of the package (:func:`package_members`). The
     graph has no such edge, only the run's copy, from the ``__init__`` that changed: an edit to a
-    module the ``__init__`` imports must not reach every importer of a name inside it.
+    module the ``__init__`` imports must not reach every importer of a name inside it. The edge
+    is flagged ``runs_init``: it reaches the importer, but does not place the package.
     """
     root = canonical_root(root_dir)
     by_path = {path: node for node, path in dep_tree.nodes(data="path") if path}
@@ -309,7 +310,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     taken = set(dep_tree) | set(aliases)
     unresolved = dep_tree.graph.get("unresolved", {})
     roots = sorted((Path(d) for d in dep_tree.graph.get("import_roots", [root])), key=lambda d: -len(d.parts))
-    inside = cache(lambda: _importers_inside(unresolved))
+    inside = cache(lambda: _importers_inside(unresolved, dep_tree))
     added = []
     for file in filenames:
         path = (root / file).resolve()
@@ -317,12 +318,12 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             continue
         names = _importable_names(path, roots)
         node = by_path.get(str(path))
-        importers: set[str] = set()
-        if path.name == "__init__.py":
-            importers = {importer for name in names for importer in inside().get(name, ())}
+        runners = (
+            {runner for name in names for runner in inside().get(name, ())} if path.name == "__init__.py" else set()
+        )
         if node is None:
-            importers |= {importer for name in names for importer in unresolved.get(name, ())}
-            if not importers and not os.path.exists(path):
+            importers = {importer for name in names for importer in unresolved.get(name, ())}
+            if not importers and not runners and not os.path.exists(path):
                 continue
             node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
             # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
@@ -330,16 +331,29 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             taken.update(names)
             taken.add(node)
             dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
+            dep_tree.add_edges_from((node, importer) for importer in importers)
             by_path[str(path)] = node
             added.append(node)
-        dep_tree.add_edges_from((node, importer) for importer in importers if importer != node)
+        # Only to reach them (``runs_init``), never to place the package as application code or test
+        # code (see strategies._changes_by_role): that could make a conftest rule opt-in, fewer tests.
+        dep_tree.add_edges_from(
+            (node, runner, {"runs_init": True})
+            for runner in runners
+            if runner != node and not dep_tree.has_edge(node, runner)
+        )
     return added
 
 
-def _importers_inside(unresolved: dict[str, list[str]]) -> dict[str, set[str]]:
-    """``{package name: modules importing a missing name inside it}``, from ``graph["unresolved"]``."""
+def _importers_inside(unresolved: dict[str, list[str]], dep_tree: nx.DiGraph) -> dict[str, set[str]]:
+    """``{package name: modules importing a missing name inside it}``, from ``graph["unresolved"]``.
+
+    Only a name no node answers: one found outside the walks is a member of its package already.
+    """
+    aliases = dep_tree.graph.get("aliases", {})
     inside: dict[str, set[str]] = {}
     for name, importers in unresolved.items():
+        if aliases.get(name, name) in dep_tree:
+            continue
         parts = name.split(".")
         for end in range(1, len(parts)):
             inside.setdefault(".".join(parts[:end]), set()).update(importers)

@@ -1198,6 +1198,7 @@ def test_a_changed_init_is_linked_to_the_importers_of_a_missing_name_inside_its_
     assert graph.link_changed_files(["app/core/__init__.py"], dep_tree, root_dir=tmp_path) == []
 
     assert list(dep_tree.predecessors("tests.test_fast")) == ["app.core"]
+    assert dep_tree.edges["app.core", "tests.test_fast"] == {"runs_init": True}
     assert "tests.test_fast" not in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
 
 

@@ -595,9 +595,11 @@ def _changes_by_role(
 
     @cache
     def application_depends_on() -> set[str]:
-        # Everything application code reaches through its imports, in one walk up the graph.
+        # Everything application code reaches through its imports, in one walk up the graph —
+        # its imports alone: a changed __init__'s ``runs_init`` link only reaches, never places.
         sources = [node for node in dep_tree if not dep_tree.nodes[node].get("external") and is_application_file(node)]
-        return set().union(*nx.bfs_layers(dep_tree.reverse(copy=False), sources))
+        imports = nx.subgraph_view(dep_tree, filter_edge=lambda u, v: not dep_tree.edges[u, v].get("runs_init"))
+        return set().union(*nx.bfs_layers(nx.reverse_view(imports), sources))
 
     def is_application_code(module: str) -> bool:
         if not dep_tree.nodes[module].get("external"):

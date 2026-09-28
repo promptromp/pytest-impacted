@@ -98,7 +98,9 @@ directory, bypassing `--impacted-conftest-imports`. Nor may it be a graph edge f
 then an edit to anything `app/__init__.py` imports would reach every importer of a namespace
 portion or missing name inside `app` (a facade again, and a full run through a `pytest_plugins`
 module). So `link_changed_files` links only the `__init__.py` that *changed* (a node or not) to
-the importers of missing names inside its package, on the run's copy. Above the rootdir only
+the importers of missing names inside its package, on the run's copy — edges flagged `runs_init`,
+which `_changes_by_role` ignores: they must only reach, never place a package as application code
+(an external package would turn test code, and its conftest rule opt-in: fewer tests than 0.33.0). Above the rootdir only
 through an unbroken chain of `__init__.py` files down to it (pytest's prepend mode then imports
 tests through it). A root `app/__init__.py` edit is thousands of changed modules, so every
 traversal from `impacted_modules` must be one multi-source walk (`graph.reached_from`), never one

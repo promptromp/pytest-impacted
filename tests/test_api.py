@@ -1251,6 +1251,45 @@ def test_an_edit_reaching_an_init_selects_no_importer_of_a_namespace_portion_ins
     assert result == ["suite/test_heavy.py"]
 
 
+def test_an_edited_fixture_package_init_stays_test_code_though_application_code_imports_a_module_of_it(tmp_path):
+    """``testing.fixtures`` is found, a member of the package: no link from ``testing`` to its importers, which
+    would make ``testing`` look like something application code depends on, and the conftest rule opt-in."""
+    files = {
+        "app/__init__.py": "",
+        "app/core.py": "from suite.helpers import make\n",
+        "testing/__init__.py": "",
+        "testing/fixtures.py": "",
+        "conftest.py": "from testing import fixtures\n",
+        "suite/helpers.py": "import testing.fixtures\n\ndef make():\n    pass\n",
+        "suite/test_a.py": "",
+    }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["testing/__init__.py"], ns_module="app", tests_dir="suite")
+
+    assert result == ["suite/test_a.py"]
+
+
+@pytest.mark.parametrize("conftest_imports", [False, True], ids=["default", "opted_in"])
+def test_a_link_to_an_optional_importer_places_no_package(tmp_path, conftest_imports):
+    """``app/core.py`` optionally imports ``shared.gone``: the edited ``shared/__init__.py`` is linked to it, but
+    only to reach it — it does not make ``shared`` application code, which would make the conftest rule opt-in."""
+    optional = "try:\n    import shared.gone\nexcept ImportError:\n    pass\n"
+    files = {
+        "app/__init__.py": "",
+        "app/core.py": optional,
+        "shared/__init__.py": "",
+        "suite/conftest.py": "import shared\n",
+    }
+    write_files(tmp_path, {**files, "suite/test_a.py": ""})
+
+    result, _ = _run_with_notices(
+        tmp_path, ["shared/__init__.py"], ns_module="app", tests_dir="suite", conftest_imports=conftest_imports
+    )
+
+    assert result == ["suite/test_a.py"]
+
+
 def test_the_notice_is_judged_after_extensions_enrich_the_graph(tmp_path):
     """An extension links the changed script to a test: some test depends on it after all."""
 
