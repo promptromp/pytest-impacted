@@ -82,8 +82,10 @@ def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
     if "test" in attributes:
         return bool(attributes["test"])
     path = attributes.get("path")
-    by_file = bool(attributes.get("external") and path) and is_test_module(_importable_stem(Path(path)))
-    return is_test_module(node) or by_file
+    by_file = bool(attributes.get("external") and isinstance(path, str | os.PathLike)) and is_test_module(
+        _importable_stem(Path(path))
+    )
+    return (isinstance(node, str) and is_test_module(node)) or by_file
 
 
 def _is_test_file(path: Path, root: Path) -> bool:
@@ -178,9 +180,9 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     # Module nodes with a file only: an extension may add any hashable node, and read the ``path``
     # of every impacted module (all of 0.33.0's had one).
     paths = {
-        node: _canonical(path, root)
+        node: _canonical(os.fspath(path), root)
         for node, path in dep_tree.nodes(data="path")
-        if isinstance(node, str) and isinstance(path, str)
+        if isinstance(node, str) and isinstance(path, str | os.PathLike)
     }
     members = set(nodes_under(directories, paths))
     roots = [Path(d) for d in dep_tree.graph.get("import_roots", [root])]
@@ -232,8 +234,14 @@ def nodes_under(directories: Iterable[Path], paths: dict[str, str]) -> list[str]
     pathlib is far slower on thousands of nodes.
     """
     # normcase: as ``Path.relative_to`` does on Windows, which is case-insensitive (a no-op elsewhere).
-    prefixes = tuple(os.path.normcase(os.path.join(directory, "")) for directory in directories)
-    return [node for node, path in paths.items() if os.path.normcase(path).startswith(prefixes)]
+    # A path that is one of the directories counts too, as with ``relative_to``.
+    directories = {os.path.normcase(os.path.normpath(directory)) for directory in directories}
+    prefixes = tuple(os.path.join(directory, "") for directory in directories)
+    return [
+        node
+        for node, path in paths.items()
+        if (normal := os.path.normcase(path)).startswith(prefixes) or normal in directories
+    ]
 
 
 def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str | Path | None = None) -> list[str]:

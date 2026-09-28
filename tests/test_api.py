@@ -1377,6 +1377,53 @@ def test_the_notice_survives_an_extension_moving_a_linked_node(tmp_path):
     assert [notice for notice in notices if UNIMPORTED in notice and "scripts/tool.py" in notice]
 
 
+def _add_a_tuple_node(dep_tree):
+    dep_tree.add_node(("generated", 1), test=False)
+
+
+def _bind_a_tuple_node(dep_tree):
+    dep_tree.add_edge("app.core.x", ("binding", "Service"))
+    dep_tree.nodes[("binding", "Service")]["test"] = False
+
+
+def _give_a_path_of_the_wrong_type(dep_tree):
+    dep_tree.nodes["app.other"]["path"] = ("app/other.py", 0)
+
+
+@pytest.mark.parametrize("enrich", [_add_a_tuple_node, _bind_a_tuple_node, _give_a_path_of_the_wrong_type])
+@pytest.mark.parametrize("change", ["edit", "delete"])
+@pytest.mark.parametrize("conftest_imports", [False, True], ids=["default", "opted_in"])
+def test_an_edited_init_survives_any_node_or_path_an_extension_adds(tmp_path, enrich, change, conftest_imports):
+    """Any hashable node, any ``path`` value: the members of a changed package reach more of the graph than 0.33.0
+    did, and a deleted ``__init__`` linked to an optional importer places external nodes — neither may crash."""
+
+    class Odd:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            enrich(dep_tree)
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    files = {
+        "app/__init__.py": "",
+        "app/core/__init__.py": "",
+        "app/core/x.py": "",
+        "app/other.py": "",
+        "tests/test_fast.py": "try:\n    import app.core.fast\nexcept ImportError:\n    pass\n",
+        "tests/test_x.py": "import app.core.x\n",
+    }
+    write_files(tmp_path, files)
+    if change == "delete":
+        (tmp_path / "app/core/__init__.py").unlink()
+    strategy = CompositeImpactStrategy([*get_default_strategies(conftest_imports=conftest_imports), Odd()])
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests", strategy=strategy
+    )
+
+    assert result == ["tests/test_fast.py", "tests/test_x.py"]
+
+
 def test_the_notice_is_judged_after_extensions_enrich_the_graph(tmp_path):
     """An extension links the changed script to a test: some test depends on it after all."""
 

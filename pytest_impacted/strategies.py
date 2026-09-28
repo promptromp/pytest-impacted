@@ -207,10 +207,13 @@ def _module_path(module: str, dep_tree: nx.DiGraph, root_dir: Path) -> Path | No
     """The source file of graph node *module*.
 
     Prefers the ``path`` recorded by :func:`~pytest_impacted.graph.build_dep_tree`,
-    which is right for src-layout too; nodes added by extensions may lack it.
+    which is right for src-layout too; nodes added by extensions may lack it — or be
+    any hashable, with any ``path`` value, which places nothing.
     """
     path = dep_tree.nodes[module].get("path")
-    return Path(path) if path else _test_module_path(module, root_dir)
+    if path and isinstance(path, str | os.PathLike):
+        return Path(path)
+    return _test_module_path(module, root_dir) if isinstance(module, str) else None
 
 
 def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: Path) -> list[str]:
@@ -243,7 +246,7 @@ def _conftest_dirs(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path) -
         for node in nodes
         # The name is a cheap pre-filter; the file name decides, as for changed
         # files, so a package named ``conftest`` is not one.
-        if is_conftest_module(node)
+        if isinstance(node, str) and is_conftest_module(node)
         if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
     }
 

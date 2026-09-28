@@ -104,6 +104,15 @@ def test_only_a_file_named_exactly_conftest_counts(tmp_path):
     assert result == []
 
 
+def test_the_tests_under_a_directory_include_a_node_whose_path_is_the_directory(tmp_path):
+    """As 0.33.0 did: a data-driven suite an extension registers as one node, its ``path`` the directory itself."""
+    (tmp_path / "tests/yaml_cases").mkdir(parents=True)
+    dep_tree = nx.DiGraph()
+    dep_tree.add_node("tests.yaml_cases", path=str(tmp_path / "tests/yaml_cases"), test=True)
+
+    assert find_test_modules_under(tmp_path / "tests/yaml_cases", dep_tree, root_dir=tmp_path) == ["tests.yaml_cases"]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
 def test_the_tests_under_a_directory_include_nodes_placed_through_a_symlink_or_an_unnormalized_path(tmp_path):
     """As 0.33.0 did: an extension's ``path`` may hold ``..``, and a pathless node is placed through the tree."""
