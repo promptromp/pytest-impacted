@@ -81,8 +81,8 @@ Whether a node is a test is `is_test_node`, not `is_test_module`, wherever the g
 hand: an external node carries a `test` attribute judged by its path from the rootdir (it
 is named from wherever it was found), false for a deleted file.
 An `external` node is application code when application code depends on it
-(`_changes_by_role`), so #85's opt-in still governs a shared library that reaches a
-conftest through the app; otherwise it is test code, which is followed.
+(`_changes_by_role`), so the `--impacted-conftest-imports` opt-in still governs a shared
+library that reaches a conftest through the app; otherwise it is test code, which is followed.
 
 **A changed `__init__.py` changes every module in its package** (`graph.package_members`, added
 to `impacted_modules` by `api.py` *after* enrichment, so an extension's node counts). Importing
@@ -94,7 +94,7 @@ Members are found by path (the package directory and below; deleted and added `_
 files included) and by name (inside the package's importable names, or any package node's
 there: a module symlinked in lives elsewhere, as may one an extension generates). Only string
 nodes with a `path`: extensions may add any hashable node, and read the `path` of every impacted
-module, as 0.33.0's all had one.
+module, as every other impacted module has one.
 An import of a *missing* module (`try: import app.core.fast`) is different: it has no node to be
 a member, and its importer must be *reached*, never changed — a changed conftest selects its
 whole directory, bypassing `--impacted-conftest-imports`. Nor may it be a graph edge from the
@@ -104,7 +104,7 @@ namespace portion or missing name inside `app` (a facade again, and a full run t
 node or not) to the importers of missing names inside its package, on the run's copy — edges
 flagged `runs_init` (and `graph["runs_init"]` set), which `_changes_by_role` ignores: they must
 only reach, never place a package as application code (an external package would turn from test
-code into application code, making its conftest rule opt-in: fewer tests than 0.33.0).
+code into application code, making its conftest rule opt-in: fewer tests than with no link).
 `package_members` counts an `__init__.py` above the rootdir only through an unbroken chain of
 `__init__.py` files down to it (pytest's prepend mode then imports tests through it), and then
 every node under the rootdir is a member; `link_changed_files` never sees it (it stops at the
@@ -186,7 +186,7 @@ absolute paths.
 
 **`canonical_root()` is the single origin for every path.** Discovery, graph building and
 the conftest walk all resolve against `root_dir` (the plugin passes `config.rootpath`),
-never the process CWD — running pytest from a subdirectory used to resolve nothing. It
+never the process CWD, against which a run from a subdirectory resolves nothing. It
 absolutizes *and* resolves symlinks, and both caches canonicalize before their lookup so a
 `None` default cannot collapse two projects onto one entry. Never reach for `Path.cwd()`
 in traversal, graph or strategy code — `canonical_root`'s `None` default is the only place
@@ -219,8 +219,8 @@ holds fixtures, never tests.
 (`plugin._impacted_items`). They differ for an inherited test (location: the base class's
 module) and a pytest-bdd scenario (location: inside `pytest_bdd`). Matching location alone
 skipped scenarios; path alone skipped inherited tests whose base changed with no graph edge
-(`from checks import Checks` in a rootless dir). The location is also still matched by
-path suffix, as 0.31.0 did, so the result is a strict superset of the old selection. Keep
+(`from checks import Checks` in a rootless dir). The location is also matched by path
+suffix, the rule the other two were added to, so nothing it selects is lost. Keep
 every half — each only adds tests. Items import analysis cannot judge always run: those
 from non-Python files (`--doctest-glob`, YAML collectors) and `DoctestItem`s — also when
 nothing at all is impacted.
@@ -263,7 +263,7 @@ so a BOM is not a syntax error, and scan `match`/`case` bodies.
 Never call `logging.info(...)` and friends — those hit the root logger and are
 flagged by LOG015.
 
-**Ruff rule selection uses `extend-select`, not `select`.** Ruff 0.16 ships ~394
+**Ruff rule selection uses `extend-select`, not `select`.** Ruff ships hundreds of
 default rules; `extend-select` layers our categories on top. "Simplifying" it back to
 `select` would silently disable every default rule not named in the list. Ruff also
 formats Python code blocks inside Markdown, so `ruff format` covers `README.md` and
@@ -296,8 +296,8 @@ never import their conftest, so this is invisible to test-side import analysis),
 code — `traversal.discover_application_files`: the `--impacted-module` walk's files less
 the `--impacted-tests-dir` walk's, conftests excluded; by discovery, never by path, which a
 symlinked subpackage resolves elsewhere. Always in the default pipeline, but `report_only` —
-naming those conftests — unless `--impacted-conftest-imports`: a root conftest importing the
-app turned 0.31.0's every edit into a full run, so keep it selecting only on request until
+naming those conftests — unless `--impacted-conftest-imports`: with a root conftest importing
+the app, selecting makes nearly every edit a full run, so keep it selecting only on request until
 narrowing can make it selective), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config
 file pytest actually loaded, `session.config.inipath`; disable with
