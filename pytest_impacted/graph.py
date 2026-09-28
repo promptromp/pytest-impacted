@@ -170,11 +170,11 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     }
     if not inits:
         return []
-    directories = {init.parent for init in inits}
-    members = {
-        node for node, path in dep_tree.nodes(data="path") if path and not directories.isdisjoint(Path(path).parents)
-    }
-    packages = {node for node in members if Path(dep_tree.nodes[node]["path"]).name == "__init__.py"}
+    # Plain string prefixes, with the separator (``app/core/`` holds no ``app/core_utils.py``): pathlib is
+    # far slower, and node paths are resolved like these.
+    directories = tuple(f"{init.parent}{os.sep}" for init in inits)
+    members = {node for node, path in dep_tree.nodes(data="path") if path and path.startswith(directories)}
+    packages = {node for node in members if dep_tree.nodes[node]["path"].endswith(f"{os.sep}__init__.py")}
     packages |= {alias for alias, node in dep_tree.graph.get("aliases", {}).items() if node in packages}
 
     def inside_a_package(name: str) -> bool:

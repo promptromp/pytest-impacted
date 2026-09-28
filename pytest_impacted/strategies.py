@@ -223,12 +223,13 @@ def find_test_modules_under(directory: Path, dep_tree: nx.DiGraph, *, root_dir: 
     opted in, every conftest that imports changed application code too
     (:class:`ConftestImportImpactStrategy`).
     """
+    directory = directory.resolve()  # once, not per test module: an edited package root reaches every conftest
     matches = []
     for test_module in dep_tree.nodes:
         if not is_test_node(dep_tree, test_module):
             continue
         path = _module_path(test_module, dep_tree, root_dir)
-        if path is not None and _is_under(path, directory):
+        if path is not None and path.resolve().is_relative_to(directory):
             matches.append(test_module)
     return sorted(matches)
 
