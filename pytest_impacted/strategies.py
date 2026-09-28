@@ -207,8 +207,9 @@ def _module_path(module: str, dep_tree: nx.DiGraph, root_dir: Path) -> Path | No
     """The source file of graph node *module*.
 
     Prefers the ``path`` recorded by :func:`~pytest_impacted.graph.build_dep_tree`,
-    which is right for src-layout too; nodes added by extensions may lack it — or be
-    any hashable, with any ``path`` value, which places nothing.
+    which is right for src-layout too. A node an extension added may lack it, or carry a
+    ``path`` that is no path: then it is placed by its dotted name — unless the node is not a
+    string (any hashable), which places nothing.
     """
     path = dep_tree.nodes[module].get("path")
     if path and isinstance(path, str | os.PathLike):
@@ -411,7 +412,7 @@ class ImpactStrategy(ABC):
         implementation is a no-op — override when you need to build per-run
         indices or warm caches. Receives the same context kwargs as
         :meth:`find_impacted_tests` except ``changed_files`` /
-        ``impacted_modules``, which are not known at setup time.
+        ``impacted_modules``, which it is not passed (both are final by then).
 
         Args:
             ns_module: The namespace module being analyzed.
@@ -448,10 +449,10 @@ class ImpactStrategy(ABC):
         Args:
             changed_files: List of file paths that have changed
             impacted_modules: The ``dep_tree`` nodes the changed ``.py`` files resolve to,
-                by node ``path``, before enrichment; conftests above the packages included,
-                and, after enrichment, every module inside the package of a changed
-                ``__init__.py``, which importing any of them runs
-                (:func:`~pytest_impacted.graph.package_members`)
+                by node ``path``, before enrichment (conftests above the packages included),
+                in the order of ``changed_files``; then, sorted and found after enrichment,
+                every other module inside the package of a changed ``__init__.py`` —
+                importing any of them runs it (:func:`~pytest_impacted.graph.package_members`)
             ns_module: The namespace module being analyzed
             tests_package: Optional tests package name
             root_dir: Project root (the pytest rootdir); may be below the git root

@@ -1390,12 +1390,24 @@ def _bind_a_bare_tuple_node(dep_tree):
     dep_tree.add_edge("app.core.x", ("binding", "Bare"))
 
 
+def _link_an_external_node_with_a_path_of_the_wrong_type(dep_tree):
+    dep_tree.add_edge("app.core.x", "codegen.models")
+    dep_tree.nodes["codegen.models"].update(external=True, path=("gen.py", 0))
+
+
 def _give_a_path_of_the_wrong_type(dep_tree):
     dep_tree.nodes["app.other"]["path"] = ("app/other.py", 0)
 
 
 @pytest.mark.parametrize(
-    "enrich", [_add_a_tuple_node, _bind_a_tuple_node, _bind_a_bare_tuple_node, _give_a_path_of_the_wrong_type]
+    "enrich",
+    [
+        _add_a_tuple_node,
+        _bind_a_tuple_node,
+        _bind_a_bare_tuple_node,
+        _link_an_external_node_with_a_path_of_the_wrong_type,
+        _give_a_path_of_the_wrong_type,
+    ],
 )
 @pytest.mark.parametrize("change", ["edit", "delete"])
 @pytest.mark.parametrize("conftest_imports", [False, True], ids=["default", "opted_in"])
@@ -1459,6 +1471,64 @@ def test_the_warning_for_a_deleted_init_selecting_nothing_counts_the_modules_ins
 
     assert result == []
     assert "[] and 1 module inside the changed packages" in warn.call_args.args[0]
+
+
+def test_an_edited_init_reaches_an_optional_importer_when_the_tests_dir_is_inside_the_package(tmp_path):
+    """``app/tests`` is walked as ``tests``, so ``app/`` is an import root too: ``app/backends/__init__.py`` is
+    ``backends`` from there, and ``app.backends`` — as ``app/db.py`` imports it — from the rootdir."""
+    files = {
+        "app/__init__.py": "",
+        "app/backends/__init__.py": "",
+        "app/db.py": "try:\n    import app.backends.fast\nexcept ImportError:\n    pass\n",
+        "app/tests/test_db.py": "import app.db\n",
+        "app/tests/test_a.py": "",
+    }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["app/backends/__init__.py"], ns_module="app", tests_dir="app/tests")
+
+    assert result == ["app/tests/test_db.py"]
+
+
+def test_an_init_changed_beside_a_module_selects_the_tests_of_the_whole_package(tmp_path):
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/core.py": "",
+        "pkg/utils.py": "",
+        "tests/test_core.py": "import pkg.core\n",
+        "tests/test_utils.py": "import pkg.utils\n",
+        "tests/test_none.py": "",
+    }
+    write_files(tmp_path, files)
+
+    result, _ = _run_with_notices(tmp_path, ["pkg/__init__.py", "pkg/core.py"], ns_module="pkg", tests_dir="tests")
+
+    assert result == ["tests/test_core.py", "tests/test_utils.py"]
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [(["app/core/__init__.py"], False), (["README.md"], True)],
+    ids=["deleted_init", "no_python"],
+)
+def test_the_no_modules_notice_counts_the_members_of_a_deleted_init(tmp_path, changed, expected):
+    write_files(tmp_path, _package(""))
+    (tmp_path / "app/core/__init__.py").unlink()
+
+    _, notices = _run_with_notices(tmp_path, changed, ns_module="app", tests_dir="tests")
+
+    assert bool([notice for notice in notices if notice.startswith("No impacted Python modules")]) is expected
+
+
+def test_the_warning_counts_only_the_members_that_did_not_change_themselves(tmp_path):
+    files = {"app/__init__.py": "", "app/core/__init__.py": "", "app/core/x.py": "", "app/core/y.py": ""}
+    write_files(tmp_path, {**files, "tests/test_a.py": ""})
+
+    with patch("pytest_impacted.api.warn") as warn:
+        result, _ = _run_with_notices(tmp_path, ["app/core/__init__.py"], ns_module="app", tests_dir="tests")
+
+    assert result == []
+    assert "['app.core'] and 2 modules inside the changed packages" in warn.call_args.args[0]
 
 
 def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module_only(tmp_path):

@@ -74,8 +74,9 @@ entries included). Every candidate the *walks* do not define goes into `graph["u
 import means depends on `sys.path`, so a hit under one root must never hide it from a
 deleted file of that name under another. `link_changed_files` gives each changed `.py` inside
 the rootdir that the run's graph lacks — deleted, or never walked — a node on the run's copy,
-linked to those importers (a deleted one only when something imports it). So the graph has
-more nodes than `discover_project_modules`: never judge graph membership by discovery.
+linked to those importers (a deleted one only when something imports it or, for an
+`__init__.py`, a missing name inside its package). So the graph has more nodes than
+`discover_project_modules`: never judge graph membership by discovery.
 Whether a node is a test is `is_test_node`, not `is_test_module`, wherever the graph is at
 hand: an external node carries a `test` attribute judged by its path from the rootdir (it
 is named from wherever it was found), false for a deleted file.
@@ -95,18 +96,21 @@ there: a module symlinked in lives elsewhere, as may one an extension generates)
 nodes with a `path`: extensions may add any hashable node, and read the `path` of every impacted
 module, as 0.33.0's all had one.
 An import of a *missing* module (`try: import app.core.fast`) is different: it has no node to be
-a member, and its importer must be *reached*, never changed — a changed conftest selects its whole
-directory, bypassing `--impacted-conftest-imports`. Nor may it be a graph edge from the package:
-then an edit to anything `app/__init__.py` imports would reach every importer of a namespace
-portion or missing name inside `app` (a facade again, and a full run through a `pytest_plugins`
-module). So `link_changed_files` links only the `__init__.py` that *changed* (a node or not) to
-the importers of missing names inside its package, on the run's copy — edges flagged `runs_init`,
-which `_changes_by_role` ignores: they must only reach, never place a package as application code
-(an external package would turn test code, and its conftest rule opt-in: fewer tests than 0.33.0). Above the rootdir only
-through an unbroken chain of `__init__.py` files down to it (pytest's prepend mode then imports
-tests through it). A root `app/__init__.py` edit is thousands of changed modules, so every
-traversal from `impacted_modules` must be one multi-source walk (`graph.reached_from`), never one
-per module — `resolve_impacted_tests` was.
+a member, and its importer must be *reached*, never changed — a changed conftest selects its
+whole directory, bypassing `--impacted-conftest-imports`. Nor may it be a graph edge from the
+package: then an edit to anything `app/__init__.py` imports would reach every importer of a
+namespace portion or missing name inside `app` (a facade again, and a full run through a
+`pytest_plugins` module). So `link_changed_files` links only the `__init__.py` that *changed* (a
+node or not) to the importers of missing names inside its package, on the run's copy — edges
+flagged `runs_init` (and `graph["runs_init"]` set), which `_changes_by_role` ignores: they must
+only reach, never place a package as application code (an external package would turn from test
+code into application code, making its conftest rule opt-in: fewer tests than 0.33.0).
+`package_members` counts an `__init__.py` above the rootdir only through an unbroken chain of
+`__init__.py` files down to it (pytest's prepend mode then imports tests through it), and then
+every node under the rootdir is a member; `link_changed_files` never sees it (it stops at the
+rootdir). A root `app/__init__.py` edit is thousands of changed modules, so every traversal from
+`impacted_modules` must be one multi-source walk (`graph.reached_from`), never one per module —
+`resolve_impacted_tests` was.
 
 **src-layout is handled by splitting the path into a non-package prefix and an
 importable root** (`find_non_package_prefix` in `traversal.py`). `src/my_package`
@@ -115,13 +119,13 @@ discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment**
 (`cached_build_dep_tree → run_copy → link_changed_files → resolve_files_to_nodes →
-enrich_dep_tree → package_members → setup → find_impacted_tests → teardown`), and the impacted test modules
-map back to files through their node `path` too. Changed files resolve through the graph's own node
-`path`s, not a second discovery: a changed module the (cached) graph lacks would read as a
-production module outside it, and `resolve_impacted_tests` would select every test. The
-copy is load-bearing: without it, extension enrichment pollutes the LRU-cached base graph
-and the next run in the same process starts dirty. `run_copy`, not `DiGraph.copy()`, which
-shares graph-level values such as `graph["aliases"]`. `teardown`
+enrich_dep_tree → package_members → setup → find_impacted_tests → teardown`), and the
+impacted test modules map back to files through their node `path` too. Changed files resolve
+through the graph's own node `path`s, not a second discovery: a changed module the (cached)
+graph lacks would read as a production module outside it, and `resolve_impacted_tests` would
+select every test. The copy is load-bearing: without it, extension enrichment pollutes the
+LRU-cached base graph and the next run in the same process starts dirty. `run_copy`, not
+`DiGraph.copy()`, which shares graph-level values such as `graph["aliases"]`. `teardown`
 runs in a `finally`.
 
 **`get_impacted_tests` contains no strategy-specific dispatch.** `api.py` assembles
@@ -291,10 +295,10 @@ never import their conftest, so this is invisible to test-side import analysis),
 `ConftestImportImpactStrategy` (the same for a conftest importing changed *application*
 code — `traversal.discover_application_files`: the `--impacted-module` walk's files less
 the `--impacted-tests-dir` walk's, conftests excluded; by discovery, never by path, which a
-symlinked subpackage resolves elsewhere. Always in the default pipeline, but `report_only` — naming those
-conftests — unless `--impacted-conftest-imports`: a root conftest importing the app turned
-0.31.0's every edit into a full run, so keep it selecting only on request until narrowing
-can make it selective), `DependencyFileImpactStrategy`
+symlinked subpackage resolves elsewhere. Always in the default pipeline, but `report_only` —
+naming those conftests — unless `--impacted-conftest-imports`: a root conftest importing the
+app turned 0.31.0's every edit into a full run, so keep it selecting only on request until
+narrowing can make it selective), `DependencyFileImpactStrategy`
 (patterns in `DEFAULT_DEPENDENCY_FILE_PATTERNS` / `..._GLOB_PATTERNS`, plus the config
 file pytest actually loaded, `session.config.inipath`; disable with
 `--no-impacted-dep-files`), `InvalidationFileImpactStrategy` (user globs from
@@ -308,8 +312,9 @@ reason.
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and every
 "this directory and below" match — the conftest rule's `find_test_modules_under`, a changed
-package's members — goes through `graph.nodes_under` (resolved paths, string prefixes ending in
-the separator). Do not add a second matcher or a second directory walk.
+package's members — goes through `graph.nodes_under` (resolved directories against node paths
+each caller normalises — `realpath` for the conftest rule, `_canonical` for members — as string
+prefixes ending in the separator). Do not add a second matcher or a second directory walk.
 
 Third-party strategies are discovered via the `pytest_impacted.strategies` entry
 point group and composed in by `api.build_strategy_with_extensions()` — the

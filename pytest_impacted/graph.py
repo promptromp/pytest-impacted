@@ -103,7 +103,8 @@ def resolve_impacted_tests(impacted_modules, dep_tree: nx.DiGraph) -> list[str]:
     """Resolve impacted tests based on impacted modules.
 
     Every node that depends on an impacted module, directly or transitively
-    (:func:`reached_from`), that is a test module (:func:`is_test_node`).
+    (:func:`reached_from`, the impacted modules themselves included), that is a test module
+    (:func:`is_test_node`).
 
     For modules not found in the dependency tree (e.g. a name an extension passes that is no node):
     - Test modules are included directly as impacted (they changed, so they should run).
@@ -163,9 +164,11 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     elsewhere, as may one an extension generates. (A module importing a missing name inside the
     package is no member but a dependent: see :func:`link_changed_files`.)
 
-    *filenames* are POSIX paths relative to the rootdir, as git reports them. An ``__init__.py``
-    above the rootdir counts only through an unbroken chain of packages down to it, as pytest's
-    prepend mode imports a test module; otherwise imports start inside the rootdir.
+    *filenames* are as git reports them: POSIX paths relative to the rootdir, or absolute for a
+    file outside it — which is how an ``__init__.py`` above the rootdir arrives. It counts only
+    through an unbroken chain of packages down to the rootdir, as pytest's prepend mode imports a
+    test module (every node under the rootdir is then a member); otherwise imports start inside
+    the rootdir.
     """
     root = canonical_root(root_dir)
     # The directory, resolved, not the file: an ``__init__.py`` may itself be a symlink.
@@ -323,7 +326,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     node, nor is an existing file no walk reaches and nothing imports. Each gets one on
     *dep_tree* — the run's copy, never the cached graph — with an edge to every module
     whose import of one of its names matched nothing (``graph["unresolved"]``). A deleted
-    file nothing imports gets none: nothing is left for it to impact.
+    file nothing imports gets none — unless it is an ``__init__.py`` whose package has importers
+    of a missing name (below): nothing else is left for it to impact.
 
     A changed ``__init__.py``, a node or not, also gets an edge to every module importing a
     missing name inside its package (``try: import app.core.fast``): that import runs it before
