@@ -319,8 +319,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
         node = by_path.get(str(path))
         importers: set[str] = set()
         if path.name == "__init__.py":
-            packages = {*names, *_node_names(node, aliases)}
-            importers = {importer for package in packages for importer in inside().get(package, ())}
+            importers = {importer for name in names for importer in inside().get(name, ())}
         if node is None:
             importers |= {importer for name in names for importer in unresolved.get(name, ())}
             if not importers and not os.path.exists(path):
@@ -335,11 +334,6 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             added.append(node)
         dep_tree.add_edges_from((node, importer) for importer in importers if importer != node)
     return added
-
-
-def _node_names(node: str | None, aliases: dict[str, str]) -> set[str]:
-    """*node*'s name and aliases (none for no node)."""
-    return set() if node is None else {node, *(alias for alias, target in aliases.items() if target == node)}
 
 
 def _importers_inside(unresolved: dict[str, list[str]]) -> dict[str, set[str]]:

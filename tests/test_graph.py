@@ -1201,6 +1201,18 @@ def test_a_changed_init_is_linked_to_the_importers_of_a_missing_name_inside_its_
     assert "tests.test_fast" not in graph.package_members(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
 
 
+def test_a_changed_init_optionally_importing_a_missing_module_of_its_own_is_linked_to_no_self(tmp_path):
+    write_files(
+        tmp_path,
+        {**PACKAGE, "app/core/__init__.py": "try:\n    from . import _speedups\nexcept ImportError:\n    pass\n"},
+    )
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+
+    graph.link_changed_files(["app/core/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert list(nx.selfloop_edges(dep_tree)) == []
+
+
 @pytest.mark.parametrize(
     ("changed", "import_line"),
     [
