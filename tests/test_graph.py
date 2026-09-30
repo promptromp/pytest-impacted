@@ -918,7 +918,15 @@ def test_an_import_also_found_for_sure_is_no_guess(tmp_path):
 def test_a_file_found_under_a_root_the_names_imply_and_through_a_link_above_the_package_is_no_guess(tmp_path):
     """``lib.x`` is ``shared/lib/x.py`` from ``shared/`` (where the tests dir is rooted), and the same
     file again through ``src/lib -> ../shared/lib``: found for sure, once."""
-    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "shared/lib/x.py": "", "shared/tests/test_x.py": "import lib.x\n"})
+    write_files(
+        tmp_path,
+        {
+            **SRC_IS_A_PACKAGE,
+            "shared/lib/x.py": "",
+            "shared/tests/test_x.py": "import lib.x\n",
+            "shared/tests/test_spelled.py": "import app.core\n",  # evidence that src/ is on sys.path
+        },
+    )
     (tmp_path / "src/lib").symlink_to(tmp_path / "shared/lib", target_is_directory=True)
 
     dep_tree = graph.build_dep_tree("src/app", tests_package="shared/tests", root_dir=tmp_path)
