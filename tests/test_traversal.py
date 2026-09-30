@@ -17,12 +17,15 @@ from pytest_impacted.traversal import (
     discover_project_modules,
     discover_submodules,
     find_non_package_prefix,
+    import_roots,
     iter_namespace,
     package_name_to_path,
     path_to_package_name,
     resolve_files_to_modules,
     resolve_modules_to_files,
 )
+
+from .git_helpers import write_files
 
 
 # This repository's own package, found from this file rather than the working directory.
@@ -855,3 +858,46 @@ def test_discover_application_files_ignores_a_tests_dir_holding_the_package_desp
     found = discover_application_files("app", "app", root_dir=tmp_path)
 
     assert str((tmp_path / "app/db.py").resolve()) in found
+
+
+def test_import_roots_are_where_each_name_spells_its_file_from(tmp_path):
+    """A module file or a package's ``__init__.py``; a name that does not spell its path roots nothing."""
+    root = tmp_path.resolve()
+    modules = {
+        "lib": str(root / "vendor/lib/__init__.py"),
+        "tools.cli": str(root / "scripts/tools/cli.py"),
+        "pkg.alias.mod": str(root / "shared/mod.py"),  # reached through a symlink
+        ".qa.conftest": str(root / "qa/conftest.py"),  # a last-resort name
+    }
+
+    roots = import_roots(["app"], modules, {"x.lib": "lib"}, root)
+
+    assert roots == [root, root / "vendor", root / "scripts"]
+
+
+def test_a_name_spelling_a_file_outside_the_rootdir_roots_nothing(tmp_path):
+    """``pkg/ext -> <outside>/pkg/ext``: the file's real path spells ``pkg.ext.mod`` from a directory
+    no part of the project."""
+    root = (tmp_path / "project").resolve()
+    root.mkdir()
+    modules = {"pkg.ext.mod": str(tmp_path.resolve() / "outside/pkg/ext/mod.py")}
+
+    assert import_roots(["pkg"], modules, {}, root) == [root]
+
+
+@pytest.mark.parametrize(
+    ("packages", "above"),
+    [
+        pytest.param(["src/app", "tests"], ["src"], id="above_the_package"),
+        pytest.param(["a/b/app"], ["a", "a/b"], id="every_directory_above_it"),
+        pytest.param(["app", "backend/qa/suite"], ["backend", "backend/qa"], id="above_the_tests_dir"),
+        pytest.param(["app", "app/sub/tests"], [], id="not_inside_the_package"),
+        pytest.param(["src/app", "src/app/tests"], ["src"], id="above_a_package_holding_the_tests_dir"),
+    ],
+)
+def test_every_directory_above_an_analysed_directory_is_an_import_root_package_or_not(tmp_path, packages, above):
+    root = tmp_path.resolve()
+    for directory in ("src", "a", "a/b", "app", "app/sub", "backend", "backend/qa"):
+        write_files(root, {f"{directory}/__init__.py": ""})
+
+    assert import_roots(packages, {}, {}, root) == [root, *(root / directory for directory in above)]

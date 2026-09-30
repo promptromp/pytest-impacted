@@ -54,14 +54,13 @@ walk reaches twice through a symlinked directory, the name not through the link)
 other name the file imports under is an *alias*: `tests.x` for `app/tests/x.py`, and a name
 rooted at any directory above the module's first regular package (`company.app.x`,
 `src.company.app.x` for `src/company/app/x.py`) — never inside a regular package, which would
-invent `types` for `pkg/ns/types.py`. One exception (`_aliases_from_above`): every directory
-*above the analysed package* is such a root even when it is a regular package — `app.x` for
-`src/app/x.py` below a `src/__init__.py`, which is on `sys.path` wherever the code says
-`import app` — unless another import root holds that top-level name too (an `app/` at the
-rootdir): then no alias, and the lookup on disk links every file the name may mean, where an
-alias would hide one. Import candidates and `pytest_plugins` entries are
+invent `types` for `pkg/ns/types.py`. A regular package *above* the analysed directory
+(`src/` with an `__init__.py`) gets no alias either, though `app.x` is a real name for
+`src/app/x.py` there: an alias picks one file and hides a same-named one under another root,
+so that name is left to the lookup on disk (below), which links every file it may mean.
+Import candidates and `pytest_plugins` entries are
 mapped through the aliases before edges are added; names from outside the source (`-p`)
-through `dep_tree.graph["aliases"]`. Two nodes for one file would double every count and
+through `graph.nodes_named`, which looks on disk as well. Two nodes for one file would double every count and
 hand each consumer the same test twice.
 
 **Modules no walk finds join the graph by import, and changed ones per run.** An import
@@ -69,9 +68,13 @@ candidate matching no module, alias or contested name is looked up on disk (`os.
 only) by `graph._Linker` under `import_roots`: the rootdir; every directory the walks' own
 names are rooted at, derived from those names, even a regular package (`app/` for
 `app/tests` walked as `tests.x`) — dropping one loses imports the walk itself assumes,
-keeping one can only over-select (`import types` reaching `app/types.py`); each analysed
+keeping one only adds edges (`import types` reaching `app/types.py`); each analysed
 dir's non-package prefix; the directories in between that are not regular packages; and every
-directory above the analysed package, regular package or not. A
+directory above an analysed directory, regular package or not (`src/` with an `__init__.py` is
+on `sys.path` wherever the code says `import app`, though the walk names it `src.app`) — but
+none inside the analysed package, where a tests dir may sit. More edges are not always more
+tests: an external module that application code is now seen to import becomes application code
+(below), and a conftest importing it then selects only with `--impacted-conftest-imports`. A
 standard-library name is looked up too (a local `profile/` shadows it), but not a
 distribution installed into a root (`pip install -t .`). A file found becomes an `external`
 node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`

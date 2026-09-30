@@ -761,7 +761,8 @@ def test_a_name_from_outside_the_source_is_an_alias_or_nothing_without_import_ro
     dep_tree = nx.DiGraph(aliases={"tests.plugin": "app.tests.plugin"})
     dep_tree.add_node("app.tests.plugin", path="/project/app/tests/plugin.py")
 
-    assert graph.nodes_named(["tests.plugin", "app.tests.plugin", "other"], dep_tree) == {"app.tests.plugin"}
+    assert graph.nodes_named(["tests.plugin", "other"], dep_tree) == {"app.tests.plugin"}
+    assert graph.nodes_named(["app.tests.plugin"], dep_tree) == {"app.tests.plugin"}
 
 
 def test_a_name_a_directory_between_a_regular_package_and_the_analysed_one_holds_too_links_both(tmp_path):
