@@ -1062,6 +1062,19 @@ def test_a_file_a_guess_reaches_keeps_its_own_relative_imports(tmp_path, evidenc
     assert ("redis" in dep_tree.graph["aliases"]) == bool(evidence)
 
 
+def test_a_plugin_name_also_means_a_deleted_file_of_that_name(tmp_path):
+    """``-p settings`` may mean ``src/settings.py`` or the ``settings.py`` just deleted from the rootdir."""
+    write_files(
+        tmp_path,
+        {**SRC_IS_A_PACKAGE, **SPELLED_FROM_SRC, "src/settings.py": "", "tests/test_b.py": "import settings\n"},
+    )
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path).copy()
+
+    (deleted,) = graph.link_changed_files(["settings.py"], dep_tree, root_dir=tmp_path)
+
+    assert graph.nodes_named(["settings"], dep_tree) == {deleted, "src.settings"}
+
+
 def test_a_bare_name_is_not_looked_up_where_no_import_spells_the_package(tmp_path):
     """``mysite/celery.py`` beside ``mysite/polls``: nothing imports ``polls.*``, so ``mysite/`` is not on
     ``sys.path``, and ``from celery import shared_task`` is the third-party package."""

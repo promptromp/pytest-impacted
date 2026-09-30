@@ -292,13 +292,28 @@ def nodes_named_each(names: Iterable[str], dep_tree: nx.DiGraph) -> dict[str, se
     aliases = dep_tree.graph.get("aliases", {})
     implied, assumed = _import_roots_of(dep_tree)
     by_path = cache(lambda: _nodes_by_path(dep_tree))
+    # A file deleted since is no longer on disk to look up, but each of its names still means it.
+    gone = cache(lambda: _deleted_by_name(dep_tree, by_path(), implied, assumed))
     found: dict[str, set[str]] = {}
     for name in names:
         found[name] = {node} if (node := aliases.get(name, name)) in dep_tree else set()
         if implied:  # the rootdir comes first
             sure, guessed = _lookup(name, implied, assumed, implied[0])
             found[name] |= {by_path()[path] for path in (*sure, *guessed) if path in by_path()}
+            found[name] |= gone().get(name, set())
     return found
+
+
+def _deleted_by_name(
+    dep_tree: nx.DiGraph, by_path: dict[str, str], implied: list[Path], assumed: dict[Path, "_Assumed"]
+) -> dict[str, set[str]]:
+    """``{name: nodes}`` for the linked files no longer on disk, by every name they are imported under."""
+    deleted: dict[str, set[str]] = {}
+    for path, node in by_path.items():
+        if dep_tree.nodes[node].get("external") and not os.path.exists(path):
+            for name in _names_of(Path(path), implied, assumed):
+                deleted.setdefault(name, set()).add(node)
+    return deleted
 
 
 #: Standard-library top-level names on any supported Python: ``sys.stdlib_module_names`` drops
