@@ -1005,6 +1005,28 @@ def test_a_name_from_outside_the_source_survives_any_path_an_extension_sets(tmp_
     assert graph.nodes_named([], dep_tree) == set()
 
 
+@pytest.mark.parametrize("src_is_a_package", [False, True], ids=["src_layout", "src_is_a_package"])
+def test_a_name_spelled_in_another_case_is_no_module(tmp_path, src_is_a_package):
+    """``from app.schemas import Election`` names a class: ``schemas/election.py`` is no module ``Election``,
+    though a macOS or Windows filesystem finds it under that name. Python's import is case-sensitive."""
+    write_files(
+        tmp_path,
+        {
+            **({"src/__init__.py": ""} if src_is_a_package else {}),
+            "src/app/__init__.py": "",
+            "src/app/schemas/__init__.py": "from .election import Election\n",
+            "src/app/schemas/election.py": "class Election:\n    pass\n",
+            "tests/test_a.py": "from app.schemas import Election\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+
+    assert not [node for node in dep_tree if dep_tree.nodes[node].get("external")]
+    (election,) = graph.resolve_files_to_nodes(["src/app/schemas/election.py"], dep_tree, root_dir=tmp_path)
+    assert graph.resolve_impacted_tests([election], dep_tree) == ["tests.test_a"]
+
+
 def test_a_directory_inside_the_analysed_package_is_still_no_import_root(tmp_path):
     """``import types`` is never ``src/app/types.py``: nothing imports from inside a regular package
     that is itself the one analysed."""

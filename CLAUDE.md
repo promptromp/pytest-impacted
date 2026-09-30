@@ -84,7 +84,9 @@ deleted `app.gone` is test code, so a conftest reaching it selects its directory
 never fewer. A standard-library name is never looked up under an assumed root: a `logging.py` in
 a directory really on `sys.path` would shadow the standard library for everything. A
 standard-library name is looked up too (a local `profile/` shadows it), but not a
-distribution installed into a root (`pip install -t .`). A file found becomes an `external`
+distribution installed into a root (`pip install -t .`), and every part must be spelled as on
+disk: a macOS or Windows filesystem finds `schemas/election.py` as `schemas/Election.py`, but
+`from app.schemas import Election` imports a class, and Python's import is case-sensitive. A file found becomes an `external`
 node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`
 entries included). Every candidate the *walks* do not define goes into `graph["unresolved"]`
 (`_may_name_a_module`, judged by the walks alone), found on disk or not: which file an

@@ -660,7 +660,7 @@ def _directories_above(packages: list[str], root: Path) -> list[Path]:
     ]
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=4096)
 def top_level_entries(directory: Path) -> frozenset[str]:
     """The names of the entries in *directory*; none when it cannot be listed."""
     try:
@@ -701,7 +701,9 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
     Filesystem checks only, never an import; a package directory wins over a module
     file, as in Python. A standard-library name is looked up too: with a project
     directory first on ``sys.path``, a local ``profile/`` shadows the standard library's
-    unless Python loaded it first, which depends on the process.
+    unless Python loaded it first, which depends on the process. Each part must be spelled
+    as on disk: an import is case-sensitive though a macOS or Windows filesystem is not, so
+    ``from app.schemas import Election`` is no module ``schemas/election.py``.
     """
     relative = package_name_to_path(name)
     top = name.partition(".")[0]
@@ -714,9 +716,19 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
             continue  # third-party code installed into the project (``pip install -t .``)
         # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.
         file = next((f for f in (base / relative / "__init__.py", base / f"{relative}.py") if os.path.isfile(f)), None)
-        if file is not None and (real := file.resolve()).is_relative_to(root):
+        if file is not None and _spelled_exactly(file, base) and (real := file.resolve()).is_relative_to(root):
             found.append(str(real))
     return list(dict.fromkeys(found))
+
+
+def _spelled_exactly(file: Path, base: Path) -> bool:
+    """Whether each part of *file* below *base* has the case of the entry on disk."""
+    directory = base
+    for part in file.relative_to(base).parts:
+        if part not in top_level_entries(directory):
+            return False
+        directory = directory / part
+    return True
 
 
 def resolve_files_to_modules(
