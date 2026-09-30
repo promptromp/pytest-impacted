@@ -22,7 +22,8 @@ If `rust/Cargo.toml` exists:
 
 - If it pins `ruff_python_parser` / `ruff_python_ast` by git tag, set both tags to the ruff version step 1 left in `uv.lock`. The tags and the Python ruff are kept at the same release (see CLAUDE.md), so move them whenever ruff moved, and never ahead of it
 - Run `cargo update --manifest-path rust/Cargo.toml` to bring `Cargo.lock` up to date within the declared version ranges
-- Rebuild the extension so that step 5 tests the upgraded crate: `uv sync --all-extras --dev --reinstall-package pytest-impacted-rs` (a plain `uv sync` does not rebuild it)
+- Rebuild the extension so that step 5 tests the upgraded crate: `uv sync --all-extras --dev --reinstall-package pytest-impacted-rs` (without `--reinstall-package`, `uv sync` does not rebuild it), then confirm `uv run python -c "import pytest_impacted_rs"` succeeds
+- If the tag does not exist upstream, or the crate no longer builds or imports, **stop and report** as in step 5. Don't move the tags back, pin ruff back or edit the crate's source unprompted
 - Report the tag change and the crates `cargo update` moved
 - Otherwise skip this step
 
