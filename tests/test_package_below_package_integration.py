@@ -172,9 +172,10 @@ def test_a_name_that_only_happens_to_match_a_file_above_the_package_places_nothi
     run(project).assert_outcomes(passed=2)
 
 
-def test_deleting_a_module_the_application_imports_selects_its_importers_only(make_git_project):
-    """``app.gone`` names the analysed package: a deletion is placed as application code, as without
-    ``src/__init__.py``, so the conftest importing the app does not make it a full run."""
+def test_deleting_a_module_the_application_imports_is_followed_through_a_conftest(make_git_project):
+    """``app.gone`` resolves only with ``src/`` on ``sys.path``, a guess: the deleted module is placed as test
+    code, so the conftest importing the app selects every test beneath it. More than without
+    ``src/__init__.py``, where the same deletion is application code; never fewer than a sure link."""
     project = make_git_project(
         {
             **files("app"),
@@ -187,7 +188,4 @@ def test_deleting_a_module_the_application_imports_selects_its_importers_only(ma
     )
     (project.path / "src/app/gone.py").unlink()
 
-    result = run(project)
-
-    result.assert_outcomes(passed=1, skipped=2)
-    result.stdout.fnmatch_lines(["*test_service.py::test_service PASSED*"])
+    run(project).assert_outcomes(passed=3)

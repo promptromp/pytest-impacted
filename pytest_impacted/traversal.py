@@ -600,10 +600,11 @@ def split_import_roots(
     ``__init__.py`` is on ``sys.path`` wherever the code says ``import app``, though the walk
     names the module ``src.app``. But whether it is cannot be told, and a bare name found only
     there may be a coincidence (``import utils`` and a ``backend/utils.py``). So a file found
-    only under an assumed root, outside the analysed directories, is a *guess*: it reaches its
-    importers without saying what kind of code it is (``graph.build_dep_tree`` flags the edge
-    ``assumed_root``). A standard-library name is never looked up there: a ``logging.py`` in a
-    directory really on ``sys.path`` would shadow the standard library for the whole project.
+    only under an assumed root is a *guess*: it reaches its importers without saying what kind
+    of code it is (``graph.build_dep_tree`` flags the edge ``assumed_root``) — nor what kind of
+    code it leads to, which would place what the file imports. A standard-library name is never
+    looked up there: a ``logging.py`` in a directory really on ``sys.path`` would shadow the
+    standard library for the whole project.
 
     Never a root: a regular package inside the analysed package, which would invent names
     like ``types`` for ``pkg/types.py``; and the directory of a rootless test module, which

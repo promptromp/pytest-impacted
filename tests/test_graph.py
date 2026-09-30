@@ -862,9 +862,10 @@ def test_a_module_beside_the_package_is_a_guess_and_the_standard_library_is_neve
     assert graph.nodes_named(["logging"], dep_tree) == set()
 
 
-def test_an_import_found_for_sure_or_inside_an_analysed_directory_is_no_guess(tmp_path):
+def test_an_import_also_found_for_sure_is_no_guess(tmp_path):
     """``src.helper`` spells the file from the rootdir: the same module imported as ``helper`` too is one
-    sure edge. ``app.core`` is found only under ``src/``, but inside the package the user named."""
+    sure edge. ``app.core`` is found only under ``src/``: though it names the analysed package, the edge
+    is a guess, so it never leads placement into what the package imports (the walk places the package)."""
     write_files(
         tmp_path,
         {
@@ -880,7 +881,7 @@ def test_an_import_found_for_sure_or_inside_an_analysed_directory_is_no_guess(tm
     (helper,) = graph.resolve_files_to_nodes(["src/helper.py"], dep_tree, root_dir=tmp_path)
     assert dep_tree.edges[helper, "tests.test_both"] == {}
     assert dep_tree.edges[helper, "tests.test_short"] == {"assumed_root": True}
-    assert dep_tree.edges["src.app.core", "tests.test_short"] == {}
+    assert dep_tree.edges["src.app.core", "tests.test_short"] == {"assumed_root": True}
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
@@ -903,14 +904,16 @@ def test_a_changed_file_is_named_as_its_path_reads_from_the_rootdir(tmp_path):
     assert graph.link_changed_files(["src/helper.py"], dep_tree, root_dir=tmp_path) == ["src.helper"]
 
 
-def test_a_deleted_module_inside_the_analysed_package_is_no_guess(tmp_path):
-    """``app.gone`` names the package the user analyses: its importers are sure, as without ``src/__init__.py``."""
+def test_a_deleted_module_imported_only_through_an_assumed_root_is_a_guess_even_inside_the_package(tmp_path):
+    """``app.gone`` resolves only with ``src/`` on ``sys.path``, a guess wherever the file was: its importers
+    are reached, and it is placed as test code, which is followed. (A sure edge could make it application
+    code where 0.34.0 placed it by its other importers: fewer tests.)"""
     write_files(tmp_path, {**SRC_IS_A_PACKAGE, "tests/test_gone.py": "def test_it():\n    import app.gone\n"})
     dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path).copy()
 
     (linked,) = graph.link_changed_files(["src/app/gone.py"], dep_tree, root_dir=tmp_path)
 
-    assert dep_tree.edges[linked, "tests.test_gone"] == {}
+    assert dep_tree.edges[linked, "tests.test_gone"] == {"assumed_root": True}
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")

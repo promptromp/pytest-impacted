@@ -76,12 +76,13 @@ the code says `import app`, though the walk names the module `src.app` — but n
 analysed package, where a tests dir may sit. They are resolved (`src -> real_src`), as the files
 found under them are. Whether an assumed root is on `sys.path` is a guess, and a bare name found
 only there may be a coincidence (`import utils` and a `backend/utils.py`), so an import found
-only there, of a file outside the analysed directories, is an edge flagged `assumed_root` that,
-like `runs_init`, only reaches: `_changes_by_role` ignores it, or a test helper the match leads
-to would become application code and its conftest rule opt-in — fewer tests. Inside an analysed
-directory it is no guess (`app.gone` names the package the user named). A standard-library name
-is never looked up under an assumed root: a `logging.py` in a directory really on `sys.path`
-would shadow the standard library for everything. A
+only there is an edge flagged `assumed_root` that, like `runs_init`, only reaches:
+`_changes_by_role` ignores it, or a test helper the match leads to would become application code
+and its conftest rule opt-in — fewer tests. That holds inside the analysed package too: an app
+module importing a walked test helper as `app.tests.h` must not lead placement through it, and a
+deleted `app.gone` is test code, so a conftest reaching it selects its directory — more tests,
+never fewer. A standard-library name is never looked up under an assumed root: a `logging.py` in
+a directory really on `sys.path` would shadow the standard library for everything. A
 standard-library name is looked up too (a local `profile/` shadows it), but not a
 distribution installed into a root (`pip install -t .`). A file found becomes an `external`
 node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`
