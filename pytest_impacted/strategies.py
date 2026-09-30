@@ -608,7 +608,8 @@ def _changes_by_role(
         # ``runs_init`` link, and an import found only under an assumed import root.
         sources = [node for node in dep_tree if not dep_tree.nodes[node].get("external") and is_application_file(node)]
         imports = dep_tree
-        if dep_tree.graph.get("runs_init") or dep_tree.graph.get("assumed_roots"):  # few graphs have any to skip
+        # By the edges themselves, not a graph-level key: an extension may add such an edge, or drop the key.
+        if any(_only_reaches(edge) for *_, edge in dep_tree.edges(data=True)):  # few graphs have any to skip
             imports = nx.subgraph_view(dep_tree, filter_edge=lambda u, v: not _only_reaches(dep_tree.edges[u, v]))
         return set().union(*nx.bfs_layers(nx.reverse_view(imports), sources))
 

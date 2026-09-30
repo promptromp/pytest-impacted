@@ -114,7 +114,7 @@ package: then an edit to anything `app/__init__.py` imports would reach every im
 namespace portion or missing name inside `app` (a facade again, and a full run through a
 `pytest_plugins` module). So `link_changed_files` links only the `__init__.py` that *changed* (a
 node or not) to the importers of missing names inside its package, on the run's copy — edges
-flagged `runs_init` (and `graph["runs_init"]` set), which `_changes_by_role` ignores: they must
+flagged `runs_init`, which `_changes_by_role` ignores: they must
 only reach, never place a package as application code (an external package would turn from test
 code into application code, making its conftest rule opt-in: fewer tests than with no link).
 `package_members` counts an `__init__.py` above the rootdir only through an unbroken chain of

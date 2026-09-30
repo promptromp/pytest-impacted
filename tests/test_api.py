@@ -1581,3 +1581,39 @@ def test_a_test_module_named_from_a_directory_above_the_package_resolves_to_its_
     found = _test_files(["app.tests.test_x", "tests.test_x", "no.such"], dep_tree, "src/app", "src/app/tests", tmp_path)
 
     assert found == [str((tmp_path / "src/app/tests/test_x.py").resolve())] * 2
+
+
+COINCIDENCE = {
+    "backend/__init__.py": "",
+    "backend/app/__init__.py": "",
+    "backend/app/svc.py": "import logging\n",
+    "backend/logging.py": "from testing.factories import make\n",
+    "testing/factories.py": "",
+    "suite/conftest.py": "from testing.factories import make\n",
+    "suite/test_a.py": "",
+    "suite/test_svc.py": "from backend.app import svc\n",
+}
+
+
+@pytest.mark.parametrize("drop", [(), ("assumed_roots", "runs_init")], ids=["as_built", "graph_keys_dropped"])
+def test_an_import_found_only_under_an_assumed_root_never_places_the_module(tmp_path, drop):
+    """``import logging`` matches ``backend/logging.py`` only if ``backend/`` is on ``sys.path``: the helper it
+    imports stays test code, so the conftest importing that helper selects the tests beneath it — judged by
+    the edge's own flag, which an extension cannot lose by dropping a graph-level key."""
+
+    class Drops:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            for key in drop:
+                dep_tree.graph.pop(key, None)
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(tmp_path, COINCIDENCE)
+    strategy = CompositeImpactStrategy([*get_default_strategies(), Drops()])
+
+    result, _ = _run_with_notices(
+        tmp_path, ["testing/factories.py"], ns_module="backend/app", tests_dir="suite", strategy=strategy
+    )
+
+    assert result == ["suite/test_a.py", "suite/test_svc.py"]
