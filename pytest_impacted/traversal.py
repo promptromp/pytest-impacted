@@ -650,6 +650,8 @@ def _directories_above(packages: list[str], root: Path) -> list[Path]:
     tests dir may sit: nothing imports from inside the package being named.
     """
     directories = [root / package_name_to_path(package) for package in packages]
+    if not directories:
+        return []
     package = directories[0].resolve()
     # Resolved, as the files found under them are: ``src -> real_src`` is looked up as ``real_src``.
     return [
@@ -737,8 +739,11 @@ def _spelled_exactly(base: Path, relative: str) -> bool:
 
 @lru_cache(maxsize=8192)
 def _entries(directory: str) -> frozenset[str]:
-    """:func:`top_level_entries`, keyed by a plain string: it is asked once per part of every name found."""
-    return top_level_entries(Path(directory))
+    """The names of the entries in *directory*, none when it cannot be listed (asked per part of each name found)."""
+    try:
+        return frozenset(entry.name for entry in os.scandir(directory))
+    except OSError:
+        return frozenset()
 
 
 def resolve_files_to_modules(

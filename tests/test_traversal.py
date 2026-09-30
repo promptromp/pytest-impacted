@@ -915,3 +915,7 @@ def test_a_directory_above_the_package_that_a_name_is_rooted_at_is_implied_not_a
 
     assert implied == [root, root / "src"]
     assert assumed == [root / "lib"]
+
+
+def test_import_roots_of_nothing_analysed_are_the_rootdir(tmp_path):
+    assert import_roots([], {}, {}, tmp_path) == [tmp_path.resolve()]

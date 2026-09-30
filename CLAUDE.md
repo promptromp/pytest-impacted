@@ -70,24 +70,31 @@ names are rooted at, derived from those names, even a regular package (`app/` fo
 `app/tests` walked as `tests.x`) — dropping one loses imports the walk itself assumes,
 keeping one can only over-select (`import types` reaching `app/types.py`); each analysed
 dir's non-package prefix; and the directories in between that are not regular packages. Those
-are the roots the project's names *imply*. Every other directory above an analysed directory is
-an *assumed* root (`split_import_roots`): `src/` with an `__init__.py` is on `sys.path` wherever
-the code says `import app`, though the walk names the module `src.app` — but none inside the
-analysed package, where a tests dir may sit. They are resolved (`src -> real_src`), as the files
-found under them are. Whether an assumed root is on `sys.path` is a guess, and a bare name found
-only there may be a coincidence (`import utils` and a `backend/utils.py`), so an import found
-only there is an edge flagged `assumed_root` that, like `runs_init`, only reaches:
-`_changes_by_role` ignores it, or a test helper the match leads to would become application code
-and its conftest rule opt-in — fewer tests. That holds inside the analysed package too: an app
-module importing a walked test helper as `app.tests.h` must not lead placement through it, and a
-deleted `app.gone` is test code, so a conftest reaching it selects its directory — more tests,
-never fewer. A standard-library name is never looked up under an assumed root: a `logging.py` in
-a directory really on `sys.path` would shadow the standard library for everything. A
-standard-library name is looked up too (a local `profile/` shadows it), but not a
-distribution installed into a root (`pip install -t .`), and every part must be spelled as on
-disk: a macOS or Windows filesystem finds `schemas/election.py` as `schemas/Election.py`, but
-`from app.schemas import Election` imports a class, and Python's import is case-sensitive. A file found becomes an `external`
-node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`
+are the roots the project's names *imply*. On them a standard-library name is looked up too (a
+local `profile/` shadows it), but not a distribution installed into a root (`pip install -t .`),
+and every part must be spelled as on disk: a macOS or Windows filesystem finds
+`schemas/election.py` as `schemas/Election.py`, but `from app.schemas import Election` imports a
+class, and Python's import is case-sensitive.
+
+Every other directory above an analysed directory is an *assumed* root (`split_import_roots`):
+`src/` with an `__init__.py` is on `sys.path` wherever the code says `import app`, though the walk
+names the module `src.app` — but none inside the analysed package, where a tests dir may sit.
+They are resolved (`src -> real_src`), as the files found under them are. Under one, a name that
+spells its way to an analysed directory (`app.models` from `src/`) is always looked up; any other
+only once some walked module's import spells an analysed module from there (`_Linker.activate`:
+evidence the root is on `sys.path`, which keeps `from celery import …` from matching a
+`mysite/celery.py`), and never a standard-library name (`_Assumed.looks_up`): a `logging.py` in
+a directory really on `sys.path` would shadow the standard library for everything. A file found
+only under an assumed root is named as its path reads from an implied root (`backend.redis`, not
+`redis`): its relative imports resolve from that name. Being on `sys.path` is still a guess, and
+a bare name may match by coincidence, so such an import is an edge flagged `assumed_root` that,
+like `runs_init`, only reaches: `_changes_by_role` ignores it, or a test helper the match leads
+to would become application code and its conftest rule opt-in — fewer tests. That holds inside
+the analysed package too: an app module importing a walked test helper as `app.tests.h` must not
+lead placement through it, and a deleted `app.gone` is test code, so a conftest reaching it
+selects its directory — more tests, never fewer.
+
+A file found on any root becomes an `external` node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`
 entries included). Every candidate the *walks* do not define goes into `graph["unresolved"]`
 (`_may_name_a_module`, judged by the walks alone), found on disk or not: which file an
 import means depends on `sys.path`, so a hit under one root must never hide it from a

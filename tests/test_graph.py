@@ -656,6 +656,8 @@ SRC_IS_A_PACKAGE = {
     "src/app/__init__.py": "",
     "src/app/core.py": "X = 1\n",
 }
+#: An import spelling the package from ``src/``: evidence that ``src/`` is on ``sys.path``.
+SPELLED_FROM_SRC = {"tests/test_spelled.py": "import app.core\n"}
 
 
 @pytest.mark.parametrize("module", ["app", "src.app"], ids=["src_on_sys_path", "the_rootdir_on_sys_path"])
@@ -693,8 +695,10 @@ def test_a_module_beside_a_package_below_a_regular_package_is_found_by_import(tm
 
     dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
 
-    assert dep_tree.has_edge("settings", "src.app.service")
-    assert graph.resolve_impacted_tests(["settings"], dep_tree) == ["tests.test_service"]
+    # Named as its path reads from the rootdir, not by the guessed spelling.
+    assert dep_tree.has_edge("src.settings", "src.app.service")
+    assert dep_tree.graph["aliases"]["settings"] == "src.settings"
+    assert graph.resolve_impacted_tests(["src.settings"], dep_tree) == ["tests.test_service"]
 
 
 def test_a_name_the_rootdir_and_a_regular_package_both_hold_links_both_files(tmp_path):
@@ -720,7 +724,10 @@ def test_a_name_the_rootdir_and_a_regular_package_both_hold_links_both_files(tmp
 @pytest.mark.parametrize("deleted", ["src/app/gone.py", "src/gone.py"])
 def test_a_deleted_module_imported_from_a_regular_package_above_the_analysed_one_is_linked(tmp_path, deleted):
     gone = "app.gone" if deleted == "src/app/gone.py" else "gone"
-    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "tests/test_gone.py": f"def test_it():\n    import {gone}\n"})
+    write_files(
+        tmp_path,
+        {**SRC_IS_A_PACKAGE, **SPELLED_FROM_SRC, "tests/test_gone.py": f"def test_it():\n    import {gone}\n"},
+    )
     dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path).copy()
 
     (linked,) = graph.link_changed_files([deleted], dep_tree, root_dir=tmp_path)
@@ -838,9 +845,9 @@ def test_a_package_symlinked_below_a_regular_package_is_imported_through_the_lin
 
 
 def test_a_module_beside_the_package_is_a_guess_and_the_standard_library_is_never_looked_up_there(tmp_path):
-    """The price of a root that is a regular package: ``import utils`` may be ``app/utils.py`` when ``app/sub``
-    is the package analysed, as it would be with ``app/`` on ``sys.path``; the edge reaches the importer's tests,
-    and being a guess says nothing of what kind of code the file is. ``import logging`` never is
+    """The price of a root that is a regular package: with ``from sub import x`` saying ``app/`` is on
+    ``sys.path``, ``import utils`` may be ``app/utils.py`` too; the edge reaches the importer's tests, and
+    being a guess says nothing of what kind of code the file is. ``import logging`` never is
     ``app/logging.py``: with ``app/`` really on ``sys.path`` that file would shadow the standard library."""
     write_files(
         tmp_path,
@@ -850,15 +857,15 @@ def test_a_module_beside_the_package_is_a_guess_and_the_standard_library_is_neve
             "app/utils.py": "",
             "app/sub/__init__.py": "",
             "app/sub/x.py": "import logging\nimport utils\n",
-            "tests/test_x.py": "from app.sub import x\n",
+            "tests/test_x.py": "from sub import x\n",
             "tests/test_log.py": "import app.logging\n",
         },
     )
 
     dep_tree = graph.build_dep_tree("app/sub", tests_package="tests", root_dir=tmp_path)
 
-    assert dep_tree.graph["assumed_roots"] == [str((tmp_path / "app").resolve())]
-    assert dep_tree.edges["utils", "app.sub.x"] == {"assumed_root": True}
+    assert dep_tree.graph["assumed_roots"] == {str((tmp_path / "app").resolve()): {"gateways": ["sub"], "active": True}}
+    assert dep_tree.edges["app.utils", "app.sub.x"] == {"assumed_root": True}
     assert list(dep_tree.successors("app.logging")) == ["tests.test_log"]
     assert graph.nodes_named(["logging"], dep_tree) == set()
 
@@ -875,6 +882,7 @@ def test_a_changed_file_named_like_the_standard_library_under_an_assumed_root_re
             "tests/test_x.py": "from app.sub import x\n",
         },
     )
+    write_files(tmp_path, {"tests/test_spelled.py": "import sub.x\n"})
     dep_tree = graph.build_dep_tree("app/sub", tests_package="tests", root_dir=tmp_path).copy()
     write_files(tmp_path, {"app/logging.py": ""})
 
@@ -920,10 +928,11 @@ def test_a_file_found_under_a_root_the_names_imply_and_through_a_link_above_the_
 
 def test_a_changed_file_is_named_as_its_path_reads_from_the_rootdir(tmp_path):
     """``src/helper.py`` is ``src.helper``, not the ``helper`` a guessed root would make of it."""
-    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "tests/test_a.py": "import helper\n"})
+    write_files(tmp_path, {**SRC_IS_A_PACKAGE, **SPELLED_FROM_SRC, "tests/test_a.py": "import helper\n"})
     dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path).copy()
 
     assert graph.link_changed_files(["src/helper.py"], dep_tree, root_dir=tmp_path) == ["src.helper"]
+    assert dep_tree.has_edge("src.helper", "tests.test_a")
 
 
 def test_a_deleted_module_imported_only_through_an_assumed_root_is_a_guess_even_inside_the_package(tmp_path):
@@ -964,6 +973,7 @@ def test_a_declared_plugin_is_no_guess_though_an_import_of_it_is(tmp_path):
         tmp_path,
         {
             **SRC_IS_A_PACKAGE,
+            **SPELLED_FROM_SRC,
             "src/fixtures.py": "",
             "tests/conftest.py": "import fixtures\npytest_plugins = ['fixtures']\n",
             "tests/test_a.py": "",
@@ -982,6 +992,7 @@ def test_a_changed_file_linked_by_a_name_under_an_assumed_root_is_a_guess_too(tm
         tmp_path,
         {
             **SRC_IS_A_PACKAGE,
+            **SPELLED_FROM_SRC,
             "tests/test_sure.py": "def test_it():\n    import src.gone\n",
             "tests/test_guess.py": "def test_it():\n    import gone\n",
         },
@@ -1025,6 +1036,75 @@ def test_a_name_spelled_in_another_case_is_no_module(tmp_path, src_is_a_package)
     assert not [node for node in dep_tree if dep_tree.nodes[node].get("external")]
     (election,) = graph.resolve_files_to_nodes(["src/app/schemas/election.py"], dep_tree, root_dir=tmp_path)
     assert graph.resolve_impacted_tests([election], dep_tree) == ["tests.test_a"]
+
+
+REDIS = {
+    "backend/__init__.py": "",
+    "backend/app/__init__.py": "",
+    "backend/app/svc.py": "import redis\n",  # the third-party package
+    "backend/redis.py": "from .types import CacheKey\n",
+    "backend/types.py": "CacheKey = str\n",
+    "suite/test_cache.py": "from backend.redis import CacheKey\n",
+    "suite/test_other.py": "",
+}
+
+
+@pytest.mark.parametrize("evidence", [{}, {"suite/test_svc.py": "from app import svc\n"}], ids=["none", "app_spelled"])
+def test_a_file_a_guess_reaches_keeps_its_own_relative_imports(tmp_path, evidence):
+    """``import redis`` may match ``backend/redis.py`` once ``backend/`` looks like it is on ``sys.path``; the file
+    is still named ``backend.redis``, as its path reads, so ``from .types import …`` is ``backend.types``."""
+    write_files(tmp_path, {**REDIS, **evidence})
+
+    dep_tree = graph.build_dep_tree("backend/app", tests_package="suite", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("backend.types", "backend.redis")
+    assert "suite.test_cache" in graph.resolve_impacted_tests(["backend.types"], dep_tree)
+    assert ("redis" in dep_tree.graph["aliases"]) == bool(evidence)
+
+
+def test_a_bare_name_is_not_looked_up_where_no_import_spells_the_package(tmp_path):
+    """``mysite/celery.py`` beside ``mysite/polls``: nothing imports ``polls.*``, so ``mysite/`` is not on
+    ``sys.path``, and ``from celery import shared_task`` is the third-party package."""
+    write_files(
+        tmp_path,
+        {
+            "mysite/__init__.py": "",
+            "mysite/celery.py": "",
+            "mysite/polls/__init__.py": "",
+            "mysite/polls/tasks.py": "from celery import shared_task\n",
+            "conftest.py": "import mysite.polls.tasks\n",
+            "tests/test_other.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("mysite/polls", tests_package="tests", root_dir=tmp_path)
+
+    assert not [node for node, path in dep_tree.nodes(data="path") if path and path.endswith("celery.py")]
+    assert dep_tree.graph["assumed_roots"] == {
+        str((tmp_path / "mysite").resolve()): {"gateways": ["polls"], "active": False}
+    }
+
+
+def test_an_analysed_package_named_like_the_standard_library_is_looked_up_by_its_name(tmp_path):
+    """``src/calendar`` below a ``src/__init__.py``: ``calendar.models`` spells the package itself."""
+    write_files(
+        tmp_path,
+        {
+            "src/__init__.py": "",
+            "src/calendar/__init__.py": "",
+            "src/calendar/models.py": "",
+            "tests/test_models.py": "from calendar.models import X\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/calendar", tests_package="tests", root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests(["src.calendar.models"], dep_tree) == ["tests.test_models"]
+
+
+def test_standard_library_names_do_not_depend_on_the_interpreter():
+    """A module removed from the standard library in a later Python is still one on every supported version."""
+    assert {"chunk", "imp", "distutils", "telnetlib", "logging"} <= graph._STANDARD_LIBRARY
 
 
 def test_a_directory_inside_the_analysed_package_is_still_no_import_root(tmp_path):
