@@ -1574,13 +1574,15 @@ def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module
 
 def test_a_test_module_named_from_a_directory_above_the_package_resolves_to_its_file(tmp_path):
     """A strategy may name a test ``app.tests.test_x``: with ``src/`` a package that is no node's name
-    and no alias, only another spelling of ``src.app.tests.test_x``."""
+    and no alias, only another spelling of ``src.app.tests.test_x``. A file is listed once."""
     write_files(tmp_path, dict.fromkeys(["src/__init__.py", "src/app/__init__.py", "src/app/tests/test_x.py"], ""))
     dep_tree = graph.build_dep_tree("src/app", tests_package="src/app/tests", root_dir=tmp_path)
 
-    found = _test_files(["app.tests.test_x", "tests.test_x", "no.such"], dep_tree, "src/app", "src/app/tests", tmp_path)
+    found = _test_files(
+        ["app.tests.test_x", "tests.test_x", "no.such", ("odd", 1), 7], dep_tree, "src/app", "src/app/tests", tmp_path
+    )
 
-    assert found == [str((tmp_path / "src/app/tests/test_x.py").resolve())] * 2
+    assert found == [str((tmp_path / "src/app/tests/test_x.py").resolve())]
 
 
 COINCIDENCE = {

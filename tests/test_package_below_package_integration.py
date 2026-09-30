@@ -170,3 +170,24 @@ def test_a_name_that_only_happens_to_match_a_file_above_the_package_places_nothi
     edit_file(project, "testing/factories.py")
 
     run(project).assert_outcomes(passed=2)
+
+
+def test_deleting_a_module_the_application_imports_selects_its_importers_only(make_git_project):
+    """``app.gone`` names the analysed package: a deletion is placed as application code, as without
+    ``src/__init__.py``, so the conftest importing the app does not make it a full run."""
+    project = make_git_project(
+        {
+            **files("app"),
+            "src/app/gone.py": "X = 1\n",
+            "src/app/service.py": "from app.models import VALUE\n"
+            "try:\n    import app.gone\nexcept ImportError:\n    pass\n",
+            "suite/conftest.py": "import pytest\nfrom app import service\n",
+        },
+        ini("app"),
+    )
+    (project.path / "src/app/gone.py").unlink()
+
+    result = run(project)
+
+    result.assert_outcomes(passed=1, skipped=2)
+    result.stdout.fnmatch_lines(["*test_service.py::test_service PASSED*"])

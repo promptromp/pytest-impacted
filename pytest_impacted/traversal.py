@@ -519,7 +519,7 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
 
     A regular package *above* the analysed directory (``src/`` with an ``__init__.py``)
     can be on ``sys.path`` too, but gets no alias here: an import rooted there is looked
-    up on disk (see :func:`import_roots`), which links every file the name may mean.
+    up on disk (see :func:`split_import_roots`), which links every file the name may mean.
     """
     is_regular_package = cache(_is_regular_package)
     last_root = len(Path(package_name_to_path(package)).parts) - 1
@@ -596,12 +596,14 @@ def split_import_roots(
     directory between the rootdir and one of these that is no regular package.
 
     **Assumed.** Every other directory above an analysed directory (:func:`_directories_above`):
-    a regular package or one below it, which no name is rooted at. ``src/`` with an ``__init__.py`` is on
-    ``sys.path`` wherever the code says ``import app``, though the walk names the module
-    ``src.app`` — but whether it is cannot be told, and a name found only there may be a
-    coincidence (``import logging`` and a ``backend/logging.py``). So an import resolved only
-    under an assumed root reaches its importers without saying what kind of code the file is
-    (``graph.build_dep_tree`` flags the edge ``assumed_root``).
+    one no name is rooted at, being a regular package or inside one. ``src/`` with an
+    ``__init__.py`` is on ``sys.path`` wherever the code says ``import app``, though the walk
+    names the module ``src.app``. But whether it is cannot be told, and a bare name found only
+    there may be a coincidence (``import utils`` and a ``backend/utils.py``). So a file found
+    only under an assumed root, outside the analysed directories, is a *guess*: it reaches its
+    importers without saying what kind of code it is (``graph.build_dep_tree`` flags the edge
+    ``assumed_root``). A standard-library name is never looked up there: a ``logging.py`` in a
+    directory really on ``sys.path`` would shadow the standard library for the whole project.
 
     Never a root: a regular package inside the analysed package, which would invent names
     like ``types`` for ``pkg/types.py``; and the directory of a rootless test module, which
@@ -646,12 +648,14 @@ def _directories_above(packages: list[str], root: Path) -> list[Path]:
     tests dir may sit: nothing imports from inside the package being named.
     """
     directories = [root / package_name_to_path(package) for package in packages]
+    package = directories[0].resolve()
+    # Resolved, as the files found under them are: ``src -> real_src`` is looked up as ``real_src``.
     return [
         above
         for directory in directories
         if directory.is_relative_to(root)
-        for above in reversed(directory.parents)
-        if above.is_relative_to(root) and not above.is_relative_to(directories[0])
+        for above in (parent.resolve() for parent in reversed(directory.parents) if parent.is_relative_to(root))
+        if above.is_relative_to(root) and not above.is_relative_to(package)
     ]
 
 
