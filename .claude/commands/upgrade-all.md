@@ -16,7 +16,18 @@ Detect the dependency manager and upgrade the lockfile to latest compatible vers
 
 Report which packages were upgraded (name + old → new version).
 
-## 2. Upgrade pre-commit hooks
+## 2. Upgrade the Rust crate
+
+If `rust/Cargo.toml` exists:
+
+- If it pins `ruff_python_parser` / `ruff_python_ast` by git tag, set both tags to the ruff version step 1 left in `uv.lock`. The tags and the Python ruff are kept at the same release (see CLAUDE.md), so move them whenever ruff moved, and never ahead of it
+- Run `cargo update --manifest-path rust/Cargo.toml` to bring `Cargo.lock` up to date within the declared version ranges
+- Rebuild the extension so that step 5 tests the upgraded crate: `uv sync --all-extras --dev --reinstall-package pytest-impacted-rs` (without `--reinstall-package`, `uv sync` does not rebuild it), then confirm `uv run python -c "import pytest_impacted_rs"` succeeds
+- If the tag does not exist upstream, or the crate no longer builds or imports, **stop and report** as in step 5. Don't move the tags back, pin ruff back or edit the crate's source unprompted
+- Report the tag change and the crates `cargo update` moved
+- Otherwise skip this step
+
+## 3. Upgrade pre-commit hooks
 
 If `.pre-commit-config.yaml` exists:
 
@@ -24,7 +35,7 @@ If `.pre-commit-config.yaml` exists:
 - Report which hook repos were bumped (repo + old → new rev)
 - Otherwise skip this step
 
-## 3. Upgrade GitHub Actions
+## 4. Upgrade GitHub Actions
 
 If `.github/workflows/` exists:
 
@@ -35,7 +46,7 @@ If `.github/workflows/` exists:
 
 Pay attention to unusual pins like `pypa/gh-action-pypi-publish@release/v1` — leave those alone since they track a rolling branch.
 
-## 4. Verify nothing broke
+## 5. Verify nothing broke
 
 Run the project's standard checks. Pick whichever apply:
 
@@ -45,11 +56,12 @@ Run the project's standard checks. Pick whichever apply:
 
 If any step fails, **stop and report the failure** with enough detail for the user to decide whether to pin back, investigate, or accept. Don't attempt risky rollbacks unprompted.
 
-## 5. Summarize
+## 6. Summarize
 
 End with a compact report:
 
 - Dependencies upgraded (count + notable bumps)
+- Rust crate upgraded (ruff tags, crates moved)
 - Pre-commit hooks upgraded
 - GitHub Actions upgraded
 - Verification results (tests, pre-commit, lint/type)

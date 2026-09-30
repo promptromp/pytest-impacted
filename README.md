@@ -284,7 +284,7 @@ This installs `pytest-impacted-rs`, a pre-built Rust extension using [ruff's par
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
-# Setup
+# Setup (builds the Rust extension from source: needs a Rust toolchain, 1.98+ on macOS 27 and later)
 uv sync --all-extras --dev
 
 # Run tests
@@ -299,7 +299,7 @@ uv run pre-commit run --all-files
 # Install with Rust acceleration (pre-built wheels, no Rust toolchain needed)
 pip install pytest-impacted[fast]
 
-# Or build from source (requires Rust toolchain)
+# Or build from source (requires Rust toolchain, as above)
 pip install maturin
 cd rust && maturin develop --release
 
