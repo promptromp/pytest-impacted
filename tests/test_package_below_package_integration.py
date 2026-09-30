@@ -150,9 +150,9 @@ def test_a_library_found_only_under_the_directory_above_is_followed_like_test_co
 
 
 def test_a_name_that_only_happens_to_match_a_file_above_the_package_places_nothing(make_git_project):
-    """``import logging`` in the app is the standard library's, yet it matches ``backend/logging.py``,
-    which imports a test helper. That must not make the helper application code: the conftest importing
-    it still selects every test beneath it by default."""
+    """``import logging`` in the app is the standard library's, though ``backend/`` holds a ``logging.py``
+    that imports a test helper. It is never looked up there, so the helper stays test code: the conftest
+    importing it still selects every test beneath it by default."""
     project = make_git_project(
         {
             "backend/__init__.py": "",

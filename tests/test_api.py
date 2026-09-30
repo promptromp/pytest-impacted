@@ -1583,13 +1583,14 @@ def test_a_test_module_named_from_a_directory_above_the_package_resolves_to_its_
     )
 
     assert found == [str((tmp_path / "src/app/tests/test_x.py").resolve())]
+    assert _test_files(["app.tests.test_x"], dep_tree, "src/app", "src/app/tests", tmp_path) == found
 
 
 COINCIDENCE = {
     "backend/__init__.py": "",
     "backend/app/__init__.py": "",
-    "backend/app/svc.py": "import logging\n",
-    "backend/logging.py": "from testing.factories import make\n",
+    "backend/app/svc.py": "import utils\n",
+    "backend/utils.py": "from testing.factories import make\n",
     "testing/factories.py": "",
     "suite/conftest.py": "from testing.factories import make\n",
     "suite/test_a.py": "",
@@ -1599,7 +1600,7 @@ COINCIDENCE = {
 
 @pytest.mark.parametrize("drop", [(), ("assumed_roots", "runs_init")], ids=["as_built", "graph_keys_dropped"])
 def test_an_import_found_only_under_an_assumed_root_never_places_the_module(tmp_path, drop):
-    """``import logging`` matches ``backend/logging.py`` only if ``backend/`` is on ``sys.path``: the helper it
+    """``import utils`` matches ``backend/utils.py`` only if ``backend/`` is on ``sys.path``: the helper it
     imports stays test code, so the conftest importing that helper selects the tests beneath it — judged by
     the edge's own flag, which an extension cannot lose by dropping a graph-level key."""
 

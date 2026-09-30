@@ -851,6 +851,7 @@ def test_a_module_beside_the_package_is_a_guess_and_the_standard_library_is_neve
             "app/sub/__init__.py": "",
             "app/sub/x.py": "import logging\nimport utils\n",
             "tests/test_x.py": "from app.sub import x\n",
+            "tests/test_log.py": "import app.logging\n",
         },
     )
 
@@ -858,8 +859,29 @@ def test_a_module_beside_the_package_is_a_guess_and_the_standard_library_is_neve
 
     assert dep_tree.graph["assumed_roots"] == [str((tmp_path / "app").resolve())]
     assert dep_tree.edges["utils", "app.sub.x"] == {"assumed_root": True}
-    assert "logging" not in dep_tree
+    assert list(dep_tree.successors("app.logging")) == ["tests.test_log"]
     assert graph.nodes_named(["logging"], dep_tree) == set()
+
+
+def test_a_changed_file_named_like_the_standard_library_under_an_assumed_root_reaches_no_stdlib_importer(tmp_path):
+    """``app/logging.py`` is ``logging`` only from ``app/``, which would shadow the standard library: the
+    modules that ``import logging`` do not depend on it."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/sub/__init__.py": "",
+            "app/sub/x.py": "import logging\n",
+            "tests/test_x.py": "from app.sub import x\n",
+        },
+    )
+    dep_tree = graph.build_dep_tree("app/sub", tests_package="tests", root_dir=tmp_path).copy()
+    write_files(tmp_path, {"app/logging.py": ""})
+
+    (linked,) = graph.link_changed_files(["app/logging.py"], dep_tree, root_dir=tmp_path)
+
+    assert linked == "app.logging"
+    assert not list(dep_tree.successors(linked))
 
 
 def test_an_import_also_found_for_sure_is_no_guess(tmp_path):
