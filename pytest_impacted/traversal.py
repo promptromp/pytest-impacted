@@ -621,12 +621,11 @@ def split_import_roots(
         for suffix, is_package in ((f"{os.sep}{spelled}.py", 0), (f"{os.sep}{spelled}{os.sep}__init__.py", 1)):
             above = path[: -len(suffix)]
             if path.endswith(suffix) and above not in spelled_at:
+                # A name is never longer than its file's path below the rootdir, so a file outside
+                # it shares its directory above with none inside: remember the miss as well.
                 file = Path(path)
-                base = file.parents[name.count(".") + is_package]
-                if file.is_relative_to(root):
-                    spelled_at[above] = base
-                elif not root.is_relative_to(base):
-                    spelled_at[above] = None  # no file below it is inside the rootdir
+                inside = file.is_relative_to(root)
+                spelled_at[above] = file.parents[name.count(".") + is_package] if inside else None
     naming = dict.fromkeys(base for base in spelled_at.values() if base is not None)
     prefixes = [root / find_non_package_prefix(package_name_to_path(package), root)[0] for package in packages]
     between: dict[Path, None] = {}

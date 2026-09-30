@@ -327,7 +327,7 @@ class _Linker:
         nodes = [self._node_for(candidate, path) for path in (*implied, *assumed)]
         self._located[candidate] = nodes
         if assumed:
-            self._only_assumed[candidate] = set(nodes[len(implied) :]) - set(nodes[: len(implied)])
+            self._only_assumed[candidate] = set(nodes[len(implied) :])
         return nodes
 
     def only_assumed(self, candidate: str) -> set[str]:
