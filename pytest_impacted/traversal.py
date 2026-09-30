@@ -260,6 +260,7 @@ def clear_discovery_cache() -> None:
     _discover_submodules.cache_clear()
     installed_top_levels.cache_clear()
     top_level_entries.cache_clear()
+    _entries.cache_clear()
 
 
 # The cache moved to the private inner function when ``root_dir`` was added, but
@@ -660,7 +661,7 @@ def _directories_above(packages: list[str], root: Path) -> list[Path]:
     ]
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=64)
 def top_level_entries(directory: Path) -> frozenset[str]:
     """The names of the entries in *directory*; none when it cannot be listed."""
     try:
@@ -715,20 +716,29 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
         if top in installed_top_levels(base):
             continue  # third-party code installed into the project (``pip install -t .``)
         # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.
-        file = next((f for f in (base / relative / "__init__.py", base / f"{relative}.py") if os.path.isfile(f)), None)
-        if file is not None and _spelled_exactly(file, base) and (real := file.resolve()).is_relative_to(root):
+        spellings = ((base / relative / "__init__.py", "/__init__.py"), (base / f"{relative}.py", ".py"))
+        file = next(
+            (f for f, ending in spellings if os.path.isfile(f) and _spelled_exactly(base, relative + ending)), None
+        )
+        if file is not None and (real := file.resolve()).is_relative_to(root):
             found.append(str(real))
     return list(dict.fromkeys(found))
 
 
-def _spelled_exactly(file: Path, base: Path) -> bool:
-    """Whether each part of *file* below *base* has the case of the entry on disk."""
-    directory = base
-    for part in file.relative_to(base).parts:
-        if part not in top_level_entries(directory):
+def _spelled_exactly(base: Path, relative: str) -> bool:
+    """Whether each part of the ``/``-separated *relative* path under *base* has the case of its entry on disk."""
+    directory = str(base)
+    for part in relative.split("/"):
+        if part not in _entries(directory):
             return False
-        directory = directory / part
+        directory = os.path.join(directory, part)
     return True
+
+
+@lru_cache(maxsize=8192)
+def _entries(directory: str) -> frozenset[str]:
+    """:func:`top_level_entries`, keyed by a plain string: it is asked once per part of every name found."""
+    return top_level_entries(Path(directory))
 
 
 def resolve_files_to_modules(
