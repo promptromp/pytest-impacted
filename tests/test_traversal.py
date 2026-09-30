@@ -24,6 +24,8 @@ from pytest_impacted.traversal import (
     resolve_modules_to_files,
 )
 
+from .git_helpers import write_files
+
 
 # This repository's own package, found from this file rather than the working directory.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -771,11 +773,51 @@ def test_symlinked_namespace_portions(tmp_path, links, expected):
         ),
         pytest.param(
             ["app/__init__.py", "app/sub/__init__.py", "app/sub/x.py"],
-            "app/sub",
+            "app",
             None,
             "app.sub.x",
             set(),
-            id="a_regular_package_is_never_a_sys_path_root",
+            id="the_analysed_regular_package_is_never_a_sys_path_root",
+        ),
+        pytest.param(
+            ["src/__init__.py", "src/app/__init__.py", "src/app/core.py"],
+            "src/app",
+            None,
+            "src.app.core",
+            {"app.core"},
+            id="src_layout_with_an_init_in_src",
+        ),
+        pytest.param(
+            ["src/__init__.py", "src/app/__init__.py"],
+            "src/app",
+            None,
+            "src.app",
+            {"app"},
+            id="src_layout_with_an_init_in_src_package_itself",
+        ),
+        pytest.param(
+            ["a/__init__.py", "a/b/app/__init__.py", "a/b/app/sub/core.py"],
+            "a/b/app",
+            None,
+            "a.b.app.sub.core",
+            {"b.app.sub.core", "app.sub.core"},
+            id="every_directory_above_the_analysed_one_can_be_a_sys_path_root",
+        ),
+        pytest.param(
+            ["src/__init__.py", "src/app/__init__.py", "src/app/sub/__init__.py", "src/app/sub/core.py"],
+            "src/app",
+            None,
+            "src.app.sub.core",
+            {"app.sub.core"},
+            id="but_no_directory_inside_the_analysed_regular_package",
+        ),
+        pytest.param(
+            ["src/__init__.py", "src/ns/sub/core.py"],
+            "src/ns",
+            None,
+            "src.ns.sub.core",
+            {"ns.sub.core"},
+            id="nor_inside_an_analysed_namespace_package_below_a_regular_one",
         ),
         pytest.param(["src/app/__init__.py"], "src/app", None, "app", {"src.app"}, id="src_layout_package_itself"),
         pytest.param(
@@ -802,6 +844,46 @@ def test_each_file_has_one_canonical_name_and_its_other_names_as_aliases(
     assert [name for name, p in project.modules.items() if p == path] == [canonical]
     assert {alias for alias, name in project.aliases.items() if name == canonical} == aliases
     assert resolve_files_to_modules([files[-1]], package, tests_package, root_dir=tmp_path) == [canonical]
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    ["app/__init__.py", "app.py", "qa/app/__init__.py"],
+    ids=["a_package_at_the_rootdir", "a_module_at_the_rootdir", "a_package_beside_the_tests_dir"],
+)
+def test_a_name_another_import_root_holds_too_is_no_alias_of_a_package_below_a_regular_package(tmp_path, shadow):
+    """``app.core`` may mean ``src/app/core.py`` or the other ``app``, depending on ``sys.path``: the
+    import is looked up on disk, which links every file it may mean, where an alias would hide one."""
+    write_files(
+        tmp_path, dict.fromkeys(["src/__init__.py", "src/app/__init__.py", "src/app/core.py", "qa/suite/test_a.py"], "")
+    )
+    write_files(tmp_path, {shadow: ""})
+
+    project = discover_project_modules("src/app", "qa/suite", root_dir=tmp_path)
+
+    assert project.modules["src.app.core"] == str((tmp_path / "src/app/core.py").resolve())
+    assert not {alias for alias in project.aliases if alias.split(".")[0] == "app"}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+@pytest.mark.parametrize(
+    ("link", "target", "alias"),
+    [
+        pytest.param("src/app", "packages/app", "app.core", id="the_package_itself"),
+        pytest.param("src/app/link", "src/app/real", "app.link.core", id="a_directory_inside_it"),
+    ],
+)
+def test_a_name_through_a_symlink_is_rooted_above_the_analysed_directory_too(tmp_path, link, target, alias):
+    """The names come from the walk, not the files' real paths: ``src/app -> ../packages/app`` is
+    imported as ``app.core`` with ``src/`` on ``sys.path``, wherever the file lives."""
+    write_files(tmp_path, dict.fromkeys(["src/__init__.py", f"{target}/core.py", "packages/app/__init__.py"], ""))
+    write_files(tmp_path, {"src/app/__init__.py": ""} if link != "src/app" else {})
+    (tmp_path / link).symlink_to(tmp_path / target, target_is_directory=True)
+
+    project = discover_project_modules("src/app", root_dir=tmp_path)
+
+    canonical = project.aliases[alias]
+    assert project.modules[canonical] == str((tmp_path / target / "core.py").resolve())
 
 
 def test_a_symlinked_directory_inside_the_package_is_an_alias_not_a_second_module(tmp_path):

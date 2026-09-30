@@ -490,8 +490,7 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     """
     root = canonical_root(root_dir)
     discovered = _discover_project(package, tests_package, root)
-    analysed = [name for name in (package, tests_package) if name]
-    roots = import_roots(analysed, discovered.modules, discovered.aliases, root)
+    roots = import_roots(package, tests_package, discovered.modules, discovered.aliases, root)
     linker = _Linker(discovered, roots, root)
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))

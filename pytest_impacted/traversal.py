@@ -4,7 +4,7 @@ import logging
 import os
 import pkgutil
 from collections.abc import Callable, Iterable, Mapping
-from functools import cache, lru_cache
+from functools import cache, lru_cache, partial
 from itertools import chain
 from pathlib import Path
 from typing import NamedTuple
@@ -431,6 +431,9 @@ def discover_project_modules(
       where ``company/`` is a namespace package — may be imported as ``app.x``,
       ``company.app.x`` or ``src.company.app.x``, depending on ``sys.path``
       (see :func:`_root_aliases`).
+    * So may one below a directory that is a package itself — ``src/app`` with a
+      ``src/__init__.py`` is ``src.app.x`` from the rootdir and ``app.x`` with ``src/`` on
+      ``sys.path`` (see :func:`_aliases_from_above`).
     * A tests dir inside the package is walked twice: ``app.tests.x`` by the package
       walk, ``tests.x`` by the tests-dir walk.
 
@@ -463,6 +466,7 @@ def _discover_project(
         aliases.update(dict.fromkeys(others, canonical))
     for alias, name in _root_aliases(package, modules, root).items():
         aliases.setdefault(alias, name)
+    canonical_names = {name: name if name in modules else aliases[name] for name in walked}
     if tests_package:
         canonical_of = {path: name for name, path in modules.items()}
         for name, path in discover_submodules(tests_package, require_init=False, root_dir=root).items():
@@ -477,6 +481,10 @@ def _discover_project(
     )
     modules = {**ancestors.modules, **modules}
     aliases = {**ancestors.aliases, **aliases}
+    # Last: which names are free to take depends on every root the other names imply.
+    roots = partial(import_roots, package, tests_package, modules, dict(aliases), root)
+    for alias, name in _aliases_from_above(package, canonical_names, roots, root).items():
+        aliases.setdefault(alias, name)
     aliases = {alias: name for alias, name in aliases.items() if alias not in modules}
     return _Discovered(modules, aliases, ancestors.contested)
 
@@ -530,6 +538,45 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
     return aliases
 
 
+def _aliases_from_above(
+    package: str, names: dict[str, str], roots: Callable[[], list[Path]], root: Path
+) -> dict[str, str]:
+    """The package walk's *names* rooted at the regular packages above the analysed directory.
+
+    *names* maps each name the walk gave a file to the file's canonical name.
+
+    :func:`_root_aliases` stops at the first regular package, so ``src/app`` below a
+    ``src/__init__.py`` is ``src.app.x`` alone — yet ``src/`` is on ``sys.path`` wherever the
+    code says ``import app.x`` (an editable install, ``pythonpath = src``), package or not.
+    The analysed directory is the package the user named, so every directory above it can be
+    the one it is imported from. Never one inside it, as there.
+
+    A name another import root (*roots*, called only when needed) holds too — an ``app/`` at
+    the rootdir beside ``src/app`` — is left out: which file it means depends on ``sys.path``,
+    and an alias would pick this package's and hide the other. The import is then looked up
+    on disk, which links every file it may mean (see ``graph._Linker``).
+    """
+    directory = root / package_name_to_path(package)
+    if not directory.is_relative_to(root):
+        return {}
+    parts = directory.relative_to(root).parts
+    regular = [end for end in range(1, len(parts)) if _is_regular_package(root.joinpath(*parts[:end]))]
+    if not regular:
+        return {}
+    elsewhere = [top_level_entries(base) for base in roots() if base not in directory.parents]
+    above = [top_level_entries(root.joinpath(*parts[:start])) for start in range(len(parts))]
+    starts = [
+        start
+        for start in range(regular[0], len(parts))
+        if not any(parts[start] in held or f"{parts[start]}.py" in held for held in (*elsewhere, *above[:start]))
+    ]
+    # The walk's names start at the first regular package (``find_non_package_prefix``): cut from there.
+    first = regular[0] - 1
+    return {
+        ".".join(name.split(".")[start - first :]): canonical for name, canonical in names.items() for start in starts
+    }
+
+
 def _rooted_names(
     directories: tuple[str, ...],
     parts: tuple[str, ...],
@@ -561,7 +608,8 @@ def module_parts(relative: Path) -> tuple[str, ...]:
 
 
 def import_roots(
-    packages: Iterable[str],
+    package: str,
+    tests_package: str | None,
     modules: Mapping[str, str],
     aliases: Mapping[str, str],
     root_dir: str | Path | None = None,
@@ -573,10 +621,13 @@ def import_roots(
     (package or not — the walk names it so). Each analysed directory's non-package prefix is
     another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and any
     directory between the rootdir and one of these could be on ``sys.path`` too, unless it is
-    a regular package, which would invent names like ``types`` for ``pkg/types.py``. Not
-    here: the directory of a rootless test module, which pytest inserts itself.
+    a regular package, which would invent names like ``types`` for ``pkg/types.py``. Every
+    directory above the analysed *package* is one all the same, a regular package or not
+    (see :func:`_aliases_from_above`). Not here: the directory of a rootless test module,
+    which pytest inserts itself.
     """
     root = canonical_root(root_dir)
+    packages = [name for name in (package, tests_package) if name]
     naming: dict[Path, None] = {}
     named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
     for name, path in named:
@@ -594,7 +645,9 @@ def import_roots(
         if base.is_relative_to(root):  # an absolute path outside it names no directory under it
             steps = base.relative_to(root).parts
             between.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
-    return list(dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))]))
+    directory = root / package_name_to_path(package)
+    above = [d for d in reversed(directory.parents) if d.is_relative_to(root)] if directory.is_relative_to(root) else []
+    return list(dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d)), *above]))
 
 
 @lru_cache(maxsize=64)
