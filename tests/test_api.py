@@ -8,7 +8,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted import graph
-from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
+from pytest_impacted.api import _test_files, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
@@ -1399,6 +1399,10 @@ def _give_a_path_of_the_wrong_type(dep_tree):
     dep_tree.nodes["app.other"]["path"] = ("app/other.py", 0)
 
 
+def _give_an_unhashable_path(dep_tree):
+    dep_tree.nodes["app.other"]["path"] = ["app/other.py", 0]
+
+
 @pytest.mark.parametrize(
     "enrich",
     [
@@ -1407,6 +1411,7 @@ def _give_a_path_of_the_wrong_type(dep_tree):
         _bind_a_bare_tuple_node,
         _link_an_external_node_with_a_path_of_the_wrong_type,
         _give_a_path_of_the_wrong_type,
+        _give_an_unhashable_path,
     ],
 )
 @pytest.mark.parametrize("change", ["edit", "delete"])
@@ -1565,3 +1570,14 @@ def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module
 
     assert result == []
     assert "['app.core']" in warn.call_args.args[0]
+
+
+def test_a_test_module_named_from_a_directory_above_the_package_resolves_to_its_file(tmp_path):
+    """A strategy may name a test ``app.tests.test_x``: with ``src/`` a package that is no node's name
+    and no alias, only another spelling of ``src.app.tests.test_x``."""
+    write_files(tmp_path, dict.fromkeys(["src/__init__.py", "src/app/__init__.py", "src/app/tests/test_x.py"], ""))
+    dep_tree = graph.build_dep_tree("src/app", tests_package="src/app/tests", root_dir=tmp_path)
+
+    found = _test_files(["app.tests.test_x", "tests.test_x", "no.such"], dep_tree, "src/app", "src/app/tests", tmp_path)
+
+    assert found == [str((tmp_path / "src/app/tests/test_x.py").resolve())] * 2

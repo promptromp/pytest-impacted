@@ -572,27 +572,46 @@ def import_roots(
 ) -> list[Path]:
     """The directories an import of a module no walk names is looked up from, the rootdir first.
 
+    Those the names imply, then those only assumed (see :func:`split_import_roots`).
+    """
+    implied, assumed = split_import_roots(packages, modules, aliases, root_dir)
+    return [*implied, *assumed]
+
+
+def split_import_roots(
+    packages: Iterable[str],
+    modules: Mapping[str, str],
+    aliases: Mapping[str, str],
+    root_dir: str | Path | None = None,
+) -> tuple[list[Path], list[Path]]:
+    """:func:`import_roots` in two parts: the roots the project's names imply, and those only assumed.
+
     *packages* are the analysed directories, the package first (``--impacted-module``), then
     the tests dir.
 
-    The walks' own names say where they assume ``sys.path`` starts: ``app.x`` for
+    **Implied.** The walks' own names say where they assume ``sys.path`` starts: ``app.x`` for
     ``src/app/x.py`` is rooted at ``src/``, ``tests.x`` for ``app/tests/x.py`` at ``app/``
     (package or not — the walk names it so). Each analysed directory's non-package prefix is
-    another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and any
-    directory between the rootdir and one of these could be on ``sys.path`` too, unless it is
-    a regular package, which would invent names like ``types`` for ``pkg/types.py``.
+    another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and so is any
+    directory between the rootdir and one of these that is no regular package.
 
-    Every directory above an analysed directory is a root all the same, a regular package or
-    not (:func:`_directories_above`): ``src/`` with an ``__init__.py`` is still on ``sys.path``
-    wherever the code says ``import app``, though the walk names the module ``src.app``.
+    **Assumed.** Every other directory above an analysed directory (:func:`_directories_above`):
+    a regular package or one below it, which no name is rooted at. ``src/`` with an ``__init__.py`` is on
+    ``sys.path`` wherever the code says ``import app``, though the walk names the module
+    ``src.app`` — but whether it is cannot be told, and a name found only there may be a
+    coincidence (``import logging`` and a ``backend/logging.py``). So an import resolved only
+    under an assumed root reaches its importers without saying what kind of code the file is
+    (``graph.build_dep_tree`` flags the edge ``assumed_root``).
 
-    Not here: the directory of a rootless test module, which pytest inserts itself.
+    Never a root: a regular package inside the analysed package, which would invent names
+    like ``types`` for ``pkg/types.py``; and the directory of a rootless test module, which
+    pytest inserts itself.
     """
     root = canonical_root(root_dir)
     packages = list(packages)
     # One dictionary lookup per name, pathlib only for a directory not yet seen: pathlib on
     # every name of a large project costs more than the rest of discovery.
-    spelled_at: dict[str, Path] = {}
+    spelled_at: dict[str, Path | None] = {}
     named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
     for name, path in named:
         if name.startswith(LAST_RESORT_PREFIX):
@@ -601,20 +620,23 @@ def import_roots(
         # A name reached through a symlinked directory does not spell the file's real path.
         for suffix, is_package in ((f"{os.sep}{spelled}.py", 0), (f"{os.sep}{spelled}{os.sep}__init__.py", 1)):
             above = path[: -len(suffix)]
-            if path.endswith(suffix) and above not in spelled_at and (file := Path(path)).is_relative_to(root):
-                spelled_at[above] = file.parents[name.count(".") + is_package]
-    naming = dict.fromkeys(spelled_at.values())
+            if path.endswith(suffix) and above not in spelled_at:
+                file = Path(path)
+                base = file.parents[name.count(".") + is_package]
+                if file.is_relative_to(root):
+                    spelled_at[above] = base
+                elif not root.is_relative_to(base):
+                    spelled_at[above] = None  # no file below it is inside the rootdir
+    naming = dict.fromkeys(base for base in spelled_at.values() if base is not None)
     prefixes = [root / find_non_package_prefix(package_name_to_path(package), root)[0] for package in packages]
     between: dict[Path, None] = {}
     for base in (*naming, *prefixes):
         if base.is_relative_to(root):  # an absolute path outside it names no directory under it
             steps = base.relative_to(root).parts
             between.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
-    return list(
-        dict.fromkeys(
-            [root, *naming, *(d for d in between if not _is_regular_package(d)), *_directories_above(packages, root)]
-        )
-    )
+    implied = dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))])
+    assumed = dict.fromkeys(d for d in _directories_above(packages, root) if d not in implied)
+    return list(implied), list(assumed)
 
 
 def _directories_above(packages: list[str], root: Path) -> list[Path]:
@@ -622,8 +644,7 @@ def _directories_above(packages: list[str], root: Path) -> list[Path]:
 
     Any of them can be the ``sys.path`` entry the code is imported from, whether or not it is
     a package itself. Not one inside the analysed package (the first of *packages*), where a
-    tests dir may sit: nothing imports from inside the package being named, and ``import
-    types`` must not become ``app/types.py``.
+    tests dir may sit: nothing imports from inside the package being named.
     """
     directories = [root / package_name_to_path(package) for package in packages]
     return [

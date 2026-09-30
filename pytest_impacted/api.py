@@ -18,6 +18,7 @@ from pytest_impacted.git import GitMode, find_impacted_files_in_repo
 from pytest_impacted.graph import (
     is_test_node,
     link_changed_files,
+    nodes_named,
     package_members,
     reached_from,
     resolve_files_to_nodes,
@@ -112,13 +113,21 @@ def _test_files(
     """The file of each impacted test module: its node's ``path``, or discovery's for a node without one.
 
     Through the graph first, like the changed files: a test module no walk finds — one an
-    extension added with its ``path`` — would otherwise be dropped.
+    extension added with its ``path`` — would otherwise be dropped. A name that is no node
+    may be another spelling of one (:func:`~pytest_impacted.graph.nodes_named`).
     """
     paths = [dep_tree.nodes[module].get("path") if module in dep_tree else None for module in modules]
     unplaced = [module for module, path in zip(modules, paths, strict=True) if not path]
     if not unplaced:
         return [path for path in paths if path]
-    found = resolve_modules_to_files(unplaced, ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
+    found, unknown = [], []
+    for module in unplaced:
+        # Another spelling of a node first: ``app.tests.test_x`` for ``src.app.tests.test_x``.
+        nodes = sorted(nodes_named([module], dep_tree), key=str) if module not in dep_tree else []
+        files = [path for node in nodes if (path := dep_tree.nodes[node].get("path"))]
+        found += files
+        unknown += [] if files else [module]
+    found += resolve_modules_to_files(unknown, ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
     return [path for path in paths if path] + found
 
 

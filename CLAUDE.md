@@ -68,13 +68,16 @@ candidate matching no module, alias or contested name is looked up on disk (`os.
 only) by `graph._Linker` under `import_roots`: the rootdir; every directory the walks' own
 names are rooted at, derived from those names, even a regular package (`app/` for
 `app/tests` walked as `tests.x`) — dropping one loses imports the walk itself assumes,
-keeping one only adds edges (`import types` reaching `app/types.py`); each analysed
-dir's non-package prefix; the directories in between that are not regular packages; and every
-directory above an analysed directory, regular package or not (`src/` with an `__init__.py` is
-on `sys.path` wherever the code says `import app`, though the walk names it `src.app`) — but
-none inside the analysed package, where a tests dir may sit. More edges are not always more
-tests: an external module that application code is now seen to import becomes application code
-(below), and a conftest importing it then selects only with `--impacted-conftest-imports`. A
+keeping one can only over-select (`import types` reaching `app/types.py`); each analysed
+dir's non-package prefix; and the directories in between that are not regular packages. Those
+are the roots the project's names *imply*. Every other directory above an analysed directory is
+an *assumed* root (`split_import_roots`): `src/` with an `__init__.py` is on `sys.path` wherever
+the code says `import app`, though the walk names the module `src.app` — but none inside the
+analysed package, where a tests dir may sit. Whether an assumed root is on `sys.path` is a
+guess, and a name found only there may be a coincidence (`import logging` and a
+`backend/logging.py`), so that edge is flagged `assumed_root` and, like `runs_init`, only
+reaches: `_changes_by_role` ignores it, or a test helper the match leads to would become
+application code and its conftest rule opt-in — fewer tests. A
 standard-library name is looked up too (a local `profile/` shadows it), but not a
 distribution installed into a root (`pip install -t .`). A file found becomes an `external`
 node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`

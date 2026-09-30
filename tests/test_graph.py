@@ -839,7 +839,8 @@ def test_a_package_symlinked_below_a_regular_package_is_imported_through_the_lin
 
 def test_a_module_beside_the_package_named_like_the_standard_library_is_followed_too(tmp_path):
     """The price of a root that is a regular package: ``import logging`` may be ``app/logging.py`` when
-    ``app/sub`` is the package analysed, as it would be with ``app/`` on ``sys.path``. It only adds tests."""
+    ``app/sub`` is the package analysed, as it would be with ``app/`` on ``sys.path``. The edge reaches the
+    importer's tests and, being a guess, says nothing of what kind of code the file is."""
     write_files(
         tmp_path,
         {
@@ -854,6 +855,57 @@ def test_a_module_beside_the_package_named_like_the_standard_library_is_followed
     dep_tree = graph.build_dep_tree("app/sub", tests_package="tests", root_dir=tmp_path)
 
     assert graph.resolve_impacted_tests(["logging"], dep_tree) == ["tests.test_x"]
+    assert dep_tree.edges["logging", "app.sub.x"] == {"assumed_root": True}
+    assert dep_tree.graph["assumed_roots"] == [str((tmp_path / "app").resolve())]
+
+
+def test_an_import_also_found_under_a_root_the_names_imply_is_no_guess(tmp_path):
+    """``src.app.core`` spells the file from the rootdir: the same module imported as ``app.core`` too is
+    one sure edge, and an import from the rootdir alone is never flagged."""
+    write_files(
+        tmp_path,
+        {
+            **SRC_IS_A_PACKAGE,
+            "lib.py": "",
+            "tests/test_both.py": "import src.app.core\nimport app.core\nimport lib\n",
+            "tests/test_short.py": "import app.core\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.edges["src.app.core", "tests.test_both"] == {}
+    assert dep_tree.edges["lib", "tests.test_both"] == {}
+    assert dep_tree.edges["src.app.core", "tests.test_short"] == {"assumed_root": True}
+
+
+def test_a_changed_file_linked_by_a_name_under_an_assumed_root_is_a_guess_too(tmp_path):
+    """``src/gone.py`` is ``src.gone`` from the rootdir and ``gone`` only if ``src/`` is on ``sys.path``."""
+    write_files(
+        tmp_path,
+        {
+            **SRC_IS_A_PACKAGE,
+            "tests/test_sure.py": "def test_it():\n    import src.gone\n",
+            "tests/test_guess.py": "def test_it():\n    import gone\n",
+        },
+    )
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files(["src/gone.py"], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.edges[linked, "tests.test_sure"] == {}
+    assert dep_tree.edges[linked, "tests.test_guess"] == {"assumed_root": True}
+
+
+@pytest.mark.parametrize("path", [["gen.py", 0], ("gen.py", 0), None, 7], ids=["list", "tuple", "none", "number"])
+def test_a_name_from_outside_the_source_survives_any_path_an_extension_sets(tmp_path, path):
+    """The lookup maps files to nodes after enrichment: a ``path`` that is no path is no file."""
+    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "src/app/plugin.py": "", "tests/test_a.py": ""})
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path).copy()
+    dep_tree.nodes["src.app.core"]["path"] = path
+
+    assert graph.nodes_named(["app.plugin", "app.core"], dep_tree) == {"src.app.plugin"}
+    assert graph.nodes_named([], dep_tree) == set()
 
 
 def test_a_directory_inside_the_analysed_package_is_still_no_import_root(tmp_path):

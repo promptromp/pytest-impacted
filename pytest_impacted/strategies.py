@@ -373,7 +373,9 @@ class ImpactStrategy(ABC):
         (``ns_module``, ``tests_package``, ``root_dir``, ``session``) so
         that scan-based enrichers can scan the source tree — every node carries
         its file in ``path``, and ``dep_tree.graph["aliases"]`` maps the other
-        names — with :func:`~pytest_impacted.parsing.parse_file_imports` before
+        names the walks or the graph's own lookups found (for any other,
+        :func:`~pytest_impacted.graph.nodes_named` looks on disk as well)
+        — with :func:`~pytest_impacted.parsing.parse_file_imports` before
         deciding which edges to add.
 
         Once all strategies have enriched the graph, the final graph is
@@ -587,7 +589,10 @@ def _changes_by_role(
     """The changed graph modules that are application code — or, with ``application=False``, test code.
 
     A module no walk names (``external``: a shared library, a fixture helper, a deleted
-    module) is application code when application code depends on it.
+    module) is application code when application code depends on it — through an import
+    found under a root the project's names imply, not one only assumed
+    (:func:`~pytest_impacted.traversal.split_import_roots`): that may be a coincidence of
+    names, and test code is the side that is followed.
     """
     roles = _CodeRoles(ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
 
@@ -599,11 +604,12 @@ def _changes_by_role(
     @cache
     def application_depends_on() -> set[str]:
         # Everything application code reaches through its imports, in one walk up the graph —
-        # its imports alone: a changed __init__'s ``runs_init`` link only reaches, never places.
+        # its sure imports alone. Two kinds of edge only reach, never place: a changed __init__'s
+        # ``runs_init`` link, and an import found only under an assumed import root.
         sources = [node for node in dep_tree if not dep_tree.nodes[node].get("external") and is_application_file(node)]
         imports = dep_tree
-        if dep_tree.graph.get("runs_init"):  # only runs with a changed __init__ have any to skip
-            imports = nx.subgraph_view(dep_tree, filter_edge=lambda u, v: not dep_tree.edges[u, v].get("runs_init"))
+        if dep_tree.graph.get("runs_init") or dep_tree.graph.get("assumed_roots"):  # few graphs have any to skip
+            imports = nx.subgraph_view(dep_tree, filter_edge=lambda u, v: not _only_reaches(dep_tree.edges[u, v]))
         return set().union(*nx.bfs_layers(nx.reverse_view(imports), sources))
 
     def is_application_code(module: str) -> bool:
@@ -612,6 +618,11 @@ def _changes_by_role(
         return module in application_depends_on()
 
     return [module for module in impacted_modules if module in dep_tree and is_application_code(module) == application]
+
+
+def _only_reaches(edge: dict) -> bool:
+    """Whether a graph edge links a dependent without saying that application code imports the module."""
+    return bool(edge.get("runs_init") or edge.get("assumed_root"))
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):

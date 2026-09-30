@@ -23,6 +23,7 @@ from pytest_impacted.traversal import (
     path_to_package_name,
     resolve_files_to_modules,
     resolve_modules_to_files,
+    split_import_roots,
 )
 
 from .git_helpers import write_files
@@ -901,3 +902,16 @@ def test_every_directory_above_an_analysed_directory_is_an_import_root_package_o
         write_files(root, {f"{directory}/__init__.py": ""})
 
     assert import_roots(packages, {}, {}, root) == [root, *(root / directory for directory in above)]
+    assert split_import_roots(packages, {}, {}, root) == ([root], [root / directory for directory in above])
+
+
+def test_a_directory_above_the_package_that_a_name_is_rooted_at_is_implied_not_assumed(tmp_path):
+    """``src/`` without an ``__init__.py`` is where ``app.core`` spells its file from: no guess."""
+    root = tmp_path.resolve()
+    write_files(root, {"lib/__init__.py": ""})
+    modules = {"app.core": str(root / "src/app/core.py"), "lib.pkg.x": str(root / "lib/pkg/x.py")}
+
+    implied, assumed = split_import_roots(["src/app", "lib/pkg"], modules, {}, root)
+
+    assert implied == [root, root / "src"]
+    assert assumed == [root / "lib"]

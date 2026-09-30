@@ -96,7 +96,7 @@ def test_a_deleted_module_selects_the_tests_importing_it(make_git_project):
 
 
 def test_a_dash_p_plugin_named_from_the_directory_on_sys_path_is_session_wide(make_git_project):
-    """``-p app.plugin`` names ``src/app/plugin.py`` by its alias; editing it selects every test."""
+    """``-p app.plugin`` is ``src/app/plugin.py`` with ``src/`` on ``sys.path``; editing it selects every test."""
     project = make_git_project(
         {
             **files("app"),
@@ -129,13 +129,11 @@ def test_a_module_beside_the_package_is_followed_from_the_directory_on_sys_path(
     result.stdout.fnmatch_lines(["*test_service.py::test_service PASSED*"])
 
 
-@pytest.mark.parametrize(
-    ("args", "passed"),
-    [pytest.param([], 1, id="default"), pytest.param(["--impacted-conftest-imports"], 3, id="opted_in")],
-)
-def test_a_library_beside_the_package_that_the_application_imports_is_application_code(make_git_project, args, passed):
-    """``src/shared.py`` is found now, and the app imports it: a conftest importing it too selects the
-    tests beneath it only on request, as for any application code."""
+@pytest.mark.parametrize("args", [[], ["--impacted-conftest-imports"]], ids=["default", "opted_in"])
+def test_a_library_found_only_under_the_directory_above_is_followed_like_test_code(make_git_project, args):
+    """``src/shared.py`` is found by guessing that ``src/`` is on ``sys.path``. The app imports it, but a
+    guess never makes a module application code, whose conftest rule is opt-in: the conftest importing
+    it selects the tests beneath it either way."""
     project = make_git_project(
         {
             **files("app"),
@@ -148,8 +146,27 @@ def test_a_library_beside_the_package_that_the_application_imports_is_applicatio
     )
     edit_file(project, "src/shared.py")
 
-    result = run(project, *args)
+    run(project, *args).assert_outcomes(passed=3)
 
-    result.assert_outcomes(passed=passed, skipped=3 - passed)
-    if not args:
-        result.stdout.fnmatch_lines(["*Changed application code is imported by *suite/conftest.py*"])
+
+def test_a_name_that_only_happens_to_match_a_file_above_the_package_places_nothing(make_git_project):
+    """``import logging`` in the app is the standard library's, yet it matches ``backend/logging.py``,
+    which imports a test helper. That must not make the helper application code: the conftest importing
+    it still selects every test beneath it by default."""
+    project = make_git_project(
+        {
+            "backend/__init__.py": "",
+            "backend/app/__init__.py": "",
+            "backend/app/svc.py": "import logging\n\ndef run():\n    return logging.INFO\n",
+            "backend/logging.py": "from testing.factories import make\n",
+            "testing/factories.py": "def make():\n    return 1\n",
+            "suite/conftest.py": "import pytest\nfrom testing.factories import make\n\n@pytest.fixture\n"
+            "def thing():\n    return make()\n",
+            "suite/test_a.py": "def test_a(thing):\n    assert thing\n",
+            "suite/test_svc.py": "from backend.app.svc import run\n\ndef test_svc():\n    assert run()\n",
+        },
+        "[pytest]\npythonpath = .\nimpacted_module = backend/app\nimpacted_tests_dir = suite\n",
+    )
+    edit_file(project, "testing/factories.py")
+
+    run(project).assert_outcomes(passed=2)
