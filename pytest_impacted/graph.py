@@ -257,6 +257,26 @@ def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir:
     return modules_for_files(filenames, {path: node for node, path in dep_tree.nodes(data="path") if path}, root_dir)
 
 
+def nodes_named(names: Iterable[str], dep_tree: nx.DiGraph) -> set[str]:
+    """The nodes that module *names* from outside the source mean — ``-p`` plugins, say.
+
+    A node's own name or an alias of one, and every node whose file the name is found at
+    under the graph's import roots, as an import of it is looked up (:class:`_Linker`):
+    ``-p app.plugin`` is ``src/app/plugin.py`` with ``src/`` on ``sys.path``, though nothing
+    in the source spells it so. Which file a name means depends on ``sys.path``, so each
+    counts; a name found nowhere means no node.
+    """
+    aliases = dep_tree.graph.get("aliases", {})
+    roots = [Path(directory) for directory in dep_tree.graph.get("import_roots", [])]
+    by_path = {path: node for node, path in dep_tree.nodes(data="path") if path} if roots else {}
+    found: set[str] = set()
+    for name in names:
+        found.update({aliases.get(name, name)} & set(dep_tree))
+        if roots:  # the rootdir comes first
+            found.update(by_path[path] for path in locate_module(name, roots, roots[0]) if path in by_path)
+    return found
+
+
 class _Linker:
     """Maps import candidates to graph nodes, looking up modules outside the walks on disk.
 
@@ -490,7 +510,8 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     """
     root = canonical_root(root_dir)
     discovered = _discover_project(package, tests_package, root)
-    roots = import_roots(package, tests_package, discovered.modules, discovered.aliases, root)
+    analysed = [name for name in (package, tests_package) if name]
+    roots = import_roots(analysed, discovered.modules, discovered.aliases, root)
     linker = _Linker(discovered, roots, root)
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))

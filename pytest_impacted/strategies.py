@@ -17,6 +17,7 @@ from pytest_impacted.extensions import ConfigOption, StrategyProtocol
 from pytest_impacted.graph import (
     build_dep_tree,
     is_test_node,
+    nodes_named,
     nodes_under,
     reached_from,
     resolve_impacted_tests,
@@ -304,8 +305,7 @@ def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any)
     - a ``pytest_plugins`` target (flagged in the graph) — reached when it, or anything it imports, changed
     - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
     """
-    aliases = dep_tree.graph.get("aliases", {})
-    session_plugins = {aliases.get(name, name) for name in _session_plugins(session)}
+    session_plugins = nodes_named(_session_plugins(session), dep_tree)
     return sorted({node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (session_plugins & reached))
 
 

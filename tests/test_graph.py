@@ -728,13 +728,131 @@ def test_a_deleted_module_imported_from_a_regular_package_above_the_analysed_one
     assert dep_tree.has_edge(linked, "tests.test_gone")
 
 
-def test_a_plugin_below_a_regular_package_is_named_from_either_directory(tmp_path):
-    """``-p app.plugin`` comes from outside the source: only an alias resolves it."""
-    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "src/app/plugin.py": "", "tests/test_a.py": ""})
+@pytest.mark.parametrize(
+    ("extra", "named"),
+    [
+        pytest.param({}, {"src.app.plugin"}, id="found_under_the_directory_above"),
+        pytest.param(
+            {"app/Dockerfile": ""}, {"src.app.plugin"}, id="a_directory_of_that_name_elsewhere_holds_no_module"
+        ),
+        pytest.param({"app/plugin.py": ""}, {"src.app.plugin"}, id="a_file_of_that_name_that_is_no_node"),
+        pytest.param(
+            {"app/plugin.py": "", "tests/test_b.py": "import app.plugin\n"},
+            {"src.app.plugin", "app.plugin"},
+            id="every_node_it_may_mean",
+        ),
+    ],
+)
+def test_a_name_from_outside_the_source_is_looked_up_under_the_import_roots(tmp_path, extra, named):
+    """``-p app.plugin`` is spelled by nothing in the source, so no import made it an alias."""
+    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "src/app/plugin.py": "", "tests/test_a.py": "", **extra})
 
     dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
 
-    assert dep_tree.graph["aliases"]["app.plugin"] == "src.app.plugin"
+    assert "app.plugin" not in dep_tree.graph["aliases"]
+    assert graph.nodes_named(["app.plugin", "src.app.core", "pytester", "no.such.module"], dep_tree) == {
+        *named,
+        "src.app.core",
+    }
+
+
+def test_a_name_from_outside_the_source_is_an_alias_or_nothing_without_import_roots():
+    """A graph an extension or a test built by hand records no import roots: nothing to look under."""
+    dep_tree = nx.DiGraph(aliases={"tests.plugin": "app.tests.plugin"})
+    dep_tree.add_node("app.tests.plugin", path="/project/app/tests/plugin.py")
+
+    assert graph.nodes_named(["tests.plugin", "app.tests.plugin", "other"], dep_tree) == {"app.tests.plugin"}
+
+
+def test_a_name_a_directory_between_a_regular_package_and_the_analysed_one_holds_too_links_both(tmp_path):
+    """``services.billing.api`` is ``backend/services/billing/api.py`` from ``backend/``, and the
+    other ``services/`` inside it from ``backend/services/`` (where the tests dir is rooted)."""
+    write_files(
+        tmp_path,
+        {
+            "backend/__init__.py": "",
+            "backend/services/billing/__init__.py": "",
+            "backend/services/billing/api.py": "",
+            "backend/services/services/billing/api.py": "",
+            "backend/services/tests/test_api.py": "from services.billing import api\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree(
+        "backend/services/billing", tests_package="backend/services/tests", root_dir=tmp_path
+    )
+
+    api = {node for node, path in dep_tree.nodes(data="path") if path and Path(path).name == "api.py"}
+    assert len(api) == 2
+    assert all(dep_tree.has_edge(node, "tests.test_api") for node in api)
+
+
+def test_a_deleted_file_of_a_name_found_under_a_regular_package_is_still_linked(tmp_path):
+    """``app.core`` is found at ``src/app/core.py``, which must not hide the ``app/core.py`` just deleted
+    at the rootdir: the import now binds to another file."""
+    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "tests/test_core.py": "from app.core import X\n"})
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path).copy()
+
+    (linked,) = graph.link_changed_files(["app/core.py"], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, "tests.test_core")
+
+
+@pytest.mark.parametrize("module", ["qa.suite.helpers", "backend.qa.suite.helpers", "suite.helpers"])
+def test_a_tests_dir_below_a_regular_package_is_imported_from_any_directory_above_it(tmp_path, module):
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "backend/__init__.py": "",
+            "backend/qa/__init__.py": "",
+            "backend/qa/suite/helpers.py": "",
+            "backend/qa/suite/test_a.py": f"from {module} import f\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="backend/qa/suite", root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests(["suite.helpers"], dep_tree) == ["suite.test_a"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_package_symlinked_below_a_regular_package_is_imported_through_the_link(tmp_path):
+    """``src/app -> ../packages/app``: ``app.core`` is found under ``src/`` and is the walk's ``src.app.core``."""
+    write_files(
+        tmp_path,
+        {
+            "src/__init__.py": "",
+            "packages/app/__init__.py": "",
+            "packages/app/core.py": "",
+            "tests/test_core.py": "from app.core import X\n",
+        },
+    )
+    (tmp_path / "src/app").symlink_to(tmp_path / "packages/app", target_is_directory=True)
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+
+    (core,) = graph.resolve_files_to_nodes(["packages/app/core.py"], dep_tree, root_dir=tmp_path)
+    assert graph.resolve_impacted_tests([core], dep_tree) == ["tests.test_core"]
+
+
+def test_a_module_beside_the_package_named_like_the_standard_library_is_followed_too(tmp_path):
+    """The price of a root that is a regular package: ``import logging`` may be ``app/logging.py`` when
+    ``app/sub`` is the package analysed, as it would be with ``app/`` on ``sys.path``. It only adds tests."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/logging.py": "",
+            "app/sub/__init__.py": "",
+            "app/sub/x.py": "import logging\n",
+            "tests/test_x.py": "from app.sub import x\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app/sub", tests_package="tests", root_dir=tmp_path)
+
+    assert graph.resolve_impacted_tests(["logging"], dep_tree) == ["tests.test_x"]
 
 
 def test_a_directory_inside_the_analysed_package_is_still_no_import_root(tmp_path):

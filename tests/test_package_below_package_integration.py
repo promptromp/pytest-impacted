@@ -127,3 +127,29 @@ def test_a_module_beside_the_package_is_followed_from_the_directory_on_sys_path(
 
     result.assert_outcomes(passed=1, skipped=2)
     result.stdout.fnmatch_lines(["*test_service.py::test_service PASSED*"])
+
+
+@pytest.mark.parametrize(
+    ("args", "passed"),
+    [pytest.param([], 1, id="default"), pytest.param(["--impacted-conftest-imports"], 3, id="opted_in")],
+)
+def test_a_library_beside_the_package_that_the_application_imports_is_application_code(make_git_project, args, passed):
+    """``src/shared.py`` is found now, and the app imports it: a conftest importing it too selects the
+    tests beneath it only on request, as for any application code."""
+    project = make_git_project(
+        {
+            **files("app"),
+            "src/shared.py": "def helper():\n    return 1\n",
+            "src/app/service.py": "import shared\nfrom app.models import VALUE\n",
+            "suite/conftest.py": "import pytest\nimport shared\n\n@pytest.fixture\ndef helper():\n"
+            "    return shared.helper()\n",
+        },
+        ini("app"),
+    )
+    edit_file(project, "src/shared.py")
+
+    result = run(project, *args)
+
+    result.assert_outcomes(passed=passed, skipped=3 - passed)
+    if not args:
+        result.stdout.fnmatch_lines(["*Changed application code is imported by *suite/conftest.py*"])
