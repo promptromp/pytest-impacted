@@ -628,17 +628,19 @@ def import_roots(
     """
     root = canonical_root(root_dir)
     packages = [name for name in (package, tests_package) if name]
-    naming: dict[Path, None] = {}
+    # Plain strings: pathlib on every name of a large project costs more than the rest of discovery.
+    inside = os.path.normcase(os.path.join(root, ""))
+    spelled_at: dict[str, tuple[str, int]] = {}
     named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
     for name, path in named:
-        parts = tuple(name.split("."))
-        file = Path(path)
-        if name.startswith(LAST_RESORT_PREFIX) or not file.is_relative_to(root):
+        if name.startswith(LAST_RESORT_PREFIX) or not os.path.normcase(path).startswith(inside):
             continue
-        depth = len(parts) - 1 + (file.name == "__init__.py")
+        spelled = name.replace(".", os.sep)
         # A name reached through a symlinked directory does not spell the file's real path.
-        if depth < len(file.parents) and module_parts(file.relative_to(base := file.parents[depth])) == parts:
-            naming.setdefault(base)
+        for suffix, is_package in ((f"{os.sep}{spelled}.py", 0), (f"{os.sep}{spelled}{os.sep}__init__.py", 1)):
+            if path.endswith(suffix):
+                spelled_at.setdefault(path[: -len(suffix)], (path, name.count(".") + is_package))
+    naming = dict.fromkeys(Path(path).parents[depth] for path, depth in spelled_at.values())
     prefixes = [root / find_non_package_prefix(package_name_to_path(package), root)[0] for package in packages]
     between: dict[Path, None] = {}
     for base in (*naming, *prefixes):
