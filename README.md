@@ -299,7 +299,7 @@ uv run pre-commit run --all-files
 # Install with Rust acceleration (pre-built wheels, no Rust toolchain needed)
 pip install pytest-impacted[fast]
 
-# Or build from source (requires Rust toolchain)
+# Or build from source (requires Rust toolchain; 1.98+ on macOS 27 and later)
 pip install maturin
 cd rust && maturin develop --release
 

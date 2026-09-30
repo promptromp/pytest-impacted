@@ -284,7 +284,13 @@ tags in `rust/Cargo.toml` are kept at the same release.** Bump them together.
 **Building the Rust crate with plain `cargo build` fails to link** — it is a pyo3
 `extension-module` with no libpython to link against. Use `cargo check` to typecheck
 and maturin (or `uv sync`) to build. Lint it from the repo root with
-`--manifest-path rust/Cargo.toml`.
+`--manifest-path rust/Cargo.toml`. `uv sync` builds the extension once and does not
+rebuild it after a change under `rust/`: pass `--reinstall-package pytest-impacted-rs`.
+
+**On macOS 27 and later, build the extension with Rust 1.98 or newer.** An older rustc
+strips a release build into a file dyld refuses ("mis-aligned LINKEDIT string pool"). The
+build itself succeeds; `_rust.py` then falls back to the Python backend without a word,
+and the parity tests fail on the import rather than skip.
 
 ## Strategies
 

@@ -377,6 +377,8 @@ pip install maturin
 cd rust && maturin develop --release
 ```
 
+On macOS 27 and later, build with Rust 1.98 or newer (`rustup update`). An extension built with an older toolchain does not load there, and pytest-impacted then falls back to the pure-Python parser without saying so.
+
 ### How It Works
 
 When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential astroid parsing. No configuration or flags are needed — the extension is detected at import time.
