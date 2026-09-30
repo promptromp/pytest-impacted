@@ -482,7 +482,7 @@ def _discover_project(
     modules = {**ancestors.modules, **modules}
     aliases = {**ancestors.aliases, **aliases}
     # Last: which names are free to take depends on every root the other names imply.
-    roots = partial(import_roots, package, tests_package, modules, dict(aliases), root)
+    roots = partial(import_roots, package, tests_package, modules, aliases, root)
     for alias, name in _aliases_from_above(package, canonical_names, roots, root).items():
         aliases.setdefault(alias, name)
     aliases = {alias: name for alias, name in aliases.items() if alias not in modules}
@@ -524,6 +524,8 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
     package can be — never one inside a regular package, which would invent names
     like ``types`` for ``pkg/ns/types.py``. With no regular package on the way, the
     roots stop at the analysed directory itself, which is the package being named.
+    (A regular package *above* the analysed directory is another matter: see
+    :func:`_aliases_from_above`.)
     """
     is_regular_package = cache(_is_regular_package)
     last_root = len(Path(package_name_to_path(package)).parts) - 1
@@ -627,7 +629,6 @@ def import_roots(
     which pytest inserts itself.
     """
     root = canonical_root(root_dir)
-    packages = [name for name in (package, tests_package) if name]
     # Plain strings: pathlib on every name of a large project costs more than the rest of discovery.
     inside = os.path.normcase(os.path.join(root, ""))
     spelled_at: dict[str, tuple[str, int]] = {}
@@ -641,7 +642,8 @@ def import_roots(
             if path.endswith(suffix):
                 spelled_at.setdefault(path[: -len(suffix)], (path, name.count(".") + is_package))
     naming = dict.fromkeys(Path(path).parents[depth] for path, depth in spelled_at.values())
-    prefixes = [root / find_non_package_prefix(package_name_to_path(package), root)[0] for package in packages]
+    analysed = [name for name in (package, tests_package) if name]
+    prefixes = [root / find_non_package_prefix(package_name_to_path(name), root)[0] for name in analysed]
     between: dict[Path, None] = {}
     for base in (*naming, *prefixes):
         if base.is_relative_to(root):  # an absolute path outside it names no directory under it
