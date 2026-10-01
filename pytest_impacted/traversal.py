@@ -255,6 +255,12 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
     return _discover_submodules(package, require_init, canonical_root(root_dir))
 
 
+def forget_listings() -> None:
+    """Drop the cached directory listings the on-disk lookup uses (:func:`locate_module`)."""
+    top_level_entries.cache_clear()
+    _entries.cache_clear()
+
+
 def clear_discovery_cache() -> None:
     """Drop every cached discovery result (see :func:`discover_submodules`)."""
     _discover_submodules.cache_clear()
@@ -652,13 +658,14 @@ def _directories_above(packages: list[str], root: Path) -> list[Path]:
     directories = [root / package_name_to_path(package) for package in packages]
     if not directories:
         return []
-    package = directories[0].resolve()
     # Resolved, as the files found under them are: ``src -> real_src`` is looked up as ``real_src``.
+    # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
+    package = Path(os.path.realpath(directories[0]))
     return [
         above
         for directory in directories
         if directory.is_relative_to(root)
-        for above in (parent.resolve() for parent in reversed(directory.parents) if parent.is_relative_to(root))
+        for above in (Path(os.path.realpath(p)) for p in reversed(directory.parents) if p.is_relative_to(root))
         if above.is_relative_to(root) and not above.is_relative_to(package)
     ]
 

@@ -306,7 +306,8 @@ def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any)
     - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
     """
     session_plugins = nodes_named(_session_plugins(session), dep_tree)
-    return sorted({node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (session_plugins & reached))
+    plugins = {node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (session_plugins & reached)
+    return sorted(plugins, key=str)  # an extension may add nodes that are not strings
 
 
 def _session_plugins(session: Any) -> set[str]:

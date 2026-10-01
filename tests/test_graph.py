@@ -1024,6 +1024,15 @@ def test_a_name_from_outside_the_source_survives_any_path_an_extension_sets(tmp_
     assert graph.nodes_named([], dep_tree) == set()
 
 
+def test_a_name_from_outside_the_source_means_module_nodes_only(tmp_path):
+    """An extension may give a node that is no string the file of a module: a name still means the module."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/plugin.py": "", "tests/test_a.py": ""})
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path).copy()
+    dep_tree.add_node(("app.plugin", "answer"), path=dep_tree.nodes["app.plugin"]["path"])
+
+    assert graph.nodes_named(["app.plugin"], dep_tree) == {"app.plugin"}
+
+
 @pytest.mark.parametrize("src_is_a_package", [False, True], ids=["src_layout", "src_is_a_package"])
 def test_a_name_spelled_in_another_case_is_no_module(tmp_path, src_is_a_package):
     """``from app.schemas import Election`` names a class: ``schemas/election.py`` is no module ``Election``,
@@ -1126,6 +1135,61 @@ def test_an_analysed_package_named_like_the_standard_library_is_looked_up_by_its
 def test_standard_library_names_do_not_depend_on_the_interpreter():
     """A module removed from the standard library in a later Python is still one on every supported version."""
     assert {"chunk", "imp", "distutils", "telnetlib", "logging"} <= graph._STANDARD_LIBRARY
+
+
+def test_a_name_given_to_a_guessed_file_is_still_looked_up_for_other_files(tmp_path):
+    """``import settings`` finds ``backend/src/settings.py`` by guess, named ``src.settings`` as its path reads from
+    ``backend/``. ``import src.settings`` from the rootdir means ``src/settings.py`` too, and what that imports."""
+    write_files(
+        tmp_path,
+        {
+            "backend/src/__init__.py": "",
+            "backend/src/app/__init__.py": "",
+            "backend/src/app/models.py": "import settings\n",
+            "backend/src/settings.py": "",
+            "backend/tests/test_models.py": "from app.models import X\n",
+            "backend/tests/test_legacy.py": "import src.settings\n",
+            "src/settings.py": "import src.config\n",
+            "src/config.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("backend/src/app", tests_package="backend/tests", root_dir=tmp_path)
+
+    (config,) = graph.resolve_files_to_nodes(["src/config.py"], dep_tree, root_dir=tmp_path)
+    assert "tests.test_legacy" in graph.resolve_impacted_tests([config], dep_tree)
+
+
+def test_a_new_module_is_found_by_the_next_graph_built_in_the_same_process(tmp_path):
+    """A long-lived process building graphs for two configurations sees a module created in between."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "other/__init__.py": "",
+            "lib/__init__.py": "",
+            "lib/helpers.py": "import lib.base\n",
+            "tests/test_a.py": "import lib.helpers\n",
+        },
+    )
+    graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+    write_files(tmp_path, {"lib/base.py": ""})
+
+    dep_tree = graph.build_dep_tree("other", tests_package="tests", root_dir=tmp_path)
+
+    (base,) = graph.resolve_files_to_nodes(["lib/base.py"], dep_tree, root_dir=tmp_path)
+    assert graph.resolve_impacted_tests([base], dep_tree) == ["tests.test_a"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+@pytest.mark.parametrize(("package", "tests_dir"), [("app", "loop/tests"), ("loop/app", "tests")])
+def test_a_symlink_loop_on_an_analysed_directory_does_not_crash(tmp_path, package, tests_dir):
+    write_files(tmp_path, {"app/__init__.py": "", "tests/test_a.py": ""})
+    (tmp_path / "loop").symlink_to("loop")
+
+    dep_tree = graph.build_dep_tree(package, tests_package=tests_dir, root_dir=tmp_path)
+
+    assert dep_tree.graph["import_roots"][0] == str(tmp_path.resolve())
 
 
 def test_a_directory_inside_the_analysed_package_is_still_no_import_root(tmp_path):

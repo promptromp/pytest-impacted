@@ -1610,3 +1610,51 @@ def test_an_import_found_only_under_an_assumed_root_never_places_the_module(tmp_
     )
 
     assert result == ["suite/test_a.py", "suite/test_spelled.py", "suite/test_svc.py"]
+
+
+@pytest.mark.parametrize("path", [["x"], 5], ids=["list", "number"])
+def test_a_test_named_by_an_alias_whose_node_has_an_odd_path_resolves_by_discovery(tmp_path, path):
+    """An extension may set any ``path``; a name that is not the node's own still resolves to the real file."""
+    write_files(
+        tmp_path,
+        dict.fromkeys(["app/__init__.py", "app/tests/__init__.py", "app/tests/test_models.py"], ""),
+    )
+    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path).copy()
+    dep_tree.nodes["app.tests.test_models"]["path"] = path
+
+    found = _test_files(["tests.test_models"], dep_tree, "app", "app/tests", tmp_path)
+
+    assert found == [str((tmp_path / "app/tests/test_models.py").resolve())]
+
+
+def test_a_plugin_whose_file_an_extension_also_gives_to_a_node_that_is_no_string_does_not_crash(tmp_path):
+    """A per-fixture extension may add ``("app.plugin", "answer")`` with the plugin's ``path``."""
+
+    class PerFixture:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.add_node(("app.plugin", "answer"), path=dep_tree.nodes["app.plugin"]["path"], pytest_plugin=True)
+            dep_tree.add_edge("app.plugin", ("app.plugin", "answer"))
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/models.py": "",
+            "app/plugin.py": "from app.models import X\n",
+            "suite/test_models.py": "from app.models import X\n",
+            "suite/test_other.py": "",
+        },
+    )
+    session = MagicMock()
+    session.config.option.plugins = ["app.plugin"]
+    session.config.pluginmanager.getplugin.return_value = None
+    strategy = CompositeImpactStrategy([*get_default_strategies(), PerFixture()])
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/models.py"], ns_module="app", tests_dir="suite", strategy=strategy, session=session
+    )
+
+    assert result == ["suite/test_models.py", "suite/test_other.py"]

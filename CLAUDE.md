@@ -85,7 +85,8 @@ evidence the root is on `sys.path`, which keeps `from celery import …` from ma
 `mysite/celery.py`), and never a standard-library name (`_Assumed.looks_up`): a `logging.py` in
 a directory really on `sys.path` would shadow the standard library for everything. A file found
 only under an assumed root is named as its path reads from an implied root (`backend.redis`, not
-`redis`): its relative imports resolve from that name. Being on `sys.path` is still a guess, and
+`redis`): its relative imports resolve from that name — and that name is still looked up when an
+import spells it, since it may mean another file under another root. Being on `sys.path` is still a guess, and
 a bare name may match by coincidence, so such an import is an edge flagged `assumed_root` that,
 like `runs_init`, only reaches: `_changes_by_role` ignores it (it looks when `graph["runs_init"]`
 or `graph["assumed_roots"]` is set), or a test helper the match leads to would become
@@ -166,7 +167,9 @@ keyword-only `dep_tree`. Both caches live on *private* inner functions —
 `_cached_build_dep_tree` (maxsize=8) and `_discover_submodules` — because the public
 wrappers must canonicalize `root_dir` before the lookup. `clear_dep_tree_cache()`
 clears both (via `traversal.clear_discovery_cache()`); `discover_submodules.cache_clear`
-is a back-compat alias onto the inner cache.
+is a back-compat alias onto the inner cache. The directory listings the on-disk lookup reads
+are dropped at the start of every `build_dep_tree` (`forget_listings`): a long-lived process
+building a second graph must see files created since the first.
 
 **Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref
 straight to `repo.git.<cmd>(...)`. It validates each ref with `validate_rev` (rejecting

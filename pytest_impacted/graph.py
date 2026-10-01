@@ -23,6 +23,7 @@ from pytest_impacted.traversal import (
     _Discovered,
     _is_regular_package,
     canonical_root,
+    forget_listings,
     import_base,
     locate_module,
     module_parts,
@@ -261,14 +262,15 @@ def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir:
 
 
 def _nodes_by_path(dep_tree: nx.DiGraph) -> dict[str, str]:
-    """``{file: node}`` for the nodes that have one.
+    """``{file: node}`` for the module nodes that have one.
 
-    A ``path`` that is a string or path-like only: an extension may set anything else.
+    String nodes with a ``path`` that is a string or path-like only: an extension may add any
+    hashable node and set anything else.
     """
     return {
         os.fspath(path): node
         for node, path in dep_tree.nodes(data="path")
-        if path and isinstance(path, str | os.PathLike)
+        if isinstance(node, str) and path and isinstance(path, str | os.PathLike)
     }
 
 
@@ -415,6 +417,7 @@ class _Linker:
         self._by_path = {path: name for name, path in self.modules.items()}
         self._located: dict[str, list[str]] = {}
         self._only_assumed: dict[str, set[str]] = {}
+        self._named_by_path: set[str] = set()
 
     def activate(self, candidates: Iterable[str]) -> None:
         """Mark active each assumed root that one of *candidates* spells an analysed module from."""
@@ -435,7 +438,8 @@ class _Linker:
         if (located := self._located.get(candidate)) is not None:
             return located
         known = self.aliases.get(candidate, candidate), *self._contested.get(candidate, ())
-        if found := [name for name in known if name in self.modules]:
+        # A name given to a guessed file as its path reads was never looked up itself: it may mean another file too.
+        if (found := [name for name in known if name in self.modules]) and self._named_by_path.isdisjoint(found):
             return found
         sure, guessed = _lookup(candidate, self._roots, self.assumed, self._root)
         nodes = [self._node_for(candidate, path) for path in sure]
@@ -460,8 +464,10 @@ class _Linker:
         # Two files under one name (one per import root): the second is named by its path.
         preferred = [*(_importable_names(Path(path), self._by_depth) if guessed else ()), candidate]
         node = _free_name(preferred, _last_resort_name(Path(path), self._root), self._taken)
-        if candidate != node and not self._taken(candidate):
-            self.aliases[candidate] = node
+        if candidate != node:
+            self._named_by_path.add(node)
+            if not self._taken(candidate):
+                self.aliases[candidate] = node
         self.modules[node] = path
         self.external.add(node)
         self._by_path[path] = node
@@ -679,10 +685,12 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     :func:`~pytest_impacted.traversal.split_import_roots`) is an edge flagged ``assumed_root``.
     """
     root = canonical_root(root_dir)
+    forget_listings()  # files may have come or gone since a graph was last built in this process
     discovered = _discover_project(package, tests_package, root)
     analysed = [name for name in (package, tests_package) if name]
     roots, assumed_roots = split_import_roots(analysed, discovered.modules, discovered.aliases, root)
-    directories = [(root / package_name_to_path(name)).resolve() for name in analysed]
+    # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
+    directories = [Path(os.path.realpath(root / package_name_to_path(name))) for name in analysed]
     # The names that lead from each assumed root to an analysed directory: ``app`` from ``src/``.
     gateways = {
         base: frozenset(d.relative_to(base).parts[0] for d in directories if d.is_relative_to(base) and d != base)
