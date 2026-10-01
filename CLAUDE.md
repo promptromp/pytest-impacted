@@ -58,10 +58,9 @@ invent `types` for `pkg/ns/types.py`. A regular package *above* the analysed dir
 (`src/` with an `__init__.py`) gets no alias either, though `app.x` is a real name for
 `src/app/x.py` there: an alias picks one file and hides a same-named one under another root,
 so that name is left to the lookup on disk (below), which links every file it may mean.
-Import candidates and `pytest_plugins` entries are
-mapped through the aliases before edges are added; names from outside the source (`-p`)
-through `graph.nodes_named`, which looks on disk as well. Two nodes for one file would double every count and
-hand each consumer the same test twice.
+Import candidates and `pytest_plugins` entries are mapped through the aliases before edges are
+added; names from outside the source (`-p`) through `graph.nodes_named`, which looks on disk as
+well. Two nodes for one file would double every count and hand each consumer the same test twice.
 
 **Modules no walk finds join the graph by import, and changed ones per run.** An import
 candidate matching no module, alias or contested name is looked up on disk (`os.path`
@@ -88,15 +87,17 @@ a directory really on `sys.path` would shadow the standard library for everythin
 only under an assumed root is named as its path reads from an implied root (`backend.redis`, not
 `redis`): its relative imports resolve from that name. Being on `sys.path` is still a guess, and
 a bare name may match by coincidence, so such an import is an edge flagged `assumed_root` that,
-like `runs_init`, only reaches: `_changes_by_role` ignores it, or a test helper the match leads
-to would become application code and its conftest rule opt-in — fewer tests. That holds inside
+like `runs_init`, only reaches: `_changes_by_role` ignores it (it looks when `graph["runs_init"]`
+or `graph["assumed_roots"]` is set), or a test helper the match leads to would become
+application code and its conftest rule opt-in — fewer tests. That holds inside
 the analysed package too: an app module importing a walked test helper as `app.tests.h` must not
 lead placement through it, and a deleted `app.gone` is test code, so a conftest reaching it
 selects its directory — more tests, never fewer.
 
-A file found on any root becomes an `external` node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`
-entries included). Every candidate the *walks* do not define goes into `graph["unresolved"]`
-(`_may_name_a_module`, judged by the walks alone), found on disk or not: which file an
+A file found on any root becomes an `external` node, parsed and followed in turn
+(`_parse_project` runs to a fixpoint, `pytest_plugins` entries included). Every candidate the
+*walks* do not define goes into `graph["unresolved"]` (`_may_name_a_module`, judged by the walks
+alone), found on disk or not: which file an
 import means depends on `sys.path`, so a hit under one root must never hide it from a
 deleted file of that name under another. `link_changed_files` gives each changed `.py` inside
 the rootdir that the run's graph lacks — deleted, or never walked — a node on the run's copy,
@@ -128,7 +129,7 @@ package: then an edit to anything `app/__init__.py` imports would reach every im
 namespace portion or missing name inside `app` (a facade again, and a full run through a
 `pytest_plugins` module). So `link_changed_files` links only the `__init__.py` that *changed* (a
 node or not) to the importers of missing names inside its package, on the run's copy — edges
-flagged `runs_init`, which `_changes_by_role` ignores: they must
+flagged `runs_init` (and `graph["runs_init"]` set), which `_changes_by_role` ignores: they must
 only reach, never place a package as application code (an external package would turn from test
 code into application code, making its conftest rule opt-in: fewer tests than with no link).
 `package_members` counts an `__init__.py` above the rootdir only through an unbroken chain of
