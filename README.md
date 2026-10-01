@@ -124,7 +124,7 @@ pytest --impacted \
        --impacted-tests-dir=tests
 ```
 
-The plugin automatically detects that `src/` is not a Python package and uses the correct importable module name (`my_package`) for dependency analysis.
+The plugin automatically detects that `src/` is not a Python package and uses the correct importable module name (`my_package`) for dependency analysis. If `src/` has an `__init__.py`, imports of `my_package` and of `src.my_package` both match.
 
 ### CI Integration
 

@@ -255,11 +255,18 @@ def discover_submodules(package: str, require_init: bool = True, root_dir: str |
     return _discover_submodules(package, require_init, canonical_root(root_dir))
 
 
+def forget_listings() -> None:
+    """Drop the cached directory listings the on-disk lookup uses (:func:`locate_module`)."""
+    top_level_entries.cache_clear()
+    _entries.cache_clear()
+
+
 def clear_discovery_cache() -> None:
     """Drop every cached discovery result (see :func:`discover_submodules`)."""
     _discover_submodules.cache_clear()
     installed_top_levels.cache_clear()
     top_level_entries.cache_clear()
+    _entries.cache_clear()
 
 
 # The cache moved to the private inner function when ``root_dir`` was added, but
@@ -516,6 +523,10 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
     package can be — never one inside a regular package, which would invent names
     like ``types`` for ``pkg/ns/types.py``. With no regular package on the way, the
     roots stop at the analysed directory itself, which is the package being named.
+
+    A regular package *above* the analysed directory (``src/`` with an ``__init__.py``)
+    can be on ``sys.path`` too, but gets no alias here: an import rooted there is looked
+    up on disk (see :func:`split_import_roots`), which links every file the name may mean.
     """
     is_regular_package = cache(_is_regular_package)
     last_root = len(Path(package_name_to_path(package)).parts) - 1
@@ -568,33 +579,95 @@ def import_roots(
 ) -> list[Path]:
     """The directories an import of a module no walk names is looked up from, the rootdir first.
 
-    The walks' own names say where they assume ``sys.path`` starts: ``app.x`` for
+    Those the names imply, then those only assumed (see :func:`split_import_roots`).
+    """
+    implied, assumed = split_import_roots(packages, modules, aliases, root_dir)
+    return [*implied, *assumed]
+
+
+def split_import_roots(
+    packages: Iterable[str],
+    modules: Mapping[str, str],
+    aliases: Mapping[str, str],
+    root_dir: str | Path | None = None,
+) -> tuple[list[Path], list[Path]]:
+    """:func:`import_roots` in two parts: the roots the project's names imply, and those only assumed.
+
+    *packages* are the analysed directories, the package first (``--impacted-module``), then
+    the tests dir.
+
+    **Implied.** The walks' own names say where they assume ``sys.path`` starts: ``app.x`` for
     ``src/app/x.py`` is rooted at ``src/``, ``tests.x`` for ``app/tests/x.py`` at ``app/``
     (package or not — the walk names it so). Each analysed directory's non-package prefix is
-    another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and any
-    directory between the rootdir and one of these could be on ``sys.path`` too, unless it is
-    a regular package, which would invent names like ``types`` for ``pkg/types.py``. Not
-    here: the directory of a rootless test module, which pytest inserts itself.
+    another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and so is any
+    directory between the rootdir and one of these that is no regular package.
+
+    **Assumed.** Every other directory above an analysed directory (:func:`_directories_above`):
+    one no name is rooted at, being a regular package or inside one. ``src/`` with an
+    ``__init__.py`` is on ``sys.path`` wherever the code says ``import app``, though the walk
+    names the module ``src.app``. But whether it is cannot be told, and a bare name found only
+    there may be a coincidence (``import utils`` and a ``backend/utils.py``). So a file found
+    only under an assumed root is a *guess*: it reaches its importers without saying what kind
+    of code it is (``graph.build_dep_tree`` flags the edge ``assumed_root``) — nor what kind of
+    code it leads to, which would place what the file imports. A standard-library name is never
+    looked up there: a ``logging.py`` in a directory really on ``sys.path`` would shadow the
+    standard library for the whole project.
+
+    Never a root: a regular package inside the analysed package, which would invent names
+    like ``types`` for ``pkg/types.py``; and the directory of a rootless test module, which
+    pytest inserts itself.
     """
     root = canonical_root(root_dir)
-    naming: dict[Path, None] = {}
+    packages = list(packages)
+    # One dictionary lookup per name, pathlib only for a directory not yet seen: pathlib on
+    # every name of a large project costs more than the rest of discovery.
+    spelled_at: dict[str, Path | None] = {}
     named = chain(modules.items(), ((alias, modules[name]) for alias, name in aliases.items() if name in modules))
     for name, path in named:
-        parts = tuple(name.split("."))
-        file = Path(path)
-        if name.startswith(LAST_RESORT_PREFIX) or not file.is_relative_to(root):
+        if name.startswith(LAST_RESORT_PREFIX):
             continue
-        depth = len(parts) - 1 + (file.name == "__init__.py")
+        spelled = name.replace(".", os.sep)
         # A name reached through a symlinked directory does not spell the file's real path.
-        if depth < len(file.parents) and module_parts(file.relative_to(base := file.parents[depth])) == parts:
-            naming.setdefault(base)
+        for suffix, is_package in ((f"{os.sep}{spelled}.py", 0), (f"{os.sep}{spelled}{os.sep}__init__.py", 1)):
+            above = path[: -len(suffix)]
+            if path.endswith(suffix) and above not in spelled_at:
+                # A name is never longer than its file's path below the rootdir, so a file outside
+                # it shares its directory above with none inside: remember the miss as well.
+                file = Path(path)
+                inside = file.is_relative_to(root)
+                spelled_at[above] = file.parents[name.count(".") + is_package] if inside else None
+    naming = dict.fromkeys(base for base in spelled_at.values() if base is not None)
     prefixes = [root / find_non_package_prefix(package_name_to_path(package), root)[0] for package in packages]
     between: dict[Path, None] = {}
     for base in (*naming, *prefixes):
         if base.is_relative_to(root):  # an absolute path outside it names no directory under it
             steps = base.relative_to(root).parts
             between.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
-    return list(dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))]))
+    implied = dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))])
+    assumed = dict.fromkeys(d for d in _directories_above(packages, root) if d not in implied)
+    return list(implied), list(assumed)
+
+
+def _directories_above(packages: list[str], root: Path) -> list[Path]:
+    """The directories from the rootdir down to each analysed directory's parent, the package first.
+
+    Any of them can be the ``sys.path`` entry the code is imported from, whether or not it is
+    a package itself. Not one inside the analysed package (the first of *packages*), where a
+    tests dir may sit: nothing imports from inside the package being named.
+    """
+    directories = [root / package_name_to_path(package) for package in packages]
+    if not directories:
+        return []
+    # Resolved, as the files found under them are: ``src -> real_src`` is looked up as ``real_src``.
+    # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
+    package = Path(os.path.realpath(directories[0]))
+    return [
+        above
+        for directory in directories
+        if directory.is_relative_to(root)
+        for above in (Path(os.path.realpath(p)) for p in reversed(directory.parents) if p.is_relative_to(root))
+        if above.is_relative_to(root) and not above.is_relative_to(package)
+    ]
 
 
 @lru_cache(maxsize=64)
@@ -638,7 +711,9 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
     Filesystem checks only, never an import; a package directory wins over a module
     file, as in Python. A standard-library name is looked up too: with a project
     directory first on ``sys.path``, a local ``profile/`` shadows the standard library's
-    unless Python loaded it first, which depends on the process.
+    unless Python loaded it first, which depends on the process. Each part must be spelled
+    as on disk: an import is case-sensitive though a macOS or Windows filesystem is not, so
+    ``from app.schemas import Election`` is no module ``schemas/election.py``.
     """
     relative = package_name_to_path(name)
     top = name.partition(".")[0]
@@ -650,10 +725,32 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
         if top in installed_top_levels(base):
             continue  # third-party code installed into the project (``pip install -t .``)
         # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.
-        file = next((f for f in (base / relative / "__init__.py", base / f"{relative}.py") if os.path.isfile(f)), None)
+        spellings = ((base / relative / "__init__.py", "/__init__.py"), (base / f"{relative}.py", ".py"))
+        file = next(
+            (f for f, ending in spellings if os.path.isfile(f) and _spelled_exactly(base, relative + ending)), None
+        )
         if file is not None and (real := file.resolve()).is_relative_to(root):
             found.append(str(real))
     return list(dict.fromkeys(found))
+
+
+def _spelled_exactly(base: Path, relative: str) -> bool:
+    """Whether each part of the ``/``-separated *relative* path under *base* has the case of its entry on disk."""
+    directory = str(base)
+    for part in relative.split("/"):
+        if part not in _entries(directory):
+            return False
+        directory = os.path.join(directory, part)
+    return True
+
+
+@lru_cache(maxsize=8192)
+def _entries(directory: str) -> frozenset[str]:
+    """The names of the entries in *directory*, none when it cannot be listed (asked per part of each name found)."""
+    try:
+        return frozenset(entry.name for entry in os.scandir(directory))
+    except OSError:
+        return frozenset()
 
 
 def resolve_files_to_modules(

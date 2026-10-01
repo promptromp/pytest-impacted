@@ -2,9 +2,11 @@
 
 import logging
 import os
+import sys
 from collections.abc import Callable, Iterable
 from functools import cache
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 import networkx as nx
 
@@ -21,11 +23,13 @@ from pytest_impacted.traversal import (
     _Discovered,
     _is_regular_package,
     canonical_root,
+    forget_listings,
     import_base,
-    import_roots,
     locate_module,
     module_parts,
     modules_for_files,
+    package_name_to_path,
+    split_import_roots,
 )
 
 
@@ -188,8 +192,8 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
         if isinstance(node, str) and isinstance(path, str | os.PathLike)
     }
     members = set(nodes_under(directories, paths))
-    roots = [Path(d) for d in dep_tree.graph.get("import_roots", [root])]
-    packages = {name for directory in directories for name in _importable_names(directory / "__init__.py", roots)}
+    implied, assumed = _import_roots_of(dep_tree, root)
+    packages = {name for directory in directories for name in _names_of(directory / "__init__.py", implied, assumed)}
     packages |= {node for node in members if paths[node].endswith(f"{os.sep}__init__.py")}
 
     def inside_a_package(name: str) -> bool:
@@ -254,7 +258,128 @@ def resolve_files_to_nodes(filenames: list[str], dep_tree: nx.DiGraph, root_dir:
     node, however the graph was cached. A module the graph lacks would read as a
     production module outside it, and :func:`resolve_impacted_tests` would select every test.
     """
-    return modules_for_files(filenames, {path: node for node, path in dep_tree.nodes(data="path") if path}, root_dir)
+    return modules_for_files(filenames, _nodes_by_path(dep_tree), root_dir)
+
+
+def _nodes_by_path(dep_tree: nx.DiGraph) -> dict[str, str]:
+    """``{file: node}`` for the module nodes that have one.
+
+    String nodes with a ``path`` that is a string or path-like only: an extension may add any
+    hashable node and set anything else.
+    """
+    return {
+        os.fspath(path): node
+        for node, path in dep_tree.nodes(data="path")
+        if isinstance(node, str) and path and isinstance(path, str | os.PathLike)
+    }
+
+
+def nodes_named(names: Iterable[str], dep_tree: nx.DiGraph) -> set[str]:
+    """The nodes that module *names* from outside the source mean — ``-p`` plugins, say.
+
+    A node's own name or an alias of one, and every node whose file the name is found at
+    under the graph's import roots, as an import of it is looked up (:class:`_Linker`):
+    ``-p app.plugin`` is ``src/app/plugin.py`` with ``src/`` on ``sys.path``, though nothing
+    in the source spells it so. Which file a name means depends on ``sys.path``, so each
+    counts; a name found nowhere means no node.
+    """
+    return set().union(*nodes_named_each(names, dep_tree).values())
+
+
+def nodes_named_each(names: Iterable[str], dep_tree: nx.DiGraph) -> dict[str, set[str]]:
+    """:func:`nodes_named` for each of *names* apart; a name that is no string means nothing."""
+    names = [name for name in names if isinstance(name, str)]
+    if not names:
+        return {}
+    aliases = dep_tree.graph.get("aliases", {})
+    implied, assumed = _import_roots_of(dep_tree)
+    by_path = cache(lambda: _nodes_by_path(dep_tree))
+    # A file deleted since is no longer on disk to look up, but each of its names still means it.
+    gone = cache(lambda: _deleted_by_name(dep_tree, by_path(), implied, assumed))
+    found: dict[str, set[str]] = {}
+    for name in names:
+        found[name] = {node} if (node := aliases.get(name, name)) in dep_tree else set()
+        if implied:  # the rootdir comes first
+            sure, guessed = _lookup(name, implied, assumed, implied[0])
+            found[name] |= {by_path()[path] for path in (*sure, *guessed) if path in by_path()}
+            found[name] |= gone().get(name, set())
+    return found
+
+
+def _deleted_by_name(
+    dep_tree: nx.DiGraph, by_path: dict[str, str], implied: list[Path], assumed: dict[Path, "_Assumed"]
+) -> dict[str, set[str]]:
+    """``{name: nodes}`` for the linked files no longer on disk, by every name they are imported under."""
+    deleted: dict[str, set[str]] = {}
+    for path, node in by_path.items():
+        if dep_tree.nodes[node].get("external") and not os.path.exists(path):
+            for name in _names_of(Path(path), implied, assumed):
+                deleted.setdefault(name, set()).add(node)
+    return deleted
+
+
+#: Standard-library top-level names on any supported Python: ``sys.stdlib_module_names`` drops
+#: removed modules, and whether a name is looked up must not depend on the interpreter.
+_STANDARD_LIBRARY = sys.stdlib_module_names | {
+    *("asynchat", "asyncore", "distutils", "imp", "smtpd"),  # removed in 3.12
+    *("aifc", "audioop", "cgi", "cgitb", "chunk", "crypt", "imghdr", "lib2to3", "mailcap", "msilib"),  # 3.13
+    *("nis", "nntplib", "ossaudiodev", "pipes", "sndhdr", "spwd", "sunau", "telnetlib", "uu", "xdrlib"),  # 3.13
+}
+
+
+class _Assumed(NamedTuple):
+    """An assumed import root (see :func:`~pytest_impacted.traversal.split_import_roots`)."""
+
+    #: The names that lead from it to an analysed directory: ``app`` from ``src/`` above ``src/app``.
+    gateways: frozenset[str]
+    #: Whether some import spells an analysed module from it (``app.models``): evidence it is on ``sys.path``.
+    active: bool
+
+    def looks_up(self, name: str) -> bool:
+        """Whether an import of *name* is looked up here.
+
+        Always when it spells its way to an analysed directory (``app.models``). Anything else
+        (``import settings`` for a module beside the package) only on evidence, and never a
+        standard-library name: a ``logging.py`` in a directory really on ``sys.path`` would
+        shadow the standard library for the whole project.
+        """
+        top = name.partition(".")[0]
+        return top in self.gateways or (self.active and top not in _STANDARD_LIBRARY)
+
+
+def _lookup(name: str, implied: list[Path], assumed: dict[Path, _Assumed], root: Path) -> tuple[list[str], list[str]]:
+    """The files import *name* may mean: found under a root the names imply, and under an assumed root alone."""
+    sure = locate_module(name, implied, root)
+    bases = [base for base, how in assumed.items() if how.looks_up(name)]
+    return sure, [path for path in locate_module(name, bases, root) if path not in sure] if bases else []
+
+
+def _guessed_names(path: Path, assumed: dict[Path, _Assumed], sure: Iterable[str]) -> list[str]:
+    """The names *path* is imported under from an assumed root alone, deepest first, as :func:`_lookup` finds it."""
+    names = dict.fromkeys(sure)
+    return [
+        name
+        for base in sorted(assumed, key=lambda directory: -len(directory.parts))
+        for name in _importable_names(path, [base])
+        if name not in names and assumed[base].looks_up(name)
+    ]
+
+
+def _names_of(path: Path, implied: list[Path], assumed: dict[Path, _Assumed]) -> list[str]:
+    """The names *path* is imported under: from the roots the names imply (as ordered), then from assumed ones alone."""
+    sure = _importable_names(path, implied)
+    return sure + _guessed_names(path, assumed, sure)
+
+
+def _import_roots_of(dep_tree: nx.DiGraph, root: Path | None = None) -> tuple[list[Path], dict[Path, _Assumed]]:
+    """The graph's import roots: those the names imply, rootdir first, and the assumed ones."""
+    assumed = {
+        Path(base): _Assumed(frozenset(how["gateways"]), how["active"])
+        for base, how in dep_tree.graph.get("assumed_roots", {}).items()
+    }
+    default = [str(root)] if root is not None else []
+    implied = [Path(base) for base in dep_tree.graph.get("import_roots", default) if Path(base) not in assumed]
+    return implied, assumed
 
 
 class _Linker:
@@ -264,16 +389,48 @@ class _Linker:
     under the import roots (:func:`~pytest_impacted.traversal.locate_module`), once. A file
     the walks already named links to its node, and the candidate becomes one of its
     aliases; any other file becomes an *external* node, named by the candidate.
+
+    *roots* are those the project's names imply; *assumed* are the others
+    (:func:`~pytest_impacted.traversal.split_import_roots`), each with its *gateways*, the
+    names that lead from it to an analysed directory (``app`` for ``src/`` above ``src/app``).
+    What is looked up under an assumed root is :meth:`_Assumed.looks_up`'s, once
+    :meth:`activate` has seen which ones an import spells an analysed module from. A file
+    found under one alone is linked all the same, told apart by :meth:`only_assumed`, and
+    named as its path reads from a root the names imply (``backend.redis``, not ``redis``),
+    which its relative imports are resolved from.
     """
 
-    def __init__(self, discovered: _Discovered, roots: list[Path], root: Path):
+    def __init__(
+        self,
+        discovered: _Discovered,
+        roots: list[Path],
+        root: Path,
+        gateways: dict[Path, frozenset[str]] | None = None,
+    ):
         self.modules = dict(discovered.modules)
         self.aliases = dict(discovered.aliases)
         self.external: set[str] = set()
         self._contested = discovered.contested
         self._roots, self._root = roots, root
+        self.assumed = {base: _Assumed(names, active=False) for base, names in (gateways or {}).items()}
+        self._by_depth = sorted(roots, key=lambda directory: -len(directory.parts))
         self._by_path = {path: name for name, path in self.modules.items()}
         self._located: dict[str, list[str]] = {}
+        self._only_assumed: dict[str, set[str]] = {}
+        self._named_by_path: set[str] = set()
+
+    def activate(self, candidates: Iterable[str]) -> None:
+        """Mark active each assumed root that one of *candidates* spells an analysed module from."""
+        spelled = set(candidates)
+        self.assumed = {
+            base: how._replace(
+                active=any(
+                    name.partition(".")[0] in how.gateways and locate_module(name, [base], self._root)
+                    for name in spelled
+                )
+            )
+            for base, how in self.assumed.items()
+        }
 
     def targets(self, candidate: str) -> list[str]:
         """The nodes an import of *candidate* depends on (none: it names no module in the project)."""
@@ -281,22 +438,36 @@ class _Linker:
         if (located := self._located.get(candidate)) is not None:
             return located
         known = self.aliases.get(candidate, candidate), *self._contested.get(candidate, ())
-        if found := [name for name in known if name in self.modules]:
+        # A name given to a guessed file as its path reads was never looked up itself: it may mean another file too.
+        if (found := [name for name in known if name in self.modules]) and self._named_by_path.isdisjoint(found):
             return found
-        paths = locate_module(candidate, self._roots, self._root)
-        self._located[candidate] = [self._node_for(candidate, path) for path in paths]
-        return self._located[candidate]
+        sure, guessed = _lookup(candidate, self._roots, self.assumed, self._root)
+        nodes = [self._node_for(candidate, path) for path in sure]
+        nodes += [self._node_for(candidate, path, guessed=True) for path in guessed]
+        self._located[candidate] = nodes
+        if guessed:
+            self._only_assumed[candidate] = set(nodes[len(sure) :])
+        return nodes
+
+    def only_assumed(self, candidate: str) -> set[str]:
+        """Those of *candidate*'s :meth:`targets` that are guesses: found under an assumed import root alone."""
+        return self._only_assumed.get(candidate, set())
 
     def _taken(self, name: str) -> bool:
         return name in self.modules or name in self.aliases
 
-    def _node_for(self, candidate: str, path: str) -> str:
+    def _node_for(self, candidate: str, path: str, *, guessed: bool = False) -> str:
         if (node := self._by_path.get(path)) is not None:
             if candidate not in self.modules:  # not when it named a file another root found
                 self.aliases.setdefault(candidate, node)
             return node
         # Two files under one name (one per import root): the second is named by its path.
-        node = _free_name([candidate], _last_resort_name(Path(path), self._root), self._taken)
+        preferred = [*(_importable_names(Path(path), self._by_depth) if guessed else ()), candidate]
+        node = _free_name(preferred, _last_resort_name(Path(path), self._root), self._taken)
+        if candidate != node:
+            self._named_by_path.add(node)
+            if not self._taken(candidate):
+                self.aliases[candidate] = node
         self.modules[node] = path
         self.external.add(node)
         self._by_path[path] = node
@@ -325,7 +496,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     A module deleted since the graph was built, or created after it was cached, is no
     node, nor is an existing file no walk reaches and nothing imports. Each gets one on
     *dep_tree* — the run's copy, never the cached graph — with an edge to every module
-    whose import of one of its names matched nothing (``graph["unresolved"]``). A deleted
+    whose import of one of its names matched nothing (``graph["unresolved"]``; flagged
+    ``assumed_root`` when only a name under an assumed import root matched). A deleted
     file nothing imports gets none — unless it is an ``__init__.py`` whose package has importers
     of a missing name (below): nothing else is left for it to impact.
 
@@ -337,18 +509,21 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     is flagged ``runs_init``: it reaches the importer, but does not place the package.
     """
     root = canonical_root(root_dir)
-    by_path = {path: node for node, path in dep_tree.nodes(data="path") if path}
+    by_path = _nodes_by_path(dep_tree)
     aliases = dep_tree.graph.setdefault("aliases", {})
     taken = set(dep_tree) | set(aliases)
     unresolved = dep_tree.graph.get("unresolved", {})
-    roots = sorted((Path(d) for d in dep_tree.graph.get("import_roots", [root])), key=lambda d: -len(d.parts))
+    implied, assumed = _import_roots_of(dep_tree, root)
+    implied = sorted(implied, key=lambda directory: -len(directory.parts))
     inside = cache(lambda: _importers_inside(unresolved))
     added = []
     for file in filenames:
         path = (root / file).resolve()
         if not file.endswith(".py") or not path.is_relative_to(root):
             continue
-        names = _importable_names(path, roots)
+        # The names the project's roots imply first, so a node is named as its path reads.
+        sure = _importable_names(path, implied)
+        names = sure + _guessed_names(path, assumed, sure)
         node = by_path.get(str(path))
         runners: set[str] = set()
         if path.name == "__init__.py":
@@ -362,13 +537,15 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             importers = {importer for name in names for importer in unresolved.get(name, ())}
             if not importers and not runners and not os.path.exists(path):
                 continue
+            guessed = importers - {importer for name in sure for importer in unresolved.get(name, ())}
             node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
             # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
             aliases.update({name: node for name in names if name != node and name not in taken})
             taken.update(names)
             taken.add(node)
             dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
-            dep_tree.add_edges_from((node, importer) for importer in importers)
+            dep_tree.add_edges_from((node, importer) for importer in importers - guessed)
+            dep_tree.add_edges_from(((node, importer) for importer in guessed), assumed_root=True)
             by_path[str(path)] = node
             added.append(node)
         # Only to reach them (``runs_init``), never to place the package as application code or test
@@ -443,8 +620,11 @@ def _parse_project(linker: _Linker) -> tuple[dict[str, list[str]], dict[str, lis
     declarations = cache(parse_pytest_plugins)
     imports: dict[str, list[str]] = {}
     pending = dict(linker.modules)
+    # What the walked modules import is the evidence for which assumed roots are on sys.path.
+    imports |= _parse_all_module_imports(pending)
+    linker.activate(candidate for candidates in imports.values() for candidate in candidates)
     while True:
-        imports |= _parse_all_module_imports(pending)
+        imports |= _parse_all_module_imports({name: path for name, path in pending.items() if name not in imports})
         for name in pending:
             for candidate in imports[name]:
                 linker.targets(candidate)
@@ -452,6 +632,20 @@ def _parse_project(linker: _Linker) -> tuple[dict[str, list[str]], dict[str, lis
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
             return imports, plugin_edges
+
+
+def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: bool) -> None:
+    """An import edge; flagged ``assumed_root`` while every import of *module* by *importer* is a guess.
+
+    Whether an assumed root is on ``sys.path`` is a guess, and a bare name matched there may be
+    a coincidence: such an edge reaches the importer, but never places the module as application
+    code (see ``strategies._changes_by_role``), which could make a conftest rule opt-in — fewer tests.
+    """
+    if not guessed:
+        digraph.add_edge(importer, module)
+        digraph.edges[importer, module].pop("assumed_root", None)
+    elif not digraph.has_edge(importer, module):
+        digraph.add_edge(importer, module, assumed_root=True)
 
 
 def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
@@ -486,13 +680,23 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     imports (see :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are
     flagged with the ``pytest_plugin`` attribute. Every import the walks do not
     define — found on disk or not — is kept in ``graph["unresolved"]`` with its
-    importers, for :func:`link_changed_files`.
+    importers, for :func:`link_changed_files`. An import found only under an assumed
+    import root (``graph["assumed_roots"]``, see
+    :func:`~pytest_impacted.traversal.split_import_roots`) is an edge flagged ``assumed_root``.
     """
     root = canonical_root(root_dir)
+    forget_listings()  # files may have come or gone since a graph was last built in this process
     discovered = _discover_project(package, tests_package, root)
     analysed = [name for name in (package, tests_package) if name]
-    roots = import_roots(analysed, discovered.modules, discovered.aliases, root)
-    linker = _Linker(discovered, roots, root)
+    roots, assumed_roots = split_import_roots(analysed, discovered.modules, discovered.aliases, root)
+    # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
+    directories = [Path(os.path.realpath(root / package_name_to_path(name))) for name in analysed]
+    # The names that lead from each assumed root to an analysed directory: ``app`` from ``src/``.
+    gateways = {
+        base: frozenset(d.relative_to(base).parts[0] for d in directories if d.is_relative_to(base) and d != base)
+        for base in assumed_roots
+    }
+    linker = _Linker(discovered, roots, root, gateways)
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
@@ -504,25 +708,28 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
         digraph.add_node(name, path=file_path)
         for candidate in imports[name]:
             # A name conftests above the package contest is an import of each of them too.
-            targets = linker.targets(candidate)
-            for target in targets:
-                digraph.add_edge(name, target)
+            guessed = linker.only_assumed(candidate)
+            for target in linker.targets(candidate):
+                _add_import(digraph, name, target, guessed=target in guessed)
             if _may_name_a_module(candidate, discovered):
                 unresolved.setdefault(candidate, set()).add(name)
         for plugin in plugin_edges.get(name, ()):
-            digraph.add_edge(name, plugin)
+            # No guess: pytest imports a declared plugin, and fails the run if it cannot.
+            _add_import(digraph, name, plugin, guessed=False)
     # pytest registers plugins for the whole session; see PytestImpactStrategy.
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
         digraph.nodes[plugin]["pytest_plugin"] = True
     for name in linker.external:
         digraph.nodes[name].update(external=True, test=_is_test_file(Path(linker.modules[name]), root))
-
     # Other names each module imports under (see discover_project_modules), for names
     # that come from outside the source, such as ``-p`` plugins.
     digraph.graph["aliases"] = linker.aliases
     # For a changed file the graph lacks — deleted, or created since — see link_changed_files.
     digraph.graph["unresolved"] = {name: sorted(importers) for name, importers in unresolved.items()}
-    digraph.graph["import_roots"] = [str(directory) for directory in roots]
+    digraph.graph["import_roots"] = [str(directory) for directory in (*roots, *linker.assumed)]
+    digraph.graph["assumed_roots"] = {
+        str(base): {"gateways": sorted(how.gateways), "active": how.active} for base, how in linker.assumed.items()
+    }
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.
     return digraph.reverse()

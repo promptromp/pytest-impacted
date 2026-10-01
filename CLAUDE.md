@@ -54,10 +54,13 @@ walk reaches twice through a symlinked directory, the name not through the link)
 other name the file imports under is an *alias*: `tests.x` for `app/tests/x.py`, and a name
 rooted at any directory above the module's first regular package (`company.app.x`,
 `src.company.app.x` for `src/company/app/x.py`) — never inside a regular package, which would
-invent `types` for `pkg/ns/types.py`. Import candidates and `pytest_plugins` entries are
-mapped through the aliases before edges are added; names from outside the source (`-p`)
-through `dep_tree.graph["aliases"]`. Two nodes for one file would double every count and
-hand each consumer the same test twice.
+invent `types` for `pkg/ns/types.py`. A regular package *above* the analysed directory
+(`src/` with an `__init__.py`) gets no alias either, though `app.x` is a real name for
+`src/app/x.py` there: an alias picks one file and hides a same-named one under another root,
+so that name is left to the lookup on disk (below), which links every file it may mean.
+Import candidates and `pytest_plugins` entries are mapped through the aliases before edges are
+added; names from outside the source (`-p`) through `graph.nodes_named`, which looks on disk as
+well. Two nodes for one file would double every count and hand each consumer the same test twice.
 
 **Modules no walk finds join the graph by import, and changed ones per run.** An import
 candidate matching no module, alias or contested name is looked up on disk (`os.path`
@@ -65,12 +68,37 @@ only) by `graph._Linker` under `import_roots`: the rootdir; every directory the 
 names are rooted at, derived from those names, even a regular package (`app/` for
 `app/tests` walked as `tests.x`) — dropping one loses imports the walk itself assumes,
 keeping one can only over-select (`import types` reaching `app/types.py`); each analysed
-dir's non-package prefix; and the directories in between that are not regular packages. A
-standard-library name is looked up too (a local `profile/` shadows it), but not a
-distribution installed into a root (`pip install -t .`). A file found becomes an `external`
-node, parsed and followed in turn (`_parse_project` runs to a fixpoint, `pytest_plugins`
-entries included). Every candidate the *walks* do not define goes into `graph["unresolved"]`
-(`_may_name_a_module`, judged by the walks alone), found on disk or not: which file an
+dir's non-package prefix; and the directories in between that are not regular packages. Those
+are the roots the project's names *imply*. On them a standard-library name is looked up too (a
+local `profile/` shadows it), but not a distribution installed into a root (`pip install -t .`),
+and every part must be spelled as on disk: a macOS or Windows filesystem finds
+`schemas/election.py` as `schemas/Election.py`, but `from app.schemas import Election` imports a
+class, and Python's import is case-sensitive.
+
+Every other directory above an analysed directory is an *assumed* root (`split_import_roots`):
+`src/` with an `__init__.py` is on `sys.path` wherever the code says `import app`, though the walk
+names the module `src.app` — but none inside the analysed package, where a tests dir may sit.
+They are resolved (`src -> real_src`), as the files found under them are. Under one, a name that
+spells its way to an analysed directory (`app.models` from `src/`) is always looked up; any other
+only once some walked module's import spells an analysed module from there (`_Linker.activate`:
+evidence the root is on `sys.path`, which keeps `from celery import …` from matching a
+`mysite/celery.py`), and never a standard-library name (`_Assumed.looks_up`): a `logging.py` in
+a directory really on `sys.path` would shadow the standard library for everything. A file found
+only under an assumed root is named as its path reads from an implied root (`backend.redis`, not
+`redis`): its relative imports resolve from that name — and that name is still looked up when an
+import spells it, since it may mean another file under another root. Being on `sys.path` is still a guess, and
+a bare name may match by coincidence, so such an import is an edge flagged `assumed_root` that,
+like `runs_init`, only reaches: `_changes_by_role` ignores it (it looks when `graph["runs_init"]`
+or `graph["assumed_roots"]` is set), or a test helper the match leads to would become
+application code and its conftest rule opt-in — fewer tests. That holds inside
+the analysed package too: an app module importing a walked test helper as `app.tests.h` must not
+lead placement through it, and a deleted `app.gone` is test code, so a conftest reaching it
+selects its directory — more tests, never fewer.
+
+A file found on any root becomes an `external` node, parsed and followed in turn
+(`_parse_project` runs to a fixpoint, `pytest_plugins` entries included). Every candidate the
+*walks* do not define goes into `graph["unresolved"]` (`_may_name_a_module`, judged by the walks
+alone), found on disk or not: which file an
 import means depends on `sys.path`, so a hit under one root must never hide it from a
 deleted file of that name under another. `link_changed_files` gives each changed `.py` inside
 the rootdir that the run's graph lacks — deleted, or never walked — a node on the run's copy,
@@ -139,7 +167,9 @@ keyword-only `dep_tree`. Both caches live on *private* inner functions —
 `_cached_build_dep_tree` (maxsize=8) and `_discover_submodules` — because the public
 wrappers must canonicalize `root_dir` before the lookup. `clear_dep_tree_cache()`
 clears both (via `traversal.clear_discovery_cache()`); `discover_submodules.cache_clear`
-is a back-compat alias onto the inner cache.
+is a back-compat alias onto the inner cache. The directory listings the on-disk lookup reads
+are dropped at the start of every `build_dep_tree` (`forget_listings`): a long-lived process
+building a second graph must see files created since the first.
 
 **Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref
 straight to `repo.git.<cmd>(...)`. It validates each ref with `validate_rev` (rejecting

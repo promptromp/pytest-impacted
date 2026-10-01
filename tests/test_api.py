@@ -8,7 +8,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted import graph
-from pytest_impacted.api import get_impacted_tests, matches_impacted_tests
+from pytest_impacted.api import _test_files, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
@@ -1399,6 +1399,10 @@ def _give_a_path_of_the_wrong_type(dep_tree):
     dep_tree.nodes["app.other"]["path"] = ("app/other.py", 0)
 
 
+def _give_an_unhashable_path(dep_tree):
+    dep_tree.nodes["app.other"]["path"] = ["app/other.py", 0]
+
+
 @pytest.mark.parametrize(
     "enrich",
     [
@@ -1407,6 +1411,7 @@ def _give_a_path_of_the_wrong_type(dep_tree):
         _bind_a_bare_tuple_node,
         _link_an_external_node_with_a_path_of_the_wrong_type,
         _give_a_path_of_the_wrong_type,
+        _give_an_unhashable_path,
     ],
 )
 @pytest.mark.parametrize("change", ["edit", "delete"])
@@ -1565,3 +1570,91 @@ def test_the_warning_for_an_init_edit_selecting_nothing_names_the_changed_module
 
     assert result == []
     assert "['app.core']" in warn.call_args.args[0]
+
+
+def test_a_test_module_named_from_a_directory_above_the_package_resolves_to_its_file(tmp_path):
+    """A strategy may name a test ``app.tests.test_x``: with ``src/`` a package that is no node's name
+    and no alias, only another spelling of ``src.app.tests.test_x``. A file is listed once."""
+    write_files(tmp_path, dict.fromkeys(["src/__init__.py", "src/app/__init__.py", "src/app/tests/test_x.py"], ""))
+    dep_tree = graph.build_dep_tree("src/app", tests_package="src/app/tests", root_dir=tmp_path)
+
+    found = _test_files(
+        ["app.tests.test_x", "tests.test_x", "no.such", ("odd", 1), 7], dep_tree, "src/app", "src/app/tests", tmp_path
+    )
+
+    assert found == [str((tmp_path / "src/app/tests/test_x.py").resolve())]
+    assert _test_files(["app.tests.test_x"], dep_tree, "src/app", "src/app/tests", tmp_path) == found
+
+
+COINCIDENCE = {
+    "backend/__init__.py": "",
+    "backend/app/__init__.py": "",
+    "backend/app/svc.py": "import utils\n",
+    "backend/utils.py": "from testing.factories import make\n",
+    "testing/factories.py": "",
+    "suite/conftest.py": "from testing.factories import make\n",
+    "suite/test_a.py": "",
+    "suite/test_svc.py": "from backend.app import svc\n",
+    "suite/test_spelled.py": "import app.svc\n",  # evidence that backend/ is on sys.path
+}
+
+
+def test_an_import_found_only_under_an_assumed_root_never_places_the_module(tmp_path):
+    """``import utils`` matches ``backend/utils.py`` only if ``backend/`` is on ``sys.path``, as ``import app.svc``
+    suggests: the helper that file imports stays test code, so the conftest importing that helper selects the
+    tests beneath it."""
+    write_files(tmp_path, COINCIDENCE)
+
+    result, _ = _run_with_notices(
+        tmp_path, ["testing/factories.py"], ns_module="backend/app", tests_dir="suite", strategy=None
+    )
+
+    assert result == ["suite/test_a.py", "suite/test_spelled.py", "suite/test_svc.py"]
+
+
+@pytest.mark.parametrize("path", [["x"], 5], ids=["list", "number"])
+def test_a_test_named_by_an_alias_whose_node_has_an_odd_path_resolves_by_discovery(tmp_path, path):
+    """An extension may set any ``path``; a name that is not the node's own still resolves to the real file."""
+    write_files(
+        tmp_path,
+        dict.fromkeys(["app/__init__.py", "app/tests/__init__.py", "app/tests/test_models.py"], ""),
+    )
+    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path).copy()
+    dep_tree.nodes["app.tests.test_models"]["path"] = path
+
+    found = _test_files(["tests.test_models"], dep_tree, "app", "app/tests", tmp_path)
+
+    assert found == [str((tmp_path / "app/tests/test_models.py").resolve())]
+
+
+def test_a_plugin_whose_file_an_extension_also_gives_to_a_node_that_is_no_string_does_not_crash(tmp_path):
+    """A per-fixture extension may add ``("app.plugin", "answer")`` with the plugin's ``path``."""
+
+    class PerFixture:
+        def enrich_dep_tree(self, dep_tree, **kwargs):
+            dep_tree.add_node(("app.plugin", "answer"), path=dep_tree.nodes["app.plugin"]["path"], pytest_plugin=True)
+            dep_tree.add_edge("app.plugin", ("app.plugin", "answer"))
+
+        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+            return []
+
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/models.py": "",
+            "app/plugin.py": "from app.models import X\n",
+            "suite/test_models.py": "from app.models import X\n",
+            "suite/test_other.py": "",
+        },
+    )
+    session = MagicMock()
+    session.config.option.plugins = ["app.plugin"]
+    session.config.pluginmanager.getplugin.return_value = None
+    strategy = CompositeImpactStrategy([*get_default_strategies(), PerFixture()])
+
+    result, _ = _run_with_notices(
+        tmp_path, ["app/models.py"], ns_module="app", tests_dir="suite", strategy=strategy, session=session
+    )
+
+    assert result == ["suite/test_models.py", "suite/test_other.py"]
