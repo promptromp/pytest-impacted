@@ -1,0 +1,35 @@
+# Weekly dependency-update pull requests against main: the GitHub Actions used by the
+# workflows, the packages pinned in uv.lock and the Rust crate's Cargo.lock. Minor and
+# patch bumps are grouped into one pull request per ecosystem so the CI runs (and the
+# reviews) stay few.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # ruff stays at the same release as the ruff_python_* git tags in rust/Cargo.toml
+    # (see CLAUDE.md), so it is bumped by hand together with them.
+    ignore:
+      - dependency-name: "ruff"
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    schedule:
+      interval: "weekly"
+    # Pinned by git tag to the ruff release in uv.lock; bumped by hand together with it.
+    ignore:
+      - dependency-name: "ruff_python_parser"
+      - dependency-name: "ruff_python_ast"
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
