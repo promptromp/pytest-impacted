@@ -55,49 +55,59 @@ class TestImpactedTestsCLI:
         """Set up test environment."""
         self.runner = CliRunner()
 
+    @pytest.fixture
+    def in_tmp_dir(self, tmp_path, monkeypatch):
+        """Run the test from an empty temporary directory, so relative paths such as
+        ``--root-dir .`` and ``Path("test_ns")`` land there.
+
+        Replaces ``CliRunner.isolated_filesystem()``, deprecated in Click 8.5.
+        """
+        monkeypatch.chdir(tmp_path)
+
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_with_all_required_args(self, mock_configure_logging, mock_get_impacted_tests):
         """Test CLI with all required arguments."""
         mock_get_impacted_tests.return_value = ["tests/test_example.py", "tests/test_other.py"]
 
-        with self.runner.isolated_filesystem():
-            # Create test directories
-            Path("test_ns").mkdir()
+        # Create test directories
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                [
-                    "--git-mode",
-                    "unstaged",
-                    "--base-branch",
-                    "main",
-                    "--root-dir",
-                    ".",
-                    "--module",
-                    "test_ns",
-                    "--verbose",
-                ],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            [
+                "--git-mode",
+                "unstaged",
+                "--base-branch",
+                "main",
+                "--root-dir",
+                ".",
+                "--module",
+                "test_ns",
+                "--verbose",
+            ],
+        )
 
-            assert result.exit_code == 0
-            mock_configure_logging.assert_called_once_with(verbose=True)
-            mock_get_impacted_tests.assert_called_once_with(
-                impacted_git_mode=GitMode.UNSTAGED,
-                impacted_base_branch="main",
-                root_dir=".",
-                ns_module="test_ns",
-                tests_dir=None,
-                strategy=ANY,
-                use_merge_base=True,
-            )
-            call_kwargs = mock_get_impacted_tests.call_args[1]
-            assert isinstance(call_kwargs["strategy"], CompositeImpactStrategy)
+        assert result.exit_code == 0
+        mock_configure_logging.assert_called_once_with(verbose=True)
+        mock_get_impacted_tests.assert_called_once_with(
+            impacted_git_mode=GitMode.UNSTAGED,
+            impacted_base_branch="main",
+            root_dir=".",
+            ns_module="test_ns",
+            tests_dir=None,
+            strategy=ANY,
+            use_merge_base=True,
+        )
+        call_kwargs = mock_get_impacted_tests.call_args[1]
+        assert isinstance(call_kwargs["strategy"], CompositeImpactStrategy)
 
-            # Check that the impacted tests are printed to stdout (``result.output`` includes stderr)
-            assert "tests/test_example.py" in result.stdout
-            assert "tests/test_other.py" in result.stdout
+        # Check that the impacted tests are printed to stdout (``result.output`` includes stderr)
+        assert "tests/test_example.py" in result.stdout
+        assert "tests/test_other.py" in result.stdout
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.build_strategy_with_extensions")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
@@ -107,31 +117,31 @@ class TestImpactedTestsCLI:
         """Each --invalidate-all value is forwarded to the strategy builder."""
         mock_get_impacted_tests.return_value = []
 
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                [
-                    "--module",
-                    "test_ns",
-                    "--invalidate-all",
-                    "*.json",
-                    "--invalidate-all",
-                    "config/*.yaml",
-                ],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            [
+                "--module",
+                "test_ns",
+                "--invalidate-all",
+                "*.json",
+                "--invalidate-all",
+                "config/*.yaml",
+            ],
+        )
 
-            assert result.exit_code == 0, result.output
-            mock_build_strategy.assert_called_once_with(
-                watch_dep_files=True,
-                invalidate_all_patterns=("*.json", "config/*.yaml"),
-                conftest_imports=False,
-                disabled=(),
-                ext_config={},
-            )
-            assert "invalidate-all: *.json, config/*.yaml" in result.output
+        assert result.exit_code == 0, result.output
+        mock_build_strategy.assert_called_once_with(
+            watch_dep_files=True,
+            invalidate_all_patterns=("*.json", "config/*.yaml"),
+            conftest_imports=False,
+            disabled=(),
+            ext_config={},
+        )
+        assert "invalidate-all: *.json, config/*.yaml" in result.output
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.build_strategy_with_extensions")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
@@ -139,117 +149,116 @@ class TestImpactedTestsCLI:
         """--conftest-imports opts in to the conftest-import rule, and says so."""
         mock_get_impacted_tests.return_value = []
 
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(impacted_tests_cli, ["--module", "test_ns", "--conftest-imports"])
+        result = self.runner.invoke(impacted_tests_cli, ["--module", "test_ns", "--conftest-imports"])
 
-            assert result.exit_code == 0, result.output
-            assert mock_build_strategy.call_args.kwargs["conftest_imports"] is True
-            assert "conftest-imports: True" in result.output
+        assert result.exit_code == 0, result.output
+        assert mock_build_strategy.call_args.kwargs["conftest_imports"] is True
+        assert "conftest-imports: True" in result.output
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_with_tests_dir(self, mock_configure_logging, mock_get_impacted_tests):
         """Test CLI with tests-dir specified."""
         mock_get_impacted_tests.return_value = ["tests/test_example.py"]
 
-        with self.runner.isolated_filesystem():
-            # Create test directories
-            Path("test_ns").mkdir()
-            Path("tests").mkdir()
+        # Create test directories
+        Path("test_ns").mkdir()
+        Path("tests").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                [
-                    "--git-mode",
-                    "branch",
-                    "--base-branch",
-                    "develop",
-                    "--root-dir",
-                    ".",
-                    "--module",
-                    "test_ns",
-                    "--tests-dir",
-                    "tests",
-                ],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            [
+                "--git-mode",
+                "branch",
+                "--base-branch",
+                "develop",
+                "--root-dir",
+                ".",
+                "--module",
+                "test_ns",
+                "--tests-dir",
+                "tests",
+            ],
+        )
 
-            assert result.exit_code == 0
-            mock_get_impacted_tests.assert_called_once_with(
-                impacted_git_mode=GitMode.BRANCH,
-                impacted_base_branch="develop",
-                root_dir=".",
-                ns_module="test_ns",
-                tests_dir="tests",
-                strategy=ANY,
-                use_merge_base=True,
-            )
+        assert result.exit_code == 0
+        mock_get_impacted_tests.assert_called_once_with(
+            impacted_git_mode=GitMode.BRANCH,
+            impacted_base_branch="develop",
+            root_dir=".",
+            ns_module="test_ns",
+            tests_dir="tests",
+            strategy=ANY,
+            use_merge_base=True,
+        )
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_no_impacted_tests(self, mock_configure_logging, mock_get_impacted_tests):
         """Test CLI when no impacted tests are found."""
         mock_get_impacted_tests.return_value = None
 
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
+        )
 
-            assert result.exit_code == 0
-            assert "No impacted tests found." in result.output
+        assert result.exit_code == 0
+        assert "No impacted tests found." in result.output
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_empty_impacted_tests_list(self, mock_configure_logging, mock_get_impacted_tests):
         """Test CLI when empty list of impacted tests is returned."""
         mock_get_impacted_tests.return_value = []
 
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
+        )
 
-            assert result.exit_code == 0
-            assert "No impacted tests found." in result.output
+        assert result.exit_code == 0
+        assert "No impacted tests found." in result.output
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_fails_when_git_is_unavailable(self, mock_configure_logging, mock_get_impacted_tests):
         """Unknown changes must not print as "no impacted tests" with exit code 0."""
         mock_get_impacted_tests.side_effect = GitUnavailableError()
 
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
+        )
 
-            assert result.exit_code == 1
-            assert "changed files cannot be determined" in result.output
-            assert "No impacted tests found." not in result.output
+        assert result.exit_code == 1
+        assert "changed files cannot be determined" in result.output
+        assert "No impacted tests found." not in result.output
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests", return_value=None)
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_no_merge_base(self, mock_configure_logging, mock_get_impacted_tests):
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli, ["--git-mode", "branch", "--module", "test_ns", "--no-merge-base"]
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli, ["--git-mode", "branch", "--module", "test_ns", "--no-merge-base"]
+        )
 
-            assert result.exit_code == 0, result.output
-            assert mock_get_impacted_tests.call_args.kwargs["use_merge_base"] is False
+        assert result.exit_code == 0, result.output
+        assert mock_get_impacted_tests.call_args.kwargs["use_merge_base"] is False
 
     def test_cli_missing_required_arg(self):
         """Test CLI fails when required argument is missing."""
@@ -269,19 +278,19 @@ class TestImpactedTestsCLI:
         assert result.exit_code != 0
         assert "Missing option" in result.output
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     def test_cli_invalid_git_mode(self):
         """Test CLI fails with invalid git mode."""
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                ["--git-mode", "invalid_mode", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            ["--git-mode", "invalid_mode", "--base-branch", "main", "--root-dir", ".", "--module", "test_ns"],
+        )
 
-            # Rejected up front as a usage error, not a traceback from deep in git.py
-            assert result.exit_code == 2
-            assert "is not one of 'unstaged', 'branch'" in result.output
+        # Rejected up front as a usage error, not a traceback from deep in git.py
+        assert result.exit_code == 2
+        assert "is not one of 'unstaged', 'branch'" in result.output
 
     def test_cli_nonexistent_root_dir(self):
         """Test CLI fails with non-existent root directory."""
@@ -319,84 +328,84 @@ class TestImpactedTestsCLI:
 
         assert result.exit_code != 0
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     def test_cli_nonexistent_tests_dir(self):
         """Test CLI fails with non-existent tests directory."""
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                [
-                    "--git-mode",
-                    "unstaged",
-                    "--base-branch",
-                    "main",
-                    "--root-dir",
-                    ".",
-                    "--module",
-                    "test_ns",
-                    "--tests-dir",
-                    "/nonexistent/tests",
-                ],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            [
+                "--git-mode",
+                "unstaged",
+                "--base-branch",
+                "main",
+                "--root-dir",
+                ".",
+                "--module",
+                "test_ns",
+                "--tests-dir",
+                "/nonexistent/tests",
+            ],
+        )
 
-            assert result.exit_code != 0
+        assert result.exit_code != 0
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_defaults(self, mock_configure_logging, mock_get_impacted_tests):
         """Test CLI with default values."""
         mock_get_impacted_tests.return_value = ["tests/test_example.py"]
 
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
+        Path("test_ns").mkdir()
 
-            result = self.runner.invoke(impacted_tests_cli, ["--module", "test_ns"])
+        result = self.runner.invoke(impacted_tests_cli, ["--module", "test_ns"])
 
-            assert result.exit_code == 0
-            mock_configure_logging.assert_called_once_with(verbose=False)
-            mock_get_impacted_tests.assert_called_once_with(
-                impacted_git_mode=GitMode.UNSTAGED,  # default
-                impacted_base_branch="main",  # default
-                root_dir=".",  # default
-                ns_module="test_ns",
-                tests_dir=None,  # default
-                strategy=ANY,  # CompositeImpactStrategy with extensions
-                use_merge_base=True,
-            )
+        assert result.exit_code == 0
+        mock_configure_logging.assert_called_once_with(verbose=False)
+        mock_get_impacted_tests.assert_called_once_with(
+            impacted_git_mode=GitMode.UNSTAGED,  # default
+            impacted_base_branch="main",  # default
+            root_dir=".",  # default
+            ns_module="test_ns",
+            tests_dir=None,  # default
+            strategy=ANY,  # CompositeImpactStrategy with extensions
+            use_merge_base=True,
+        )
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     @patch("pytest_impacted.cli.get_impacted_tests")
     @patch("pytest_impacted.cli.configure_logging")
     def test_cli_stderr_output(self, mock_configure_logging, mock_get_impacted_tests):
         """Test that CLI outputs configuration info to stderr."""
         mock_get_impacted_tests.return_value = ["tests/test_example.py"]
 
-        with self.runner.isolated_filesystem():
-            Path("test_ns").mkdir()
-            Path("tests").mkdir()  # Create the tests directory
+        Path("test_ns").mkdir()
+        Path("tests").mkdir()  # Create the tests directory
 
-            result = self.runner.invoke(
-                impacted_tests_cli,
-                [
-                    "--git-mode",
-                    "branch",
-                    "--base-branch",
-                    "develop",
-                    "--root-dir",
-                    ".",
-                    "--module",
-                    "test_ns",
-                    "--tests-dir",
-                    "tests",
-                ],
-            )
+        result = self.runner.invoke(
+            impacted_tests_cli,
+            [
+                "--git-mode",
+                "branch",
+                "--base-branch",
+                "develop",
+                "--root-dir",
+                ".",
+                "--module",
+                "test_ns",
+                "--tests-dir",
+                "tests",
+            ],
+        )
 
-            # Check that configuration is shown in output
-            assert result.exit_code == 0
-            assert "impacted-tests" in result.output
-            assert "git-mode: branch" in result.output
-            assert "base-branch: develop" in result.output
-            assert "module: test_ns" in result.output
+        # Check that configuration is shown in output
+        assert result.exit_code == 0
+        assert "impacted-tests" in result.output
+        assert "git-mode: branch" in result.output
+        assert "base-branch: develop" in result.output
+        assert "module: test_ns" in result.output
 
     def test_cli_module_is_relative_to_root_dir(self, tmp_path, monkeypatch):
         """--module names a package under --root-dir, not under the working directory."""

@@ -176,18 +176,18 @@ class TestExtensionCLIIntegration:
         clear_extension_cache()
 
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_cli_disable_ext_option(self, mock_entry_points):
+    def test_cli_disable_ext_option(self, mock_entry_points, tmp_path, monkeypatch):
         """The --disable-ext option should be accepted by the CLI."""
         mock_entry_points.return_value = []
         clear_extension_cache()
 
         runner = CliRunner()
-        with runner.isolated_filesystem():
-            Path("test_ns").mkdir()
-            with patch("pytest_impacted.cli.get_impacted_tests") as mock_get:
-                mock_get.return_value = ["tests/test_a.py"]
-                result = runner.invoke(
-                    impacted_tests_cli,
-                    ["--module", "test_ns", "--disable-ext", "some_ext"],
-                )
-                assert result.exit_code == 0
+        monkeypatch.chdir(tmp_path)
+        Path("test_ns").mkdir()
+        with patch("pytest_impacted.cli.get_impacted_tests") as mock_get:
+            mock_get.return_value = ["tests/test_a.py"]
+            result = runner.invoke(
+                impacted_tests_cli,
+                ["--module", "test_ns", "--disable-ext", "some_ext"],
+            )
+            assert result.exit_code == 0
