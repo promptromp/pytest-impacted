@@ -19,6 +19,7 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
+from pytest_impacted.file_map import parse_file_map
 from pytest_impacted.git import (
     GIT_AVAILABLE,
     GitMode,
@@ -193,6 +194,24 @@ def pytest_addoption(parser: Parser):
     )
 
     group.addoption(
+        "--impacted-map",
+        action="append",
+        default=[],
+        dest="impacted_map",
+        metavar="GLOB=PATH",
+        help=(
+            "A changed file matching GLOB counts as a change to PATH (a file or directory, relative to the "
+            + "rootdir), e.g. 'reports/*.json=tests/test_bench.py'. Repeatable."
+        ),
+    )
+    parser.addini(
+        "impacted_map",
+        help="default value for --impacted-map (list of GLOB=PATH)",
+        type="args",
+        default=[],
+    )
+
+    group.addoption(
         "--impacted-conftest-imports",
         action="store_true",
         default=None,
@@ -288,6 +307,7 @@ def pytest_report_header(config: Config) -> list[str]:
         f"impacted_tests_dir={get_option('impacted_tests_dir')}",
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
         f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
+        f"impacted_map={get_option('impacted_map')}",
         f"impacted_conftest_imports={get_option('impacted_conftest_imports')}",
         f"impacted_unimpacted={get_option('impacted_unimpacted')}",
         f"backend={backend}",
@@ -377,6 +397,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             session=session,
             strategy=strategy,
             use_merge_base=not get_option("impacted_no_merge_base"),
+            file_map=parse_file_map(get_option("impacted_map") or []),
         )
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not
@@ -566,6 +587,11 @@ def validate_config(config: Config):
     if unimpacted not in list(Unimpacted):
         choices = ", ".join(f"'{action}'" for action in Unimpacted)
         raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
+
+    try:
+        parse_file_map(get_option("impacted_map") or [])
+    except ValueError as err:
+        raise UsageError(str(err)) from err
 
     if get_option("impacted_git_mode") == GitMode.BRANCH and not get_option("impacted_base_branch"):
         raise UsageError("No base branch specified. Please specify a base branch using --impacted-base-branch.")

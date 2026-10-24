@@ -145,7 +145,7 @@ fi
 ```
 
 The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `--root-dir`, `-c/--config-file`, `--tests-dir`,
-`--verbose`, `--no-dep-files`, `--invalidate-all`, `--conftest-imports` and `--disable-ext`, each defaulting to its pytest setting (`impacted_module`, …) when one is configured, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
+`--verbose`, `--no-dep-files`, `--invalidate-all`, `--map`, `--conftest-imports` and `--disable-ext`, each defaulting to its pytest setting (`impacted_module`, …) when one is configured, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
 In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit — and name it as the remote-tracking ref (`origin/main`): a PR checkout has no local `main`.
@@ -163,6 +163,7 @@ impacted_base_branch = "main"
 impacted_tests_dir = "tests"
 # no_impacted_dep_files = true  # uncomment to disable dep file detection
 # impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
+# impacted_map = ["reports/*.json=tests/test_bench.py"]  # a data file counts as a change to the file it belongs to
 # impacted_conftest_imports = true  # a conftest importing changed app code selects every test beneath it
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
 # impacted_unimpacted = "skip"  # mark tests not impacted skipped instead of deselecting them
@@ -182,6 +183,7 @@ Command-line flags override these defaults. A boolean set to `true` here has no 
 | `--impacted-tests-dir` | `None` | Directory containing the tests: needed when they live outside the package, and recommended when inside it (`my_package/tests`), so their fixture modules count as test code |
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |
+| `--impacted-map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH` — a test file, a module, a `conftest.py` or a directory (repeatable) |
 | `--impacted-conftest-imports` | `false` | Also select every test beneath a `conftest.py` that imports changed *application* code — see [below](#strategy-based-architecture) |
 | `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them (the behaviour up to 0.35) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
@@ -204,7 +206,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules; a changed package `__init__.py` counts as a change to every module in its package, since Python runs it for any import from it
 5. **pytest wiring** — a `conftest.py` that changed, or imports changed test code (a fixture module, another conftest), selects every test in its directory and below — and with `--impacted-conftest-imports`, so does one importing changed application code; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects all tests
 6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
-7. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`
+7. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`, or `--impacted-map` to run only the tests of the file they belong to
 8. **Test filtering** deselects tests whose modules are not in the impact set (or skips them, with `--impacted-unimpacted=skip`) — a test counts as belonging both to the file it was collected from and to the file it is defined in, so inherited test methods and pytest-bdd scenarios are covered; doctests and tests collected from non-Python files (e.g. `--doctest-glob`) always run
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run). The few deliberate exceptions are documented where they apply — most notably, application code used by tests only through a conftest fixture (see `--impacted-conftest-imports`).

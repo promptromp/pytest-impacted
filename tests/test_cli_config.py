@@ -90,6 +90,7 @@ def test_every_setting_is_read(calls, tmp_path):
         "tests_dir": "suite",
         "strategy": None,
         "use_merge_base": False,
+        "file_map": [],
     }
     assert build.call_args.kwargs == {
         "watch_dep_files": False,
