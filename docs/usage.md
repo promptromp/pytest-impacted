@@ -157,7 +157,7 @@ Always in the default pipeline, but by default it only *reports*: a notice names
 !!! warning "The trade-off"
     Tests never import their conftest — pytest injects its fixtures by name — so **without this option, a test that uses changed application code only through a conftest fixture is not selected**. This is a deliberate exception to erring on the side of caution, like the `pytest_plugins` limitations above. The option closes the gap, but coarsely: a top-level `tests/conftest.py` that imports your application (an app factory, a database session) makes almost every change select almost every test. It was the default in 0.31.0 and turned typical edits into full runs, which is why it is now opt-in.
 
-    Turn it on where missing a fixture-only dependency costs more than a longer run — for example in a pre-merge CI job. Pass it on that job's command line (`--impacted-conftest-imports`, or `--conftest-imports` for the `impacted-tests` CLI, which does not read the ini) rather than in the ini: an ini `true` cannot be switched off from the command line except with `-o impacted_conftest_imports=false`.
+    Turn it on where missing a fixture-only dependency costs more than a longer run — for example in a pre-merge CI job. Pass it on that job's command line (`--impacted-conftest-imports`, or `--conftest-imports` for the `impacted-tests` CLI) rather than in the ini: an ini `true` cannot be switched off from the pytest command line except with `-o impacted_conftest_imports=false` (the CLI has `--no-conftest-imports`).
 
 ```bash
 pytest --impacted --impacted-module=my_package --impacted-conftest-imports
@@ -271,22 +271,29 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--module` | *(required)* | Namespace (top-level) module for the package under test |
+| `--module` | *(required, here or in the configuration)* | Namespace (top-level) module for the package under test |
 | `--git-mode` | `unstaged` | Git comparison mode: `unstaged` or `branch` |
 | `--base-branch` | `main` | Base branch/ref for branch-mode comparison |
-| `--no-merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
+| `--no-merge-base` / `--merge-base` | `false` | In branch mode, diff against the base branch's tip instead of the fork point |
 | `--root-dir` | `.` | Root directory of the project repository; `--module` and `--tests-dir` are relative to it |
+| `-c`, `--config-file` | *(found as pytest finds it)* | The pytest configuration file to take defaults from |
 | `--tests-dir` | `None` | Directory containing test files outside the namespace module |
 | `--verbose` | `false` | Verbose output (written to stderr, so it will not pollute the piped test list) |
-| `--no-dep-files` | `false` | Disable dependency and test-config file change detection |
+| `--no-dep-files` / `--dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
-| `--conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
+| `--conftest-imports` / `--no-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; it takes a value, `true` or `false` for a boolean. Run `impacted-tests --help` to list them |
 
+#### Settings from the pytest configuration
+
+An option left off the command line takes its pytest setting, the one the plugin reads: `impacted_module` for `--module`, `impacted_git_mode`, `impacted_base_branch`, `impacted_no_merge_base`, `impacted_tests_dir`, `no_impacted_dep_files`, `impacted_invalidate_all`, `impacted_conftest_imports`, `impacted_disable_ext`, and `impacted_ext_{ext}_{option}` for an extension's option. Only then does it take the default above. A flag given wins, and each boolean has a flag to turn it off (`--no-conftest-imports`), so an ini `true` can be overridden.
+
+The settings come from the file pytest would read for a run from `--root-dir`: the nearest directory, from there up, holding a `pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml` with a `[tool.pytest]` or `[tool.pytest.ini_options]` table, `tox.ini` with `[pytest]`, or `setup.cfg` with `[tool:pytest]`, in that order. (pytest 8 reads no `pytest.toml` and no `[tool.pytest]`, and neither then does the CLI.) `-c FILE` names one instead, as pytest's `-c` does. The CLI prints the file it read as `config-file:`. A file it cannot read is a usage error, as it is for pytest, rather than passed over with its settings lost. Paths in the settings are relative to `--root-dir`, whichever directory the file is in, as they are for `pytest --rootdir=<root-dir>`: running from a service directory of a monorepo, `--module` and `impacted_module` both name a package there. Only these settings are read: not `addopts`, and no `-o` overrides; nor is any conftest loaded, as the CLI runs no project code.
+
 ## Configuration via `pyproject.toml`
 
-All pytest options can be set as defaults in your `pyproject.toml` (or `pytest.ini`). The `impacted-tests` CLI reads no config file, so pass its flags explicitly.
+All pytest options can be set as defaults in your `pyproject.toml` (or `pytest.ini`). The `impacted-tests` CLI reads them too (since 0.36), from the file pytest would read for a run from `--root-dir`, so a CI script need not repeat them as flags. See [where the CLI reads them](#settings-from-the-pytest-configuration).
 
 ```toml
 [tool.pytest.ini_options]

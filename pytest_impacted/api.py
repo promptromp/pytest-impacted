@@ -53,6 +53,7 @@ def build_strategy_with_extensions(
     conftest_imports: bool = False,
     disabled: Sequence[str] = (),
     ext_config: dict[str, Any] | None = None,
+    config_file: Path | None = None,
 ) -> ImpactStrategy:
     """Build a composite strategy combining built-in and extension strategies.
 
@@ -70,6 +71,8 @@ def build_strategy_with_extensions(
             (see :class:`~pytest_impacted.strategies.ConftestImportImpactStrategy`).
         disabled: Extension names to exclude.
         ext_config: Configuration values for extensions.
+        config_file: The pytest configuration file read without a pytest session
+            (the ``impacted-tests`` CLI), whose edits impact every test.
 
     Returns:
         A CompositeImpactStrategy wrapping all strategies.
@@ -78,6 +81,7 @@ def build_strategy_with_extensions(
         watch_dep_files=watch_dep_files,
         invalidate_all_patterns=invalidate_all_patterns,
         conftest_imports=conftest_imports,
+        config_file=config_file,
     )
     ext_strategies = load_extensions(disabled=disabled, ext_config=ext_config)
 

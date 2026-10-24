@@ -225,6 +225,14 @@ def coerce_value(value: Any, target_type: type) -> Any:
     return target_type(value)
 
 
+def _coerced(ext_name: str, opt: ConfigOption, value: Any) -> Any:
+    """*value* as *opt*'s type; a ValueError naming the extension, the option and the value if it is none."""
+    try:
+        return coerce_value(value, opt.type)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"Extension '{ext_name}': invalid value {value!r} for option '{opt.name}': {err}") from err
+
+
 def instantiate_strategy(ext: ExtensionMetadata, config: dict[str, Any]) -> Any:
     """Instantiate a strategy class, passing config values to matching constructor params."""
     cls = ext.strategy_class
@@ -276,10 +284,10 @@ def load_extensions(
         missing_required: list[str] = []
         for opt in ext.config_options:
             ini_name = get_ext_ini_name(ext.name, opt.name)
-            if ini_name in config:
-                ext_cfg[opt.name] = coerce_value(config[ini_name], opt.type)
-            elif opt.name in config:
-                ext_cfg[opt.name] = coerce_value(config[opt.name], opt.type)
+            # Empty is unset, as for the plugin's own settings (``getoption(name) or getini(name)``).
+            given = [config[key] for key in (ini_name, opt.name) if config.get(key) not in (None, "")]
+            if given:
+                ext_cfg[opt.name] = _coerced(ext.name, opt, given[0])
             elif opt.default is not None:
                 ext_cfg[opt.name] = opt.default
             elif opt.required:
