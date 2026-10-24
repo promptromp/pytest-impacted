@@ -23,7 +23,7 @@ jobs:
       id: setup-uv
       # Downloading uv sometimes fails with a transient "fetch failed"; retried once below.
       continue-on-error: true
-      uses: astral-sh/setup-uv@v10.3.0
+      uses: astral-sh/setup-uv@v10.3.2
       with:
         python-version: "3.13"
         version: "latest"
@@ -33,7 +33,7 @@ jobs:
       run: sleep 20
     - name: Install uv and set the python version (retry)
       if: steps.setup-uv.outcome == 'failure'
-      uses: astral-sh/setup-uv@v10.3.0
+      uses: astral-sh/setup-uv@v10.3.2
       with:
         python-version: "3.13"
         version: "latest"
@@ -69,7 +69,7 @@ jobs:
       id: setup-uv
       # Downloading uv sometimes fails with a transient "fetch failed"; retried once below.
       continue-on-error: true
-      uses: astral-sh/setup-uv@v10.3.0
+      uses: astral-sh/setup-uv@v10.3.2
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"
@@ -79,7 +79,7 @@ jobs:
       run: sleep 20
     - name: Install uv and set the python version (retry)
       if: steps.setup-uv.outcome == 'failure'
-      uses: astral-sh/setup-uv@v10.3.0
+      uses: astral-sh/setup-uv@v10.3.2
       with:
         python-version: ${{ matrix.python-version }}
         version: "latest"
