@@ -6,12 +6,21 @@ A run that deselects every test exits 0, as one that skips every test does: a ch
 impacts nothing is no failure, while pytest exits 5 when no test runs.
 """
 
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from pytest import ExitCode
 
-from pytest_impacted.plugin import _DESELECTION, _UNIMPACTED_ITEMS, _Deselection, pytest_deselect_unimpacted
+from pytest_impacted.plugin import (
+    _DESELECTION,
+    _UNIMPACTED_ITEMS,
+    _analyse,
+    _Deselection,
+    _relative_to,
+    pytest_deselect_unimpacted,
+)
 
 from .git_helpers import edit_file as edit
 
@@ -254,3 +263,23 @@ def test_under_xdist_the_controller_analyses_once_for_every_worker(make_git_proj
     assert result.ret == ExitCode.OK
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["*Impacted files in the repository: ['app/a.py'*", NOT_IMPACTED])
+
+
+@pytest.mark.parametrize(
+    ("test", "relative"),
+    [
+        pytest.param("/repo/suite/test_a.py", "suite/test_a.py", id="inside"),
+        pytest.param("suite/test_a.py", "suite/test_a.py", id="already_relative"),
+        pytest.param("/elsewhere/test_a.py", "/elsewhere/test_a.py", id="outside"),
+    ],
+)
+def test_workers_get_the_analysis_relative_to_the_rootdir(test, relative):
+    """A worker elsewhere (``--tx``, ``--rsyncdir``) joins them to its own rootdir."""
+    assert _relative_to(Path("/repo"), test) == relative
+
+
+def test_the_analysis_handed_to_workers_is_relative_to_the_rootdir(project):
+    edit(project, "app/a.py")
+    config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged")
+
+    assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
