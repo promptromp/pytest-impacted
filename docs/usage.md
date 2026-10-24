@@ -26,7 +26,7 @@ Tests no change impacts are **deselected**, as `-k` and `-m` deselect theirs: th
 
 A run whose changes impact no test, such as a docs-only commit, exits with status 0, as does a shard a sharding plugin handed only deselected tests. pytest itself exits with status 5 when no test runs; that still happens when the plugin deselected nothing (`-k` matching no test, or no tests collected at all).
 
-Under pytest-xdist the analysis runs once, on the controller, and every worker filters by its result: workers analysing for themselves could disagree, and xdist stops a run whose workers collect different tests. The analysis's notices are shown there too. With a strategy extension installed, or when the analysis fails on the controller (a warning says so), each worker analyses for itself instead, as before 0.36.
+Under pytest-xdist the analysis runs once, on the controller, and every worker filters by its result: workers analysing for themselves could disagree, and xdist stops a run whose workers collect different tests. Its notices are then shown too. With a strategy extension installed, with `--tx` workers, or when the analysis fails on the controller (a warning says so), each worker analyses for itself instead, as before 0.36, and marks the tests it finds unimpacted **skipped**, whatever `--impacted-unimpacted` says: tests skipped differently by two workers stop nothing, while tests collected differently would stop the run. The workers' notices are then not shown, as before.
 
 To mark them skipped instead, as releases up to 0.35 did, pass `--impacted-unimpacted=skip` (ini: `impacted_unimpacted = "skip"`). Each then reports `SKIPPED (not impacted by the changes)`. `--impacted-unimpacted=deselect` restores the default when the ini says `skip`.
 

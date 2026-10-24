@@ -1,5 +1,7 @@
 import os
+import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
@@ -13,6 +15,7 @@ from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tes
 from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
     discover_extension_metadata,
+    enabled_extension_metadata,
     get_ext_cli_flag,
     get_ext_ini_name,
 )
@@ -45,8 +48,17 @@ _WORKER_INPUT_KEY = "pytest_impacted_tests"
 _DESELECTION = StashKey[int]()
 _SESSION = StashKey[pytest.Session]()
 # The run's analysis: the impacted test files, relative to the rootdir; None when it fails open.
-# What the controller hands every pytest-xdist worker: {_WORKER_INPUT_KEY: the analysis}, or nothing.
-_HANDOFF = StashKey[dict[str, list[str] | None]]()
+
+
+@dataclass(frozen=True)
+class _Handoff:
+    """The controller's analysis for every pytest-xdist worker (``None``: run every test)."""
+
+    tests: list[str] | None
+
+
+# The controller's handoff, or None for none: each worker then analyses for itself.
+_HANDOFF = StashKey[_Handoff | None]()
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 
@@ -304,9 +316,12 @@ def pytest_configure_node(node) -> None:
     xdist aborts a run whose workers collect different tests. This runs before any
     worker starts, and here, unlike in a worker, a notice reaches the terminal.
 
-    Only an optimisation over each worker analysing, as before 0.36, and dropped for
-    one whenever it could differ: with an extension installed, which may read what only
-    a worker has (``session.items``, ``workerinput``), or when the analysis fails here.
+    Handed on only when every worker would compute the same, so never worse than each
+    worker analysing for itself: with only the built-in strategies (an extension may read
+    what only a worker has: ``session.items``, ``workerinput``), workers started here with
+    this interpreter (``--tx`` may start one that parses differently), and an analysis that
+    succeeded. Otherwise each worker analyses, and skips rather than deselects
+    (``pytest_collection_modifyitems``): workers' skips may differ, their collections not.
     """
     config = node.config
     session = config.stash.get(_SESSION, None)
@@ -314,16 +329,19 @@ def pytest_configure_node(node) -> None:
         return
     if _HANDOFF not in config.stash:
         config.stash[_HANDOFF] = _handoff(session, config)
-    node.workerinput.update(config.stash[_HANDOFF])
+    if (handoff := config.stash[_HANDOFF]) is not None:
+        node.workerinput[_WORKER_INPUT_KEY] = handoff.tests
 
 
-def _handoff(session: pytest.Session, config: Config) -> dict[str, list[str] | None]:
-    """The controller's analysis for the workers, or nothing, leaving each to analyse for itself."""
-    disabled = set(get_option_from_config(config, "impacted_disable_ext") or [])
-    if any(ext.name not in disabled for ext in discover_extension_metadata()):
-        return {}
+def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
+    """The controller's analysis for the workers, or None, leaving each to analyse for itself."""
+    if enabled_extension_metadata(get_option_from_config(config, "impacted_disable_ext") or []):
+        return None
+    # ``-n`` starts plain ``popen`` workers; any other spec may be another interpreter or host.
+    if any(re.sub(r"^\d+\*", "", spec) != "popen" for spec in config.getoption("tx", default=None) or []):
+        return None
     try:
-        return {_WORKER_INPUT_KEY: _analyse(session, config)}
+        return _Handoff(_analyse(session, config))
     except (Exception, pytest.fail.Exception, pytest.skip.Exception) as err:  # noqa: BLE001 — warned, and retried
         # Raised here it would escape xdist's session start, and pytest would skip every
         # pytest_sessionfinish (no JUnit XML, no combined coverage); in a worker it may
@@ -332,7 +350,7 @@ def _handoff(session: pytest.Session, config: Config) -> dict[str, list[str] | N
             f"pytest-impacted: the analysis failed on the controller ({err!r}); each worker analyses for itself.",
             session,
         )
-        return {}
+        return None
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
@@ -399,13 +417,17 @@ def pytest_collection_modifyitems(session, config, items):
     # Afresh: a second collection on one config must not count the first's deselection.
     config.stash[_UNIMPACTED_ITEMS] = set()
     _record(config, 0)
-    workerinput = getattr(config, "workerinput", {})
-    impacted_tests = workerinput[_WORKER_INPUT_KEY] if _WORKER_INPUT_KEY in workerinput else _analyse(session, config)
+    workerinput = getattr(config, "workerinput", None)
+    handed_on = workerinput is not None and _WORKER_INPUT_KEY in workerinput
+    impacted_tests = workerinput[_WORKER_INPUT_KEY] if handed_on else _analyse(session, config)
     if impacted_tests is None:
         return
     root_dir = config.rootpath
     impacted_items = _impacted_items(items, impacted_tests, root_dir)
-    skip = get_option("impacted_unimpacted") == Unimpacted.SKIP
+    # A worker analysing for itself skips: another may judge differently, and xdist stops a
+    # run whose workers collect different tests, not one whose skips differ.
+    analysed_alone = workerinput is not None and not handed_on
+    skip = get_option("impacted_unimpacted") == Unimpacted.SKIP or analysed_alone
     unimpacted: set[pytest.Item] = set()
     for item in items:
         if item in impacted_items:

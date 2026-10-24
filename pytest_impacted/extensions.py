@@ -242,6 +242,11 @@ def instantiate_strategy(ext: ExtensionMetadata, config: dict[str, Any]) -> Any:
     return cls(**kwargs)
 
 
+def enabled_extension_metadata(disabled: Sequence[str] = ()) -> list[ExtensionMetadata]:
+    """The discovered extensions not *disabled* by name: the ones :func:`load_extensions` loads."""
+    return [ext for ext in discover_extension_metadata() if ext.name not in disabled]
+
+
 def load_extensions(
     *,
     disabled: Sequence[str] = (),

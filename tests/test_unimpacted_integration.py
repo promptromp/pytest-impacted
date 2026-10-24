@@ -321,8 +321,10 @@ def test_under_xdist_a_controller_failure_leaves_the_workers_to_analyse(make_git
         "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2", "--junitxml=out.xml"
     )
 
+    # Skipped, not deselected: workers analysing for themselves could disagree, and xdist
+    # stops a run whose workers collect different tests, but not one whose skips differ.
     assert result.ret == ExitCode.OK
-    result.assert_outcomes(passed=1)
+    result.assert_outcomes(passed=1, skipped=1)
     result.stdout.fnmatch_lines(["*the analysis failed on the controller*broke*each worker analyses for itself*"])
 
 
@@ -330,7 +332,8 @@ def test_under_xdist_a_controller_failure_leaves_the_workers_to_analyse(make_git
 def test_with_an_extension_each_worker_analyses_for_itself(project, monkeypatch, disabled, handed_on):
     """An extension may read what only a worker has (``session.items``, ``workerinput``)."""
     monkeypatch.setattr(
-        "pytest_impacted.plugin.discover_extension_metadata", lambda: [SimpleNamespace(name="demo", config_options=[])]
+        "pytest_impacted.extensions.discover_extension_metadata",
+        lambda: [SimpleNamespace(name="demo", config_options=[])],
     )
     edit(project, "app/a.py")
     args = [f"--impacted-disable-ext={name}" for name in disabled]
@@ -384,3 +387,37 @@ def test_a_test_under_the_rootdir_as_given_is_handed_on_relative(project, tmp_pa
     config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged", f"--rootdir={link}")
 
     assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
+
+
+def test_with_workers_elsewhere_each_analyses_for_itself(project):
+    """``--tx`` may start another interpreter, which may parse what the controller's cannot."""
+    pytest.importorskip("xdist")
+    edit(project, "app/a.py")
+    config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged", "--tx", "popen//python=python3")
+    config.stash[_SESSION] = SimpleNamespace(config=config)
+    node = SimpleNamespace(config=config, workerinput={})
+
+    pytest_configure_node(node)
+
+    assert node.workerinput == {}
+
+
+def test_under_xdist_with_an_extension_the_workers_skip(make_git_project):
+    """With the analysis left to the workers, they mark tests skipped: a disagreement then aborts nothing."""
+    pytest.importorskip("xdist")
+    plugin = (
+        "import pytest_impacted.extensions as extensions\n\n"
+        "class Ext:\n    name = 'demo'\n    config_options = []\n\n"
+        "def pytest_configure(config):\n"
+        "    extensions.discover_extension_metadata = lambda: [Ext()]\n"
+        "    extensions.load_extensions = lambda **kwargs: []\n"
+    )
+    project = make_git_project({**FILES, "conftest.py": plugin}, INI)
+    edit(project, "app/a.py")
+
+    result = project.runpytest_subprocess(
+        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2"
+    )
+
+    assert result.ret == ExitCode.OK
+    result.assert_outcomes(passed=1, skipped=1)

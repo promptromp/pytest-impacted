@@ -273,13 +273,16 @@ analysing for itself could disagree with another (a file written in between: git
 working tree), and xdist aborts a run whose workers collect different tests. So
 `pytest_configure_node` (on the controller, before any worker starts) runs `_analyse` and hands
 the impacted files to every worker in `workerinput`, relative to the rootdir; the workers'
-`pytest_collection_modifyitems` takes them from there. That is only an optimisation over each
-worker analysing (as before 0.36), dropped whenever it could differ from that: with an
-extension installed, which may read what only a worker has (`session.items`, `workerinput`),
-and when the analysis fails there — raised in `pytest_configure_node` it would escape xdist's
-session start and skip every `pytest_sessionfinish` (no JUnit XML, no combined coverage), so it
-is warned of and each worker analyses for itself. Two review rounds oscillated between handing
-the error on and falling back; falling back is never worse than before. The controller collects
+`pytest_collection_modifyitems` takes them from there. Handed on only when every worker would
+compute the same: only built-in strategies enabled (an extension may read what only a worker
+has: `session.items`, `workerinput`), only plain `popen` workers (`--tx` may start another
+interpreter, which parses differently), and an analysis that succeeded (raised in
+`pytest_configure_node` it would escape xdist's session start and skip every
+`pytest_sessionfinish`: no JUnit XML, no combined coverage; it is warned of instead).
+Otherwise each worker analyses for itself and **skips** rather than deselects: workers may
+judge differently, and differing skips abort nothing, differing collections do. That keeps
+every fallback exactly as before 0.36. Review rounds oscillated on this path until it was
+built so; keep it so. The controller collects
 nothing, so each worker reports its deselection through `config.workeroutput`, which
 `pytest_testnodedown` keeps for the exit status and summary. Both are `optionalhook`s: xdist
 need not be installed.
