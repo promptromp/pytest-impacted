@@ -8,7 +8,7 @@ first: an edit to either, adding one or deleting one, selects the tests importin
 
 import pytest
 
-from .git_helpers import edit_file
+from .git_helpers import assert_selected, edit_file
 
 
 TEST_APP = "from app import create_app, Thing\n\ndef test_app():\n    assert isinstance(create_app(), Thing)\n"
@@ -32,7 +32,7 @@ def test_an_edit_reaching_the_package_root_selects_tests_importing_from_it(make_
 
     result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
 
-    result.assert_outcomes(passed=1, skipped=1)
+    result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines(["*test_app.py::test_app PASSED*"])
 
 
@@ -43,13 +43,6 @@ def ini(package_dir: str) -> str:
 
 def run(project, *args):
     return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
-
-
-def assert_selected(result, *, passed=(), skipped=()):
-    result.assert_outcomes(passed=len(passed), skipped=len(skipped))
-    result.stdout.fnmatch_lines_random(
-        [f"*{name}::* PASSED*" for name in passed] + [f"*{name}::* SKIPPED*" for name in skipped]
-    )
 
 
 SUBPACKAGE = {
@@ -65,20 +58,20 @@ SUBPACKAGE = {
 
 @pytest.mark.parametrize("package_dir", ["app", "src/app"])
 @pytest.mark.parametrize(
-    ("edited", "passed", "skipped"),
+    ("edited", "passed", "deselected"),
     [
         pytest.param("__init__.py", ["test_x.py", "test_other.py"], [], id="the_root_init"),
         pytest.param("core/__init__.py", ["test_x.py"], ["test_other.py"], id="a_subpackage_init"),
     ],
 )
 def test_an_init_edit_selects_the_tests_importing_anything_inside_its_package(
-    make_git_project, package_dir, edited, passed, skipped
+    make_git_project, package_dir, edited, passed, deselected
 ):
     """``from app.core.x import f`` runs ``app/__init__.py`` and ``app/core/__init__.py`` first."""
     project = make_git_project({rel.format(app=package_dir): src for rel, src in SUBPACKAGE.items()}, ini(package_dir))
     edit_file(project, f"{package_dir}/{edited}")
 
-    assert_selected(run(project), passed=passed, skipped=skipped)
+    assert_selected(run(project), passed=passed, deselected=deselected)
 
 
 @pytest.mark.parametrize("package_dir", ["app", "src/app"])
@@ -89,7 +82,7 @@ def test_deleting_an_init_selects_the_tests_importing_anything_inside_its_packag
 
     result = run(project)
 
-    result.assert_outcomes(failed=1, skipped=1)
+    result.assert_outcomes(failed=1, deselected=1)
     result.stdout.fnmatch_lines(["*test_x.py::test_x FAILED*"])
 
 
@@ -103,18 +96,20 @@ TESTS_PACKAGE = {
 
 
 @pytest.mark.parametrize(
-    ("edited", "passed", "skipped"),
+    ("edited", "passed", "deselected"),
     [
         pytest.param("suite/__init__.py", ["test_a.py", "test_b.py"], [], id="the_tests_init"),
         pytest.param("suite/unit/__init__.py", ["test_a.py"], ["test_b.py"], id="a_nested_tests_init"),
     ],
 )
-def test_an_init_edit_in_the_tests_dir_selects_the_tests_inside_its_package(make_git_project, edited, passed, skipped):
+def test_an_init_edit_in_the_tests_dir_selects_the_tests_inside_its_package(
+    make_git_project, edited, passed, deselected
+):
     """pytest imports ``suite/unit/test_a.py`` as ``suite.unit.test_a``, running both ``__init__`` files."""
     project = make_git_project(TESTS_PACKAGE, ini("app"))
     edit_file(project, edited)
 
-    assert_selected(run(project), passed=passed, skipped=skipped)
+    assert_selected(run(project), passed=passed, deselected=deselected)
 
 
 def test_an_init_edit_above_the_analysed_package_selects_the_tests_importing_it(make_git_project):
@@ -132,5 +127,5 @@ def test_an_init_edit_above_the_analysed_package_selects_the_tests_importing_it(
 
     result = run(project)
 
-    assert_selected(result, passed=["test_x.py"], skipped=["test_other.py"])
+    assert_selected(result, passed=["test_x.py"], deselected=["test_other.py"])
     assert "no test depends on" not in result.stdout.str()

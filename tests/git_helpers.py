@@ -44,3 +44,11 @@ def write_files(root, files: dict[str, str]) -> None:
     for rel, source in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(source)
+
+
+def assert_selected(result, *, passed=(), deselected=()) -> None:
+    """Which test files of a ``runpytest -v`` ran and which were deselected, not just how many."""
+    result.assert_outcomes(passed=len(passed), deselected=len(deselected))
+    result.stdout.fnmatch_lines_random([f"*{name}::* PASSED*" for name in passed])
+    for name in deselected:
+        result.stdout.no_fnmatch_line(f"*{name}::*")

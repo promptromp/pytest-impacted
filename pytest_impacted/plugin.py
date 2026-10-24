@@ -1,10 +1,12 @@
 import os
+from dataclasses import dataclass
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pytest import Config, DoctestItem, Parser, UsageError
+from pytest import Config, DoctestItem, ExitCode, Parser, StashKey, UsageError
 
 from pytest_impacted._rust import RUST_AVAILABLE
 from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
@@ -22,6 +24,29 @@ from pytest_impacted.git import (
     find_repo,
     rev_args,
 )
+
+
+class Unimpacted(StrEnum):
+    """What becomes of the collected tests no change impacts."""
+
+    DESELECT = "deselect"
+    SKIP = "skip"
+
+
+NOT_IMPACTED = "not impacted by the changes"
+# Where a pytest-xdist worker reports its deselection to the controller.
+_WORKER_OUTPUT_KEY = "pytest_impacted_deselected"
+
+
+@dataclass(frozen=True)
+class _Deselection:
+    """How many tests this plugin deselected, and whether that left the run with none."""
+
+    count: int
+    emptied: bool
+
+
+_DESELECTION = StashKey[_Deselection]()
 
 
 def pytest_addoption(parser: Parser):
@@ -173,6 +198,23 @@ def pytest_addoption(parser: Parser):
         default=False,
     )
 
+    group.addoption(
+        "--impacted-unimpacted",
+        action="store",
+        default=None,
+        dest="impacted_unimpacted",
+        choices=[action.value for action in Unimpacted],
+        help=(
+            "What to do with the tests no change impacts: 'deselect' them (the default), or mark "
+            + "them 'skip'ped, as releases before 0.36 did."
+        ),
+    )
+    parser.addini(
+        "impacted_unimpacted",
+        help="default value for --impacted-unimpacted",
+        default=Unimpacted.DESELECT,
+    )
+
     # Extension management
     group.addoption(
         "--impacted-disable-ext",
@@ -234,6 +276,7 @@ def pytest_report_header(config: Config) -> list[str]:
         f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
         f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
         f"impacted_conftest_imports={get_option('impacted_conftest_imports')}",
+        f"impacted_unimpacted={get_option('impacted_unimpacted')}",
         f"backend={backend}",
     ]
     if ext_names:
@@ -299,11 +342,65 @@ def pytest_collection_modifyitems(session, config, items):
             warn(f"pytest-impacted: {err} Running every test.", session)
         return
     impacted_items = _impacted_items(items, impacted_tests or [], root_dir)
-    for item in items:
-        if item in impacted_items:
-            item.add_marker(pytest.mark.impacted)
-        else:
-            item.add_marker(pytest.mark.skip)
+    unimpacted = [item for item in items if item not in impacted_items]
+    for item in impacted_items:
+        item.add_marker(pytest.mark.impacted)
+    if get_option("impacted_unimpacted") == Unimpacted.SKIP:
+        for item in unimpacted:
+            item.add_marker(pytest.mark.skip(reason=NOT_IMPACTED))
+    elif unimpacted:
+        _deselect(config, items, unimpacted)
+
+
+def _deselect(config: Config, items: list[pytest.Item], unimpacted: list[pytest.Item]) -> None:
+    """Deselect *unimpacted*, and record it for the exit status and the summary.
+
+    A pytest-xdist worker records it in its ``workeroutput`` too: the controller
+    collects nothing itself, so it learns only what the workers report.
+    """
+    config.hook.pytest_deselected(items=unimpacted)
+    deselected = set(unimpacted)
+    items[:] = [item for item in items if item not in deselected]
+    deselection = _Deselection(count=len(unimpacted), emptied=not items)
+    config.stash[_DESELECTION] = deselection
+    if hasattr(config, "workeroutput"):
+        config.workeroutput[_WORKER_OUTPUT_KEY] = (deselection.count, deselection.emptied)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error) -> None:
+    """pytest-xdist hook, on the controller: merge what a finished worker deselected.
+
+    Every worker collects the same items and deselects the same ones, so the count
+    is any one worker's, not their sum.
+    """
+    reported = getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY)
+    if reported is None:
+        return
+    count, emptied = reported
+    config = node.config
+    if previous := config.stash.get(_DESELECTION, None):
+        count, emptied = max(count, previous.count), emptied or previous.emptied
+    config.stash[_DESELECTION] = _Deselection(count=count, emptied=emptied)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """A run this plugin left with no tests passes, as one skipping every test does.
+
+    pytest exits 5 when no test runs, so deselecting every test would fail a run whose
+    changes impact nothing, such as a docs-only commit. Only a run *this plugin*
+    emptied: one emptied by ``-k``, or with no tests at all, still exits 5.
+    """
+    deselection = session.config.stash.get(_DESELECTION, None)
+    if exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.emptied:
+        session.exitstatus = ExitCode.OK
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus: int, config: Config) -> None:
+    """Say how many tests were deselected as not impacted; pytest-xdist's summary omits it."""
+    if deselection := config.stash.get(_DESELECTION, None):
+        tests = "test" if deselection.count == 1 else "tests"
+        terminalreporter.write_line(f"pytest-impacted: {deselection.count} {tests} {NOT_IMPACTED}, deselected")
 
 
 def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_dir: Path) -> set[pytest.Item]:
@@ -359,6 +456,10 @@ def validate_config(config: Config):
         raise UsageError("No module specified. Please specify a module using --impacted-module.")
     if not get_option("impacted_git_mode"):
         raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
+    unimpacted = get_option("impacted_unimpacted")
+    if unimpacted not in Unimpacted.__members__.values():
+        choices = ", ".join(f"'{action}'" for action in Unimpacted)
+        raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
 
     if get_option("impacted_git_mode") == GitMode.BRANCH and not get_option("impacted_base_branch"):
         raise UsageError("No base branch specified. Please specify a base branch using --impacted-base-branch.")

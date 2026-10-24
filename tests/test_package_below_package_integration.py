@@ -45,7 +45,7 @@ def test_an_edit_selects_the_tests_importing_the_module_directly_or_not(make_git
 
     result = run(project)
 
-    result.assert_outcomes(passed=2, skipped=1)
+    result.assert_outcomes(passed=2, deselected=1)
     result.stdout.fnmatch_lines_random(
         ["*test_models.py::test_models PASSED*", "*test_service.py::test_service PASSED*"]
     )
@@ -73,8 +73,8 @@ def test_an_edited_init_selects_the_tests_importing_anything_inside_the_package(
 
     result = run(project)
 
-    result.assert_outcomes(passed=2, skipped=1)
-    result.stdout.fnmatch_lines(["*test_other.py::test_other SKIPPED*"])
+    result.assert_outcomes(passed=2, deselected=1)
+    result.stdout.no_fnmatch_line("*test_other.py::test_other*")
 
 
 def test_a_deleted_module_selects_the_tests_importing_it(make_git_project):
@@ -91,7 +91,7 @@ def test_a_deleted_module_selects_the_tests_importing_it(make_git_project):
 
     result = run(project)
 
-    result.assert_outcomes(passed=1, skipped=3)
+    result.assert_outcomes(passed=1, deselected=3)
     result.stdout.fnmatch_lines(["*test_legacy.py::test_legacy PASSED*"])
 
 
@@ -125,7 +125,7 @@ def test_a_module_beside_the_package_is_followed_from_the_directory_on_sys_path(
 
     result = run(project)
 
-    result.assert_outcomes(passed=1, skipped=2)
+    result.assert_outcomes(passed=1, deselected=2)
     result.stdout.fnmatch_lines(["*test_service.py::test_service PASSED*"])
 
 
