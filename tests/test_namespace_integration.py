@@ -34,7 +34,7 @@ def test_a_change_in_a_namespace_subpackage_selects_its_tests(make_git_project, 
 
     result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
 
-    result.assert_outcomes(passed=1, skipped=1)
+    result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines([runs])
 
 
@@ -70,7 +70,7 @@ def test_a_package_inside_a_top_level_namespace_package(make_git_project, module
 
     result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v")
 
-    result.assert_outcomes(passed=1, skipped=1)
+    result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines(["*test_core.py::test_add PASSED*"])
 
 

@@ -1,6 +1,8 @@
 """Plain helpers for tests that drive git (import these; fixtures live in conftest.py)."""
 
 import os
+import re
+from pathlib import Path
 
 
 def isolated_git_env(home) -> dict[str, str]:
@@ -44,3 +46,17 @@ def write_files(root, files: dict[str, str]) -> None:
     for rel, source in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(source)
+
+
+def assert_selected(result, *, passed=(), deselected=()) -> None:
+    """Which test files of a ``runpytest -v`` ran and which were deselected, not just how many.
+
+    A deselected test leaves no line, so each name is checked against the files of the
+    project too (pytester runs from its directory): a misspelt one must not pass. A name
+    matches from the line's start or after a ``/``, so ``test_db.py`` is not ``other_test_db.py``.
+    """
+    result.assert_outcomes(passed=len(passed), deselected=len(deselected))
+    result.stdout.re_match_lines_random([rf"(.*/)?{re.escape(name)}::.* PASSED" for name in passed])
+    for name in deselected:
+        assert any(Path.cwd().rglob(name)), f"no {name} in the project"
+        result.stdout.no_re_match_line(rf"(.*/)?{re.escape(name)}::")

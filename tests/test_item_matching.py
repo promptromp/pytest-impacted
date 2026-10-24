@@ -81,19 +81,19 @@ def test_one_test_runs_and_the_other_is_skipped(make_git_project, files, edited,
 
     result = run(project)
 
-    result.assert_outcomes(passed=1, skipped=1)
+    result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines([runs])
 
 
 def test_items_from_non_python_files_always_run(make_git_project):
-    """A ``--doctest-glob`` text file cannot be judged by import analysis: it runs, never silently skipped."""
+    """A ``--doctest-glob`` text file cannot be judged by import analysis: it runs, never silently deselected."""
     project = make_git_project({**PACKAGED, "suite/guide.txt": ">>> 1 + 1\n2\n"}, INI)
     edit_file(project, "suite/test_other.py")
 
     result = run(project, "--doctest-glob=*.txt")
 
     result.stdout.fnmatch_lines(["*guide.txt::guide.txt PASSED*"])
-    result.assert_outcomes(passed=2, skipped=1)
+    result.assert_outcomes(passed=2, deselected=1)
 
 
 # --- the selection rule ------------------------------------------------------------
@@ -167,7 +167,7 @@ def test_non_python_items_run_even_when_nothing_is_impacted(make_git_project):
     result = run(project, "--doctest-glob=*.txt")
 
     result.stdout.fnmatch_lines(["*guide.txt::guide.txt PASSED*"])
-    result.assert_outcomes(passed=1, skipped=2)
+    result.assert_outcomes(passed=1, deselected=2)
 
 
 def test_doctests_in_a_changed_source_module_run(make_git_project):

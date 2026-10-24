@@ -84,7 +84,7 @@ pytest --impacted \
        --impacted-tests-dir=tests
 ```
 
-That's it. Unaffected tests are automatically skipped.
+That's it. Unaffected tests are deselected, as `-k` deselects them (`--impacted-unimpacted=skip` marks them skipped instead), and a run whose changes impact no test still passes.
 
 ---
 
@@ -165,6 +165,7 @@ impacted_tests_dir = "tests"
 # impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 # impacted_conftest_imports = true  # a conftest importing changed app code selects every test beneath it
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
+# impacted_unimpacted = "skip"  # mark tests not impacted skipped instead of deselecting them
 ```
 
 Command-line flags override these defaults. A boolean set to `true` here has no flag to turn it off; override it with `-o`, e.g. `-o impacted_conftest_imports=false`.
@@ -182,6 +183,7 @@ Command-line flags override these defaults. A boolean set to `true` here has no 
 | `--no-impacted-dep-files` | `false` | Disable dependency and test-config file change detection |
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |
 | `--impacted-conftest-imports` | `false` | Also select every test beneath a `conftest.py` that imports changed *application* code — see [below](#strategy-based-architecture) |
+| `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them (the behaviour up to 0.35) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension (see `pytest --help`) |
 
@@ -203,7 +205,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 5. **pytest wiring** — a `conftest.py` that changed, or imports changed test code (a fixture module, another conftest), selects every test in its directory and below — and with `--impacted-conftest-imports`, so does one importing changed application code; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects all tests
 6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
 7. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`
-8. **Test filtering** skips tests whose modules are not in the impact set — a test counts as belonging both to the file it was collected from and to the file it is defined in, so inherited test methods and pytest-bdd scenarios are covered; doctests and tests collected from non-Python files (e.g. `--doctest-glob`) always run
+8. **Test filtering** deselects tests whose modules are not in the impact set (or skips them, with `--impacted-unimpacted=skip`) — a test counts as belonging both to the file it was collected from and to the file it is defined in, so inherited test methods and pytest-bdd scenarios are covered; doctests and tests collected from non-Python files (e.g. `--doctest-glob`) always run
 
 The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run). The few deliberate exceptions are documented where they apply — most notably, application code used by tests only through a conftest fixture (see `--impacted-conftest-imports`).
 

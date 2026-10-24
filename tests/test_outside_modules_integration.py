@@ -8,7 +8,7 @@ nothing.
 
 import pytest
 
-from .git_helpers import edit_file
+from .git_helpers import assert_selected, edit_file
 
 
 INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
@@ -27,15 +27,8 @@ def run(pytester, *args):
     return pytester.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
-def assert_selected(result, *, passed=(), skipped=()):
-    result.assert_outcomes(passed=len(passed), skipped=len(skipped))
-    result.stdout.fnmatch_lines_random(
-        [f"*{name}::* PASSED*" for name in passed] + [f"*{name}::* SKIPPED*" for name in skipped]
-    )
-
-
 @pytest.mark.parametrize(
-    ("files", "passed", "skipped"),
+    ("files", "passed", "deselected"),
     [
         pytest.param({"suite/db/conftest.py": DB_FIXTURE}, ["test_db.py"], ["test_other.py"], id="a_conftest"),
         pytest.param(
@@ -61,12 +54,12 @@ def assert_selected(result, *, passed=(), skipped=()):
         ),
     ],
 )
-def test_an_edit_outside_the_analysed_dirs_reaches_what_imports_it(make_git_project, files, passed, skipped):
+def test_an_edit_outside_the_analysed_dirs_reaches_what_imports_it(make_git_project, files, passed, deselected):
     """``testing/factories.py`` is neither application code nor in the tests dir: test code, followed."""
     project = make_git_project({**TESTS, "testing/factories.py": FACTORY, **files}, INI)
     edit_file(project, "testing/factories.py")
 
-    assert_selected(run(project, "suite"), passed=passed, skipped=skipped)
+    assert_selected(run(project, "suite"), passed=passed, deselected=deselected)
 
 
 APP_FIXTURE = "import pytest\nfrom app.core import thing\n\n@pytest.fixture\ndef db():\n    return thing()\n"
@@ -79,7 +72,7 @@ SHARED = {
 
 
 @pytest.mark.parametrize(
-    ("args", "passed", "skipped"),
+    ("args", "passed", "deselected"),
     [
         pytest.param([], ["test_core.py"], ["test_db.py", "test_other.py"], id="default"),
         pytest.param(
@@ -87,20 +80,20 @@ SHARED = {
         ),
     ],
 )
-def test_a_library_the_application_imports_is_application_code(make_git_project, args, passed, skipped):
+def test_a_library_the_application_imports_is_application_code(make_git_project, args, passed, deselected):
     """A root conftest importing the app must not turn every library edit into a full run by default."""
     project = make_git_project({**TESTS, **SHARED}, INI)
     edit_file(project, "libs/shared.py")
 
     result = run(project, "suite", *args)
 
-    assert_selected(result, passed=passed, skipped=skipped)
+    assert_selected(result, passed=passed, deselected=deselected)
     if not args:
         result.stdout.fnmatch_lines(["*Changed application code is imported by *suite/conftest.py*"])
 
 
 def test_deleting_a_module_selects_what_still_imports_it(make_git_project):
-    """An import inside a function is no collection error: without the edge, the broken test is skipped."""
+    """An import inside a function is no collection error: without the edge, the broken test is deselected."""
     project = make_git_project(
         {
             **TESTS,
@@ -113,7 +106,7 @@ def test_deleting_a_module_selects_what_still_imports_it(make_git_project):
 
     result = run(project, "suite")
 
-    result.assert_outcomes(failed=1, skipped=1)
+    result.assert_outcomes(failed=1, deselected=1)
     result.stdout.fnmatch_lines(["*test_db.py::test_db FAILED*"])
 
 
@@ -124,7 +117,7 @@ def test_a_changed_file_nothing_imports_is_named_in_a_notice(make_git_project):
 
     result = run(project, "suite")
 
-    result.assert_outcomes(skipped=2)
+    result.assert_outcomes(deselected=2)
     result.stdout.fnmatch_lines(["*Import analysis selects no tests for *scripts/deploy.py*: no test depends on it*"])
 
 
