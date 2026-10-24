@@ -47,7 +47,6 @@ _WORKER_INPUT_KEY = "pytest_impacted_tests"
 # How many tests this plugin deselected.
 _DESELECTION = StashKey[int]()
 _SESSION = StashKey[pytest.Session]()
-# The run's analysis: the impacted test files, relative to the rootdir; None when it fails open.
 
 
 @dataclass(frozen=True)
