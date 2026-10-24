@@ -14,9 +14,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import iniconfig
+import pytest
 
 
-CONFIG_NAMES = ("pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
+# pytest.toml and native TOML (``[tool.pytest]``) are new in pytest 9; pytest 8 reads neither.
+PYTEST_9 = pytest.version_tuple >= (9,)
+CONFIG_NAMES = (
+    *(("pytest.toml", ".pytest.toml") if PYTEST_9 else ()),
+    "pytest.ini",
+    ".pytest.ini",
+    "pyproject.toml",
+    "tox.ini",
+    "setup.cfg",
+)
 _TRUE = ("y", "yes", "t", "true", "on", "1")
 _FALSE = ("n", "no", "f", "false", "off", "0")
 
@@ -51,8 +61,10 @@ class PytestConfig:
     def args(self, name: str) -> list[str] | None:
         """An ``args`` setting: a list, or a string split as a shell would."""
         value = self._get(name, list)
-        if value is None or (isinstance(value, list) and not self.native):
-            return value  # type: ignore[return-value]
+        if isinstance(value, list) and not self.native:
+            return [str(item) for item in value]
+        if value is None:
+            return None
         if isinstance(value, list):
             if not all(isinstance(item, str) for item in value):
                 raise ValueError(f"{name} in {self.path}: expected a list of strings, got {value!r}")
@@ -116,11 +128,11 @@ def _load_cfg(path: Path) -> PytestConfig | None:
 
 def _load_toml(path: Path) -> PytestConfig | None:
     document = tomllib.loads(path.read_text(encoding="utf-8"))
-    if path.name in ("pytest.toml", ".pytest.toml"):
+    if PYTEST_9 and path.name in ("pytest.toml", ".pytest.toml"):
         # Like a pytest.ini, the configuration even when empty.
         return PytestConfig(path, document.get("pytest", {}), native=True)
     tool = document.get("tool", {}).get("pytest", {})
-    native = {key: value for key, value in tool.items() if key != "ini_options"}
+    native = {key: value for key, value in tool.items() if key != "ini_options"} if PYTEST_9 else {}
     ini_mode = tool.get("ini_options")
     if native and ini_mode:
         raise ValueError(f"{path}: Cannot use both [tool.pytest] and [tool.pytest.ini_options].")

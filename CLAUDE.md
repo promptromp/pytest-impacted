@@ -320,6 +320,8 @@ mirrors pytest 9's search and conversions instead, and `tests/test_ini.py` holds
 `pytester.parseconfig` for every file format and precedence rule — when pytest changes how it
 finds or reads configuration, that test is what notices. An option takes its setting only when
 `ctx.get_parameter_source` says the command line left it at its default (`cli._settings`).
+The root stays `--root-dir` (default `.`), as for `pytest --rootdir`, never the file's directory:
+moving it reinterprets an explicit `--module` (two review rounds oscillated on this).
 
 **The Python and Rust backends must agree exactly.** `parsing.py` (astroid) and
 `rust/src/lib.rs` (ruff parser) both feed `build_dep_tree`, so any divergence silently

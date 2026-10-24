@@ -67,10 +67,11 @@ def configure_logging(verbose: bool) -> None:
 @click.option("--base-branch", default="main", help="Base branch.")
 @click.option(
     "--root-dir",
+    default=".",
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help=(
-        "Root directory for project repository. Defaults, as pytest's rootdir does, to the "
-        + "directory of the pytest configuration file, else the working directory."
+        "Root directory for project repository, as pytest's --rootdir: the pytest configuration is "
+        + "found from here, and the paths it and the options give are relative to it."
     ),
 )
 @click.option(
@@ -123,12 +124,12 @@ def impacted_tests_cli(ctx, **options):
     """CLI entrypoint for impacted-tests console script.
 
     An option the command line leaves out takes its pytest setting (``impacted_module``
-    for ``--module``, and so on), from the configuration file pytest would read, and
-    only then its own default.
+    for ``--module``, and so on), and only then its own default: the settings
+    ``pytest --rootdir=<root-dir>`` run from ``--root-dir`` would read, with paths
+    relative to ``--root-dir``, as there.
     """
-    config = _pytest_config(options["root_dir"] or ".", options.pop("config_file"))
+    config = _pytest_config(options["root_dir"], options.pop("config_file"))
     options |= _settings(ctx, config)
-    options["root_dir"] = options["root_dir"] or _root_of(config)
     if not options["module"]:
         raise click.UsageError("Missing option '--module' (or impacted_module in the pytest configuration).")
     _run(config, **options)
@@ -140,14 +141,6 @@ def _pytest_config(root_dir: str, config_file: str | None) -> PytestConfig:
         return load_pytest_config(Path(config_file)) if config_file else find_pytest_config(Path(root_dir))
     except (OSError, ValueError, iniconfig.ParseError, tomllib.TOMLDecodeError) as err:
         raise click.UsageError(str(err)) from err
-
-
-def _root_of(config: PytestConfig) -> str:
-    """pytest's rootdir without ``--rootdir``: the configuration file's directory, else the working one.
-
-    Relative, as ``--root-dir`` usually is: the settings' paths are relative to it.
-    """
-    return os.path.relpath(config.path.parent) if config.path else "."
 
 
 def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:

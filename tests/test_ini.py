@@ -47,6 +47,14 @@ def write(root, files):
         path.write_text(text)
 
 
+@pytest.mark.parametrize("files", [pytest.param(*case.values, id=case.id) for case in FORMATS])
+def test_each_format_is_found_as_the_installed_pytest_finds_it(pytester, files):
+    """pytest 8 reads no pytest.toml, nor ``[tool.pytest]``; pytest 9 reads both."""
+    write(pytester.path, files)
+
+    assert find_pytest_config(pytester.path).path == pytester.parseconfig(pytester.path).inipath
+
+
 @pytest.mark.parametrize("files", FORMATS)
 def test_each_format_reads_as_pytest_reads_it(pytester, files):
     write(pytester.path, files)

@@ -7,13 +7,14 @@ uses, without repeating them as flags.
 
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import click
 import pytest
 from click.testing import CliRunner
 
-from pytest_impacted.cli import impacted_tests_cli
+from pytest_impacted.cli import INI_NAMES, impacted_tests_cli
+from pytest_impacted.plugin import pytest_addoption
 
 from .git_helpers import edit_file
 
@@ -209,28 +210,49 @@ def test_extension_options_are_read(calls, monkeypatch):
     assert build.call_args.kwargs["ext_config"] == {"impacted_ext_demo_threshold": 7}
 
 
-def test_the_root_dir_defaults_to_the_configuration_s_directory(calls, tmp_path, monkeypatch):
-    """As pytest's rootdir does: the settings' paths are relative to their file."""
+def test_the_root_dir_is_not_moved_to_the_configuration_s_directory(calls, tmp_path, monkeypatch):
+    """As with ``pytest --rootdir``: an explicit ``--module`` means what it meant before.
+
+    A monorepo's top-level pyproject.toml, here with no pytest settings, is found from a
+    service directory, as pytest finds it; its directory is not the root for that.
+    """
     run, _ = calls
-    write_config("[pytest]\nimpacted_module = app\n")
-    (tmp_path / "svc").mkdir()
+    write_config("[tool.ruff]\nline-length = 100\n", name="pyproject.toml")
+    (tmp_path / "svc/pkg").mkdir(parents=True)
     monkeypatch.chdir(tmp_path / "svc")
 
-    result = invoke()
+    result = invoke("--module", "pkg")
 
     assert result.exit_code == 0, result.output
-    assert (run.call_args.kwargs["root_dir"], run.call_args.kwargs["ns_module"]) == ("..", "app")
+    assert (run.call_args.kwargs["root_dir"], run.call_args.kwargs["ns_module"]) == (".", "pkg")
 
 
-def test_the_root_dir_of_a_named_file_is_its_directory(calls, tmp_path):
+def test_settings_paths_are_relative_to_the_root_dir(calls, tmp_path):
+    """``-c`` names the file; as with ``pytest -c ... --rootdir=.``, its paths are the root's."""
     run, _ = calls
-    (tmp_path / "ci/app").mkdir(parents=True)
+    (tmp_path / "ci").mkdir()
     write_config("[pytest]\nimpacted_module = app\n", name="ci/impacted.ini")
 
     result = invoke("-c", "ci/impacted.ini")
 
     assert result.exit_code == 0, result.output
-    assert run.call_args.kwargs["root_dir"] == "ci"
+    assert (run.call_args.kwargs["root_dir"], run.call_args.kwargs["ns_module"]) == (".", "app")
+
+
+def test_every_plugin_setting_the_cli_has_an_option_for_is_read(_mock_extensions):
+    """The CLI's names for the plugin's settings must not drift from what the plugin declares."""
+    parser = MagicMock()
+    pytest_addoption(parser)
+    declared = {call.args[0] for call in parser.addini.call_args_list}
+
+    plugin_only = {"impacted", "impacted_unimpacted"}  # the CLI has no session to filter
+    assert set(INI_NAMES.values()) == declared - plugin_only
+
+
+@pytest.fixture
+def _mock_extensions():
+    with patch("pytest_impacted.plugin.discover_extension_metadata", return_value=()):
+        yield
 
 
 def test_an_error_names_the_setting_once(calls):
