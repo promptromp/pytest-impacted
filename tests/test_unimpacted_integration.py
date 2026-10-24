@@ -16,8 +16,10 @@ from pytest import ExitCode
 from pytest_impacted.plugin import (
     _DESELECTION,
     _UNIMPACTED_ITEMS,
+    _WORKER_INPUT_KEY,
     _analyse,
     _relative_to,
+    pytest_collection_modifyitems,
     pytest_configure_node,
     pytest_deselect_unimpacted,
 )
@@ -275,7 +277,17 @@ def test_under_xdist_the_controller_analyses_once_for_every_worker(make_git_proj
 )
 def test_workers_get_the_analysis_relative_to_the_rootdir(test, relative):
     """A worker elsewhere (``--tx``, ``--rsyncdir``) joins them to its own rootdir."""
-    assert _relative_to(Path("/repo"), test) == relative
+    assert _relative_to([Path("/repo")], test) == relative
+
+
+def test_a_path_under_either_spelling_of_the_root_is_made_relative():
+    """The analysis names files under the resolved root; an extension may use the root it was given."""
+    roots = [Path("/real"), Path("/link")]
+
+    assert [_relative_to(roots, test) for test in ("/real/suite/a.py", "/link/suite/b.py")] == [
+        "suite/a.py",
+        "suite/b.py",
+    ]
 
 
 def test_the_analysis_handed_to_workers_is_relative_to_the_rootdir(project):
@@ -285,21 +297,43 @@ def test_the_analysis_handed_to_workers_is_relative_to_the_rootdir(project):
     assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
 
 
-def test_under_xdist_an_analysis_error_is_the_workers_to_report(pytester):
+def test_under_xdist_an_analysis_error_reaches_every_worker(make_git_project):
     """Raised on the controller it would escape xdist's session start, skipping every
-    ``pytest_sessionfinish``: no JUnit XML, no combined coverage. So the workers analyse
-    for themselves and report it, as before the controller analysed."""
+    ``pytest_sessionfinish`` (no JUnit XML, no combined coverage). So every worker raises
+    the controller's error at collection, none analysing again: they could disagree."""
     pytest.importorskip("xdist")
-    pytester.makepyfile(**{"app/__init__.py": "", "suite/test_a.py": "def test_a():\n    pass\n"})
-    pytester.makeini(INI)  # no git repository: GitPython raises
+    fails = (
+        "import pytest_impacted.plugin as plugin\n\n"
+        "def pytest_configure(config):\n"
+        "    def analyse(**kwargs):\n"
+        "        if hasattr(config, 'workerinput'):\n"
+        "            open('worker-analysed', 'w').close()\n"
+        "        raise RuntimeError('the analysis broke')\n"
+        "    plugin.get_impacted_tests = analyse\n"
+    )
+    project = make_git_project({**FILES, "conftest.py": fails}, INI)
+    edit(project, "app/a.py")
 
-    result = pytester.runpytest_subprocess(
+    result = project.runpytest_subprocess(
         "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2", "--junitxml=out.xml"
     )
 
-    assert result.ret != ExitCode.OK
-    assert (pytester.path / "out.xml").exists()
-    result.stdout.fnmatch_lines(["*InvalidGitRepositoryError*"])
+    assert result.ret not in (ExitCode.OK, ExitCode.NO_TESTS_COLLECTED)
+    assert (project.path / "out.xml").exists()
+    result.stdout.fnmatch_lines(["*the analysis broke*"])
+    assert not (project.path / "worker-analysed").exists()
+
+
+def test_each_collection_starts_afresh(project):
+    """A second collection on one config (looponfail) must not count the first's deselection."""
+    config = project.parseconfig("--impacted")
+    config.stash[_DESELECTION] = 5
+    config.stash[_UNIMPACTED_ITEMS] = {object()}
+    config.workerinput = {_WORKER_INPUT_KEY: None}  # handed off: fail open
+
+    pytest_collection_modifyitems(None, config, [])
+
+    assert (config.stash[_DESELECTION], config.stash[_UNIMPACTED_ITEMS]) == (0, set())
 
 
 def test_the_analysis_is_relative_to_a_rootdir_reached_through_a_symlink(project, tmp_path):

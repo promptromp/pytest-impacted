@@ -1,4 +1,5 @@
 import os
+import traceback
 from collections.abc import Callable
 from enum import StrEnum
 from functools import partial
@@ -24,6 +25,7 @@ from pytest_impacted.git import (
     find_repo,
     rev_args,
 )
+from pytest_impacted.traversal import canonical_root
 
 
 class Unimpacted(StrEnum):
@@ -45,7 +47,9 @@ _DESELECTION = StashKey[int]()
 _SESSION = StashKey[pytest.Session]()
 # The run's analysis: the impacted test files, relative to the rootdir; None when it fails open.
 _ANALYSIS = StashKey[list[str] | None]()
-_ANALYSIS_FAILED = StashKey[bool]()
+# Where the controller hands each pytest-xdist worker an analysis that raised, to raise again.
+_WORKER_ERROR_KEY = "pytest_impacted_error"
+_ANALYSIS_ERROR = StashKey[str]()
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 
@@ -307,15 +311,19 @@ def pytest_configure_node(node) -> None:
     session = config.stash.get(_SESSION, None)
     if session is None or not get_option_from_config(config, "impacted"):
         return
-    if _ANALYSIS not in config.stash:
+    if _ANALYSIS not in config.stash and _ANALYSIS_ERROR not in config.stash:
         try:
             config.stash[_ANALYSIS] = _analyse(session, config)
-        except Exception:  # noqa: BLE001
+        except pytest.exit.Exception:
+            raise
+        except Exception:  # noqa: BLE001 — not swallowed: every worker raises it
             # Raised here it would escape xdist's session start, and pytest would skip
-            # every pytest_sessionfinish (no JUnit XML, no combined coverage). Handing
-            # nothing on, each worker analyses for itself, and reports it as before.
-            config.stash[_ANALYSIS_FAILED] = True
-    if not config.stash.get(_ANALYSIS_FAILED, False):
+            # every pytest_sessionfinish (no JUnit XML, no combined coverage). So each
+            # worker raises it at collection instead, none analysing again.
+            config.stash[_ANALYSIS_ERROR] = traceback.format_exc()
+    if _ANALYSIS_ERROR in config.stash:
+        node.workerinput[_WORKER_ERROR_KEY] = config.stash[_ANALYSIS_ERROR]
+    else:
         node.workerinput[_WORKER_INPUT_KEY] = config.stash[_ANALYSIS]
 
 
@@ -353,13 +361,19 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
         if GIT_AVAILABLE:
             warn(f"pytest-impacted: {err} Running every test.", session)
         return None
-    # Resolved: the analysis names every file under the canonical (resolved) root.
-    return [_relative_to(Path(os.path.realpath(root_dir)), test) for test in impacted_tests or []]
+    # The analysis names files under the canonical root; an extension may use the one it was given.
+    roots = [canonical_root(root_dir), root_dir]
+    return [_relative_to(roots, test) for test in impacted_tests or []]
 
 
-def _relative_to(root_dir: Path, test: str) -> str:
+def _relative_to(roots: list[Path], test: str) -> str:
+    """*test* relative to the first of *roots* it is under; as it is if under none, or relative already."""
     path = Path(test)
-    return os.path.relpath(path, root_dir) if path.is_absolute() and path.is_relative_to(root_dir) else test
+    if path.is_absolute():
+        for root in roots:
+            if path.is_relative_to(root):
+                return os.path.relpath(path, root)
+    return test
 
 
 def pytest_collection_modifyitems(session, config, items):
@@ -374,7 +388,12 @@ def pytest_collection_modifyitems(session, config, items):
     get_option = partial(get_option_from_config, config)
     if not get_option("impacted"):
         return
+    # Afresh: a second collection on one config (looponfail) must not see the first's.
+    config.stash[_UNIMPACTED_ITEMS] = set()
+    config.stash[_DESELECTION] = 0
     workerinput = getattr(config, "workerinput", {})
+    if _WORKER_ERROR_KEY in workerinput:
+        raise RuntimeError(f"pytest-impacted: the analysis failed on the controller:\n{workerinput[_WORKER_ERROR_KEY]}")
     impacted_tests = workerinput[_WORKER_INPUT_KEY] if _WORKER_INPUT_KEY in workerinput else _analyse(session, config)
     if impacted_tests is None:
         return
@@ -389,7 +408,7 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(pytest.mark.skip(reason=NOT_IMPACTED))
         else:
             unimpacted.add(item)
-    config.stash[_UNIMPACTED_ITEMS] = unimpacted  # even empty: a second collection must not see the first's
+    config.stash[_UNIMPACTED_ITEMS] = unimpacted
 
 
 @pytest.hookimpl(trylast=True, specname="pytest_collection_modifyitems")

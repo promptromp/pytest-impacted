@@ -273,9 +273,13 @@ analysing for itself could disagree with another (a file written in between: git
 working tree), and xdist aborts a run whose workers collect different tests. So
 `pytest_configure_node` (on the controller, before any worker starts) runs `_analyse` and hands
 the impacted files to every worker in `workerinput`, relative to the rootdir; the workers'
-`pytest_collection_modifyitems` takes them from there. The controller collects nothing, so
-each worker reports its deselection through `config.workeroutput`, which `pytest_testnodedown`
-keeps for the exit status and summary. Both are `optionalhook`s: xdist need not be installed.
+`pytest_collection_modifyitems` takes them from there. An analysis that raises there is handed
+on as its traceback, and every worker raises it at collection: raised in `pytest_configure_node`
+it would escape xdist's session start and skip every `pytest_sessionfinish` (no JUnit XML, no
+combined coverage), and workers analysing again could disagree. The controller collects
+nothing, so each worker reports its deselection through `config.workeroutput`, which
+`pytest_testnodedown` keeps for the exit status and summary. Both are `optionalhook`s: xdist
+need not be installed.
 
 **Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
 every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
