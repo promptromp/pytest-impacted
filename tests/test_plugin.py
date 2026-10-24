@@ -29,6 +29,7 @@ CLI_OPTION_DESTS = {
     "impacted_tests_dir",
     "no_impacted_dep_files",
     "impacted_invalidate_all",
+    "impacted_map",
     "impacted_conftest_imports",
     "impacted_unimpacted",
     "impacted_disable_ext",

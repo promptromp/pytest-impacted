@@ -17,6 +17,7 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
+from pytest_impacted.file_map import parse_file_map
 from pytest_impacted.git import GitMode, GitUnavailableError
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
 
@@ -30,6 +31,7 @@ INI_NAMES = {
     "no_merge_base": "impacted_no_merge_base",
     "no_dep_files": "no_impacted_dep_files",
     "invalidate_all": "impacted_invalidate_all",
+    "file_map": "impacted_map",
     "conftest_imports": "impacted_conftest_imports",
     "disable_ext": "impacted_disable_ext",
 }
@@ -113,6 +115,14 @@ def configure_logging(verbose: bool) -> None:
     default=(),
     metavar="PATTERN",
     help="Glob for files that, when changed, mark ALL tests as impacted (repeatable).",
+)
+@click.option(
+    "--map",
+    "file_map",
+    multiple=True,
+    default=(),
+    metavar="GLOB=PATH",
+    help="A changed file matching GLOB counts as a change to PATH, relative to --root-dir (repeatable).",
 )
 @click.option(
     "--conftest-imports/--no-conftest-imports",
@@ -210,6 +220,7 @@ def _run(
     verbose,
     no_dep_files,
     invalidate_all,
+    file_map,
     conftest_imports,
     disable_ext,
     **ext_kwargs,
@@ -226,6 +237,8 @@ def _run(
         click.secho("  no-merge-base: True", fg="blue", bold=True, err=True)
     if invalidate_all:
         click.secho("  invalidate-all: {}".format(", ".join(invalidate_all)), fg="blue", bold=True, err=True)
+    if file_map:
+        click.secho("  map: {}".format(", ".join(file_map)), fg="blue", bold=True, err=True)
     if conftest_imports:
         click.secho("  conftest-imports: True", fg="blue", bold=True, err=True)
     if disable_ext:
@@ -241,6 +254,11 @@ def _run(
             raise click.BadParameter(
                 f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=sources.get(name, option)
             )
+
+    try:
+        mappings = parse_file_map(file_map)
+    except ValueError as err:
+        raise click.BadParameter(str(err), param_hint="--map") from err
 
     try:
         strategy = build_strategy_with_extensions(
@@ -263,6 +281,7 @@ def _run(
             tests_dir=tests_dir,
             strategy=strategy,
             use_merge_base=not no_merge_base,
+            file_map=mappings,
         )
     except GitUnavailableError as err:
         # Printing nothing would read as "no tests impacted" to a script piping
