@@ -340,16 +340,48 @@ def test_an_extension_setting_is_passed_on_as_the_plugin_reads_it(calls, monkeyp
         pytest.param("this is = not [toml", id="unparsable"),
     ],
 )
-def test_a_configuration_it_cannot_read_is_warned_of_and_passed_over(calls, text):
-    """As before the CLI read any: the command line's options still run."""
-    run, _ = calls
+def test_a_configuration_it_cannot_read_is_a_usage_error(calls, text):
+    """Loud, as pytest is on the same file: passed over, its settings (a tests dir, say) would be lost."""
     write_config(text, name="pyproject.toml")
 
     result = invoke("--module", "app")
 
+    assert result.exit_code == 2, result.output
+    assert "pyproject.toml" in result.output
+
+
+def test_a_named_configuration_it_cannot_read_is_a_usage_error(calls):
+    write_config("this is = not [toml", name="ci.toml")
+
+    result = invoke("-c", "ci.toml", "--module", "app")
+
+    assert result.exit_code == 2, result.output
+    assert "ci.toml" in result.output
+
+
+def test_a_malformed_extension_setting_is_a_usage_error(calls, monkeypatch):
+    write_config("[pytest]\nimpacted_module = app\nimpacted_ext_demo_threshold = abc\n")
+    option = click.Option(["--impacted-ext-demo-threshold"], type=int, default=None)
+    option.name = "impacted_ext_demo_threshold"
+    monkeypatch.setattr(impacted_tests_cli, "params", [*impacted_tests_cli.params, option])
+
+    result = invoke()
+
+    assert result.exit_code == 2, result.output
+    assert "impacted_ext_demo_threshold" in result.output
+
+
+def test_an_empty_extension_setting_is_passed_on_as_the_plugin_passes_it(calls, monkeypatch):
+    _, build = calls
+    write_config("[pytest]\nimpacted_module = app\nimpacted_ext_demo_enabled =\n")
+    option = click.Option(["--impacted-ext-demo-enabled"], type=click.BOOL, default=None)
+    option.name = "impacted_ext_demo_enabled"
+    monkeypatch.setattr(impacted_tests_cli, "params", [*impacted_tests_cli.params, option])
+
+    result = invoke()
+
     assert result.exit_code == 0, result.output
-    assert run.call_args.kwargs["ns_module"] == "app"
-    assert "pyproject.toml" in result.output and "could not be read" in result.output
+    assert build.call_args.kwargs["ext_config"] == {"impacted_ext_demo_enabled": ""}
 
 
 def test_a_bad_directory_from_the_configuration_names_the_setting(calls):

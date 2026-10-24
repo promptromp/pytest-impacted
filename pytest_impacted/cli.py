@@ -2,7 +2,6 @@
 
 import logging
 import os
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -142,14 +141,13 @@ def impacted_tests_cli(ctx, **options):
 def _pytest_config(root_dir: str, config_file: str | None) -> PytestConfig:
     """The configuration named by ``--config-file``, or the one pytest finds from *root_dir*.
 
-    One it cannot read is warned of and passed over, as before the CLI read any: a run
-    with its options on the command line must not fail on a file it does not need.
+    One it cannot read is a usage error, as it is for pytest: passed over, its settings
+    (a tests dir, the conftest opt-in) would be lost silently, and fewer tests selected.
     """
     try:
         return load_pytest_config(Path(config_file)) if config_file else find_pytest_config(Path(root_dir))
-    except (OSError, ValueError, iniconfig.ParseError, tomllib.TOMLDecodeError) as err:
-        click.secho(f"The pytest configuration could not be read, so none is: {err}", fg="yellow", err=True)
-        return PytestConfig()
+    except (OSError, ValueError, iniconfig.ParseError) as err:
+        raise click.UsageError(f"The pytest configuration could not be read: {err}") from err
 
 
 def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
@@ -170,17 +168,29 @@ def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
             value = _read(config, setting, param)
         except ValueError as err:  # it names the setting and the file
             raise click.UsageError(str(err)) from err
+        if setting.startswith(EXT_PREFIX):
+            if value is not None:
+                _check(param, value, ctx, setting, config)
+                settings[name] = value  # raw, even empty, for the extension's own conversion, as in the plugin
+            continue
         # Empty is unset, as in the plugin, which reads ``getoption(name) or getini(name)``.
         if value is None or value in ("", []):
-            continue
-        if setting.startswith(EXT_PREFIX):
-            settings[name] = value  # raw, for the extension's own conversion, as in the plugin
             continue
         try:
             settings[name] = value if param.multiple or _is_flag(param) else param.type.convert(value, param, ctx)
         except click.BadParameter as err:
             raise click.UsageError(f"{setting} in {config.path}: {err.format_message()}") from err
     return settings
+
+
+def _check(param: click.Parameter, value: str, ctx: click.Context, setting: str, config: PytestConfig) -> None:
+    """A usage error naming *setting* if *value* is none the option's own type would take."""
+    if value == "":
+        return
+    try:
+        param.type.convert(value, param, ctx)
+    except click.BadParameter as err:
+        raise click.UsageError(f"{setting} in {config.path}: {err.format_message()}") from err
 
 
 def _setting_of(name: str) -> str | None:
