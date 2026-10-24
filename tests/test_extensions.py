@@ -549,3 +549,34 @@ class TestImpactStrategyClassVars:
         assert ASTImpactStrategy.priority == 100
         assert PytestImpactStrategy.config_options == []
         assert DependencyFileImpactStrategy.config_options == []
+
+
+class TestLoadExtensionsValues:
+    """A setting is read as an option's value: empty is unset, and one that will not convert names itself."""
+
+    def _metadata(self):
+        class Strategy:
+            config_options: ClassVar[list[ConfigOption]] = [
+                ConfigOption(name="threshold", help="Minimum", type=int, default=80)
+            ]
+
+            def __init__(self, threshold=80):
+                self.threshold = threshold
+
+            def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+                return []
+
+        return ExtensionMetadata(name="demo", strategy_class=Strategy, config_options=Strategy.config_options)
+
+    def test_an_empty_setting_takes_the_default(self, monkeypatch):
+        monkeypatch.setattr("pytest_impacted.extensions.discover_extension_metadata", lambda: [self._metadata()])
+
+        (strategy,) = load_extensions(ext_config={"impacted_ext_demo_threshold": ""})
+
+        assert strategy.threshold == 80
+
+    def test_a_setting_that_will_not_convert_names_the_extension_and_option(self, monkeypatch):
+        monkeypatch.setattr("pytest_impacted.extensions.discover_extension_metadata", lambda: [self._metadata()])
+
+        with pytest.raises(ValueError, match=r"Extension 'demo'.*'abc'.*threshold"):
+            load_extensions(ext_config={"impacted_ext_demo_threshold": "abc"})

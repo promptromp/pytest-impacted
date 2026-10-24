@@ -170,8 +170,7 @@ def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
             raise click.UsageError(str(err)) from err
         if setting.startswith(EXT_PREFIX):
             if value is not None:
-                _check(param, value, ctx, setting, config)
-                settings[name] = value  # raw, even empty, for the extension's own conversion, as in the plugin
+                settings[name] = value  # raw, even empty, converted with the plugin's (load_extensions)
             continue
         # Empty is unset, as in the plugin, which reads ``getoption(name) or getini(name)``.
         if value is None or value in ("", []):
@@ -181,16 +180,6 @@ def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
         except click.BadParameter as err:
             raise click.UsageError(f"{setting} in {config.path}: {err.format_message()}") from err
     return settings
-
-
-def _check(param: click.Parameter, value: str, ctx: click.Context, setting: str, config: PytestConfig) -> None:
-    """A usage error naming *setting* if *value* is none the option's own type would take."""
-    if value == "":
-        return
-    try:
-        param.type.convert(value, param, ctx)
-    except click.BadParameter as err:
-        raise click.UsageError(f"{setting} in {config.path}: {err.format_message()}") from err
 
 
 def _setting_of(name: str) -> str | None:
@@ -253,14 +242,17 @@ def _run(
                 f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=sources.get(name, option)
             )
 
-    strategy = build_strategy_with_extensions(
-        watch_dep_files=not no_dep_files,
-        invalidate_all_patterns=invalidate_all,
-        conftest_imports=conftest_imports,
-        disabled=disable_ext,
-        ext_config=ext_kwargs,
-        config_file=config.path,
-    )
+    try:
+        strategy = build_strategy_with_extensions(
+            watch_dep_files=not no_dep_files,
+            invalidate_all_patterns=invalidate_all,
+            conftest_imports=conftest_imports,
+            disabled=disable_ext,
+            ext_config=ext_kwargs,
+            config_file=config.path,
+        )
+    except ValueError as err:  # an extension's setting that will not convert, named
+        raise click.UsageError(str(err)) from err
 
     try:
         impacted_tests = get_impacted_tests(

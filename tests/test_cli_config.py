@@ -7,6 +7,7 @@ uses, without repeating them as flags.
 
 import os
 import sys
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import click
@@ -14,6 +15,7 @@ import pytest
 from click.testing import CliRunner
 
 from pytest_impacted.cli import INI_NAMES, impacted_tests_cli
+from pytest_impacted.extensions import ConfigOption, ExtensionMetadata
 from pytest_impacted.plugin import pytest_addoption
 
 from .git_helpers import edit_file
@@ -359,16 +361,48 @@ def test_a_named_configuration_it_cannot_read_is_a_usage_error(calls):
     assert "ci.toml" in result.output
 
 
-def test_a_malformed_extension_setting_is_a_usage_error(calls, monkeypatch):
-    write_config("[pytest]\nimpacted_module = app\nimpacted_ext_demo_threshold = abc\n")
+class _Demo:
+    config_options: ClassVar[list[ConfigOption]] = [
+        ConfigOption(name="threshold", help="Minimum", type=int, default=80)
+    ]
+
+    def __init__(self, threshold=80):
+        self.threshold = threshold
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+        return []
+
+
+@pytest.fixture
+def demo_extension(tmp_path, monkeypatch):
+    """A real extension ``demo``, with an int option, built as the plugin builds it."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "app").mkdir()
+    metadata = ExtensionMetadata(name="demo", strategy_class=_Demo, config_options=_Demo.config_options)
+    monkeypatch.setattr("pytest_impacted.extensions.discover_extension_metadata", lambda: [metadata])
     option = click.Option(["--impacted-ext-demo-threshold"], type=int, default=None)
     option.name = "impacted_ext_demo_threshold"
     monkeypatch.setattr(impacted_tests_cli, "params", [*impacted_tests_cli.params, option])
+    with patch("pytest_impacted.cli.get_impacted_tests", return_value=[]) as run:
+        yield run
+
+
+def test_a_malformed_extension_setting_is_a_usage_error(demo_extension):
+    write_config("[pytest]\nimpacted_module = app\nimpacted_ext_demo_threshold = abc\n")
 
     result = invoke()
 
     assert result.exit_code == 2, result.output
-    assert "impacted_ext_demo_threshold" in result.output
+    assert "demo" in result.output and "threshold" in result.output and "'abc'" in result.output
+
+
+def test_an_empty_extension_setting_takes_the_option_s_default(demo_extension):
+    write_config("[pytest]\nimpacted_module = app\nimpacted_ext_demo_threshold =\n")
+
+    result = invoke()
+
+    assert result.exit_code == 0, result.output
+    assert demo_extension.call_args.kwargs["strategy"].strategies[-1].threshold == 80
 
 
 def test_an_empty_extension_setting_is_passed_on_as_the_plugin_passes_it(calls, monkeypatch):

@@ -439,6 +439,7 @@ The extension system is designed to be fault-tolerant:
 - **Instantiation errors**: If a strategy's `__init__` raises an exception, the extension is skipped.
 - **Invalid classes**: If an entry point resolves to a class without `find_impacted_tests`, it is skipped with a warning.
 - **Missing required options**: A `ConfigOption(required=True)` with no value skips the extension with a warning.
+- **Option values**: An empty setting (`impacted_ext_demo_threshold =`) is unset, so the option's default applies. One that does not convert to the option's `type` fails the run with an error naming the extension, the option and the value (a usage error in the `impacted-tests` CLI).
 - **Lifecycle hooks**: Exceptions from `enrich_dep_tree`, `setup` or `teardown` are logged and that phase is skipped for the strategy; the others carry on.
 
 A failure to load an entry point (an import error, or an entry point that is not a strategy class) happens while pytest registers options, before it configures logging, so it is printed to stderr on every run (an import error with its traceback). The other warnings are log records on the `pytest_impacted.extensions` / `pytest_impacted.strategies` loggers emitted during collection, not shown in pytest's terminal output by default (use `--log-cli-level=WARNING` to see them).
