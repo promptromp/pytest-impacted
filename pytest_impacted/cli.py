@@ -2,9 +2,13 @@
 
 import logging
 import os
+import tomllib
 from pathlib import Path
+from typing import Any
 
 import click
+import iniconfig
+from click.core import ParameterSource
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -15,7 +19,23 @@ from pytest_impacted.extensions import (
     get_ext_ini_name,
 )
 from pytest_impacted.git import GitMode, GitUnavailableError
+from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
 
+
+# The pytest setting each option defaults to; an extension's option is named as its setting.
+INI_NAMES = {
+    "git_mode": "impacted_git_mode",
+    "base_branch": "impacted_base_branch",
+    "module": "impacted_module",
+    "tests_dir": "impacted_tests_dir",
+    "no_merge_base": "impacted_no_merge_base",
+    "no_dep_files": "no_impacted_dep_files",
+    "invalidate_all": "impacted_invalidate_all",
+    "conftest_imports": "impacted_conftest_imports",
+    "disable_ext": "impacted_disable_ext",
+}
+# Options with no pytest setting.
+_CLI_ONLY = {"root_dir", "config_file", "verbose"}
 
 _CLICK_TYPE_MAP: dict[type, click.ParamType] = {
     str: click.STRING,
@@ -52,9 +72,20 @@ def configure_logging(verbose: bool) -> None:
     help="Root directory for project repository.",
 )
 @click.option(
+    "-c",
+    "--config-file",
+    type=click.Path(exists=True, dir_okay=False),
+    help=(
+        "The pytest configuration file to take defaults from. By default, the one pytest finds "
+        + "for a run from --root-dir (pytest.ini, pyproject.toml, tox.ini, ...)."
+    ),
+)
+@click.option(
     "--module",
-    required=True,
-    help="Namespace (top-level) module for package we are testing, relative to --root-dir.",
+    help=(
+        "Namespace (top-level) module for package we are testing, relative to --root-dir. "
+        + "Required, here or as impacted_module in the pytest configuration."
+    ),
 )
 @click.option(
     "--tests-dir",
@@ -64,14 +95,13 @@ def configure_logging(verbose: bool) -> None:
     ),
 )
 @click.option(
-    "--no-merge-base",
-    is_flag=True,
+    "--no-merge-base/--merge-base",
     default=False,
     help="In branch mode, diff against the base branch's tip instead of the fork point.",
 )
 @click.option("--verbose", is_flag=True, help="Verbose output.")
 @click.option(
-    "--no-dep-files", is_flag=True, default=False, help="Disable dependency and test-config file change detection."
+    "--no-dep-files/--dep-files", default=False, help="Disable dependency and test-config file change detection."
 )
 @click.option(
     "--invalidate-all",
@@ -81,15 +111,68 @@ def configure_logging(verbose: bool) -> None:
     help="Glob for files that, when changed, mark ALL tests as impacted (repeatable).",
 )
 @click.option(
-    "--conftest-imports",
-    is_flag=True,
+    "--conftest-imports/--no-conftest-imports",
     default=False,
     help="Also treat a conftest.py that imports changed application code as impacting every test beneath it.",
 )
 @click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
 @click.pass_context
-def impacted_tests_cli(
-    ctx,
+def impacted_tests_cli(ctx, **options):
+    """CLI entrypoint for impacted-tests console script.
+
+    An option the command line leaves out takes its pytest setting (``impacted_module``
+    for ``--module``, and so on), from the configuration file pytest would read, and
+    only then its own default.
+    """
+    config = _pytest_config(options["root_dir"], options.pop("config_file"))
+    options |= _settings(ctx, config)
+    if not options["module"]:
+        raise click.UsageError("Missing option '--module' (or impacted_module in the pytest configuration).")
+    _run(config, **options)
+
+
+def _pytest_config(root_dir: str, config_file: str | None) -> PytestConfig:
+    """The configuration named by ``--config-file``, or the one pytest finds from *root_dir*."""
+    try:
+        return load_pytest_config(Path(config_file)) if config_file else find_pytest_config(Path(root_dir))
+    except (ValueError, iniconfig.ParseError, tomllib.TOMLDecodeError) as err:
+        raise click.UsageError(str(err)) from err
+
+
+def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
+    """The pytest settings for the options the command line left at their defaults.
+
+    Each is read as the plugin declares it (a flag, a list, or a string), and a string
+    is checked as the option's own value would be (``--git-mode`` is a choice).
+    """
+    settings: dict[str, Any] = {}
+    for param in ctx.command.params:
+        name = param.name
+        if name is None or name in _CLI_ONLY or ctx.get_parameter_source(name) is not ParameterSource.DEFAULT:
+            continue
+        setting = INI_NAMES.get(name, name)
+        try:
+            value = _read(config, setting, param)
+            if value is not None:
+                settings[name] = value if param.multiple or _is_flag(param) else param.type.convert(value, param, ctx)
+        except (ValueError, click.BadParameter) as err:
+            raise click.UsageError(f"{setting} in {config.path}: {err}") from err
+    return settings
+
+
+def _read(config: PytestConfig, setting: str, param: click.Parameter) -> Any:
+    if _is_flag(param):
+        return config.flag(setting)
+    return config.args(setting) if param.multiple else config.string(setting)
+
+
+def _is_flag(param: click.Parameter) -> bool:
+    return isinstance(param, click.Option) and param.is_flag
+
+
+def _run(
+    config: PytestConfig,
+    *,
     git_mode,
     base_branch,
     root_dir,
@@ -102,9 +185,9 @@ def impacted_tests_cli(
     conftest_imports,
     disable_ext,
     **ext_kwargs,
-):
-    """CLI entrypoint for impacted-tests console script."""
+) -> None:
     click.echo("impacted-tests", err=True)
+    click.secho(f"  config-file: {config.path}", fg="blue", bold=True, err=True)
     click.secho(f"  base-branch: {base_branch}", fg="blue", bold=True, err=True)
     click.secho(f"  git-mode: {git_mode}", fg="blue", bold=True, err=True)
     click.secho(f"  module: {module}", fg="blue", bold=True, err=True)
