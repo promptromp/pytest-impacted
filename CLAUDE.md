@@ -287,6 +287,13 @@ nothing, so each worker reports its deselection through `config.workeroutput`, w
 `pytest_testnodedown` keeps for the exit status and summary. Both are `optionalhook`s: xdist
 need not be installed.
 
+**`--impacted-early-filter` analyses in `pytest_ignore_collect`, on the first test file
+asked about**, and `pytest_collection_modifyitems` reuses that analysis (`_EARLY`): one per
+collection. It passes over only `.py` files matching `python_files`, never with
+`--doctest-modules`, needs deselect mode (an ignored file cannot be skipped), and in an xdist
+worker only with the controller's handoff (workers analysing alone skip). Opt-in: it loses the
+`item.location` match for a test inherited across files with no import edge.
+
 **Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
 every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
 into the file name and match nothing.

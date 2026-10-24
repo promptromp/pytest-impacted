@@ -28,6 +28,12 @@ A run whose changes impact no test, such as a docs-only commit, exits with statu
 
 Under pytest-xdist the analysis runs once, on the controller, and every worker filters by its result: workers analysing for themselves could disagree, and xdist stops a run whose workers collect different tests. Its notices are then shown too. With a strategy extension installed, with `--tx` workers, or when the analysis fails on the controller (a warning says so), each worker analyses for itself instead, as before 0.36, and marks the tests it finds unimpacted **skipped**, whatever `--impacted-unimpacted` says: tests skipped differently by two workers stop nothing, while tests collected differently would stop the run. The workers' notices are then not shown, as before.
 
+#### Not importing them at all (opt-in)
+
+pytest imports every test module before any filter sees an item, which on a large suite is most of a run whose changes impact little. `--impacted-early-filter` (ini: `impacted_early_filter = true`) analyses when collection starts instead, and passes over each test file (`python_files`: `test_*.py`, `*_test.py`) it does not impact, so it is never imported. A final line says how many test files were left out. On a 6,187-test project, a docs-only change took 6.6 s instead of 9.6 s.
+
+It is opt-in because a test can belong to a file other than its own: an inherited test whose base class changed is selected through the base's file (`item.location`), which a file never collected cannot be matched by when no import edge links the two (a test directory outside any package, `from checks import Checks`). Conftests, directories and other modules are always collected, as are files named on the command line. It does nothing with `--doctest-modules` (doctests always run), and needs `--impacted-unimpacted=deselect`. Under pytest-xdist it works only when the controller analyses for the workers.
+
 To mark them skipped instead, as releases up to 0.35 did, pass `--impacted-unimpacted=skip` (ini: `impacted_unimpacted = "skip"`). Each then reports `SKIPPED (not impacted by the changes)`. `--impacted-unimpacted=deselect` restores the default when the ini says `skip`.
 
 ## Git Modes
@@ -336,6 +342,7 @@ impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger eve
 impacted_map = ["reports/*.json=tests/test_bench.py"]  # a changed data file counts as a change to the file it belongs to
 impacted_conftest_imports = false  # true: a conftest importing changed app code selects every test beneath it
 impacted_unimpacted = "deselect"  # "skip": mark tests not impacted skipped instead of deselecting them
+impacted_early_filter = false  # true: never import the test files no change impacts
 impacted_no_merge_base = false  # true: branch mode diffs against the base tip
 impacted_disable_ext = []  # extension names to disable
 ```
@@ -373,6 +380,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH`, a file or directory (repeatable; [details](#mapping-files-to-the-code-they-belong-to)) |
 | `--impacted-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted ([details](#conftestimportimpactstrategy-opt-in)) |
 | `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them ([details](#tests-not-impacted)) |
+| `--impacted-early-filter` | `false` | Never import the test files no change impacts: faster, but see [the trade-off](#not-importing-them-at-all-opt-in) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension. Installed extensions register their own flags — run `pytest --help` to list them, or see the [Extensions guide](extensions.md#extension-with-configuration) |
 
