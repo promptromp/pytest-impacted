@@ -378,14 +378,14 @@ def pytest_testnodedown(node, error) -> None:
         node.config.stash[_DESELECTION] = _Deselection(**reported)
 
 
-@pytest.hookimpl(trylast=True)
+@pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session: pytest.Session) -> None:
     """A run this plugin left with no tests passes, as one skipping every test does.
 
     pytest exits 5 when no test runs, so deselecting every test would fail a run whose
     changes impact nothing, such as a docs-only commit. Only a run *this plugin*
-    emptied: one emptied by ``-k``, or with no tests at all, still exits 5. Last, and
-    from ``session.exitstatus``: a status another plugin set here is kept.
+    emptied: one emptied by ``-k``, or with no tests at all, still exits 5. First, so
+    every other plugin sees the run's status, and may still set a failure of its own.
     """
     deselection = session.config.stash.get(_DESELECTION, None)
     if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.emptied:

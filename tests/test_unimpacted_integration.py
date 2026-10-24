@@ -111,6 +111,30 @@ def test_only_tests_left_by_k_are_deselected(project):
     result.stdout.fnmatch_lines([NOT_IMPACTED])
 
 
+def test_a_run_a_later_filter_empties_still_exits_5(make_git_project):
+    """A plugin deselecting the rest after this one, not this one, is what left the run empty."""
+    wrapper = (
+        "import pytest\n\n@pytest.hookimpl(wrapper=True)\ndef pytest_collection_modifyitems(config, items):\n"
+        "    yield\n    config.hook.pytest_deselected(items=list(items))\n    items[:] = []\n"
+    )
+    project = make_git_project({**FILES, "conftest.py": wrapper}, INI)
+    edit(project, "app/a.py")
+
+    assert run(project).ret == ExitCode.NO_TESTS_COLLECTED
+
+
+def test_other_plugins_see_the_status_of_an_emptied_run(make_git_project):
+    """Their ``pytest_sessionfinish`` runs after this plugin's, which has made the status 0."""
+    seen = "def pytest_sessionfinish(session):\n    print('status seen:', int(session.exitstatus))\n"
+    project = make_git_project({**FILES, "conftest.py": seen}, INI)
+    edit(project, "docs/notes.md")
+
+    result = run(project, "-s")
+
+    assert result.ret == ExitCode.OK
+    result.stdout.fnmatch_lines(["*status seen: 0*"])
+
+
 def test_a_failure_another_plugin_reports_is_kept(make_git_project):
     """A conftest setting a failing status in ``pytest_sessionfinish`` must not be turned into 0."""
     project = make_git_project(
