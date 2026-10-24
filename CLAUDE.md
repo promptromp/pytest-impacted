@@ -396,8 +396,9 @@ missed the others (a file no walk reaches, `package_members`, the conftest-impor
 path stands for the files git knows there (`git.files_git_knows`: tracked, or untracked and not
 ignored), where changed files come from too — never an `os.walk` (a virtualenv) nor the graph's
 nodes (a file no walk reaches) — spelled exactly, checked by a fresh listing: on macOS git lists
-a wrong-case pathspec as an untracked file. Normalised, never resolved: a symlink git tracks
-stands for itself, as an edit to it is reported. A path git knows nothing at is warned of in
+a wrong-case pathspec as an untracked file. Its parent directories are resolved, the path itself
+not: a symlink git tracks stands for itself, as an edit to it is reported, unless it points at a
+directory. A directory stands for every file git knows in it, not only its Python files. A path git knows nothing at is warned of in
 the report header on every run (it is written by the controller, so xdist shows it too).
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,

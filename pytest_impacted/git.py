@@ -289,20 +289,22 @@ def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:
     """The files git knows at *path*, relative to *repo_dir*: tracked, or untracked but not ignored.
 
     *path* is a file or a directory (``.`` for *repo_dir*), POSIX and relative to
-    *repo_dir*; the files come back the same way, as the changed files do, and spelled
-    as git records them: a path in another case knows none, as Python's import would not.
+    *repo_dir*; the files come back the same way, as the changed files do. Its parent
+    directories are resolved, as git reports a file under a symlinked directory by its real
+    path; the path itself is not, so a symlink git tracks stands for itself, as an edit to
+    it is reported, unless it points at a directory, which it then stands for.
     """
     repo = find_repo(repo_dir)
     if repo.working_tree_dir is None:
         return []
     git_root = Path(repo.working_tree_dir).resolve()
     working_dir = Path(repo_dir).resolve()
-    # Normalised, not resolved: a symlink git tracks stands for itself, as an edit to it is reported.
-    target = Path(os.path.normpath(working_dir / path))
+    joined = Path(os.path.normpath(working_dir / path))
+    target = Path(os.path.realpath(joined.parent)) / joined.name if path != "." else working_dir
+    if os.path.islink(target) and os.path.isdir(target):
+        target = Path(os.path.realpath(target))
     if not target.is_relative_to(git_root):
         return []
-    if os.path.lexists(target) and not _spelled_as_on_disk(working_dir, path):
-        return []  # git trusts a filesystem ignoring case, and would list it under this spelling
     spec = target.relative_to(git_root).as_posix()
     # After "--", and literal: no pathspec is an option, and none a glob.
     output = repo.git.ls_files("--cached", "--others", "--exclude-standard", "-z", "--", f":(literal){spec}")
@@ -311,25 +313,6 @@ def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:
         f for f in dict.fromkeys(output.split("\0")) if f and (spec == "." or f == spec or f.startswith(f"{spec}/"))
     ]
     return normalize_git_paths(known, git_root, working_dir)
-
-
-def _spelled_as_on_disk(base: Path, path: str) -> bool:
-    """Whether each part of *path* under *base* is spelled as its entry on disk (``.`` is *base*).
-
-    Listed afresh, unlike the import lookup's cached listings: this runs before the graph
-    is built, or found in a cache, and a file may have been created since.
-    """
-    directory = base
-    for part in Path(path).parts:
-        if part == ".":
-            continue
-        try:
-            if part not in os.listdir(directory):
-                return False
-        except OSError:
-            return False
-        directory = directory / part
-    return True
 
 
 #: ``--name-status -z`` is what :meth:`ChangeSet.from_git_diff_name_status_output`

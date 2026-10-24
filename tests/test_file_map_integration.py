@@ -185,14 +185,62 @@ def test_a_path_that_is_not_relative_is_a_usage_error(project, path):
     result.stderr.fnmatch_lines(["*--impacted-map*relative*"])
 
 
-def test_a_directory_stands_for_its_python_files_only(make_git_project):
-    """A data file kept beside the tests is not edited by the mapping: here it would select every test."""
+def test_a_directory_stands_for_every_file_git_knows_there(make_git_project):
+    """As an edit to each would: a data file there matches this invalidation glob, so every test runs."""
     project = make_git_project({**FILES, "suite/slow/cases.json": "{}\n"}, INI)
     edit(project, "reports/run.json")
 
     result = run(project, "--impacted-map=reports/*.json=suite/slow", "--impacted-invalidate-all=suite/*/*.json")
 
-    outcomes(result, ["test_slow.py"])
+    outcomes(result, EVERY)
+
+
+def test_a_directory_s_data_files_chain_on(make_git_project):
+    project = make_git_project({**FILES, "fixtures/a.txt": "a\n"}, INI)
+    edit(project, "reports/run.json")
+
+    result = run(project, "--impacted-map=reports/*.json=fixtures", "--impacted-map=fixtures/*.txt=suite/test_bench.py")
+
+    outcomes(result, ["test_bench.py"])
+
+
+def test_a_non_string_entry_is_a_usage_error(make_git_project):
+    project = make_git_project(FILES, INI)
+    (project.path / "tox.ini").unlink()
+    (project.path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["."]\nimpacted_module = "app"\nimpacted_map = [1]\n'
+    )
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged")
+
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*--impacted-map*"])
+
+
+def _commit_link(project, link, target):
+    (project.path / link).symlink_to(target)
+    subprocess.run(["git", "add", link], cwd=project.path, check=True)
+    subprocess.run(["git", "commit", "-qm", "link"], cwd=project.path, check=True)
+
+
+def test_a_mapped_symlink_to_a_directory_stands_for_the_directory(project):
+    """A link git tracks as a file but points at tests: what it means is what it points at."""
+    _commit_link(project, "slow_link", "suite/slow")
+    edit(project, "reports/run.json")
+
+    result = run(project, "--impacted-map=reports/*.json=slow_link")
+
+    result.stdout.fnmatch_lines(["*suite/slow/test_slow.py::test_slow PASSED*"])
+
+
+def test_a_path_through_a_symlinked_directory_reaches_the_file(project):
+    """git lists nothing beyond a link; an edit of the file is reported under its real path."""
+    _commit_link(project, "suite_link", "suite")
+    edit(project, "reports/run.json")
+
+    result = run(project, "--impacted-map=reports/*.json=suite_link/test_bench.py")
+
+    result.stdout.fnmatch_lines(["*suite/test_bench.py::test_bench PASSED*"])
 
 
 @pytest.mark.parametrize("path", ["../outside/test_x.py", "suite/../../x.py"])
@@ -220,14 +268,14 @@ def test_a_path_spelled_in_another_case_is_said_to_match_nothing(project):
     result.stdout.fnmatch_lines(["*Suite/test_bench.py*matches no file*"])
 
 
-def test_a_directory_holding_no_module_is_said_so(make_git_project):
-    project = make_git_project({**FILES, "suite/data/cases.json": "{}\n"}, INI)
+def test_a_directory_git_knows_no_file_in_is_said_so(project):
+    (project.path / "suite/empty").mkdir()
     edit(project, "reports/run.json")
 
-    result = run(project, "--impacted-map=reports/*.json=suite/data")
+    result = run(project, "--impacted-map=reports/*.json=suite/empty")
 
     outcomes(result, [])
-    result.stdout.fnmatch_lines(["*suite/data*matches no file*"])
+    result.stdout.fnmatch_lines(["*suite/empty*matches no file*"])
 
 
 def test_a_directory_stands_for_the_files_git_knows_there(make_git_project):

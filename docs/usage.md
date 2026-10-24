@@ -227,7 +227,7 @@ When a data file belongs to particular tests, invalidating every test is more th
 | a module | the tests that import it, directly or through other modules (and, with `--impacted-conftest-imports`, the tests beneath a conftest importing it) |
 | a package `__init__.py` | the tests of every module in its package |
 | a `conftest.py` | every test in its directory and below |
-| a directory | what an edit to every Python file git knows in it and below would (tracked, or untracked and not ignored: a virtualenv git ignores is left out) |
+| a directory | what an edit to every file git knows in it and below would (tracked, or untracked and not ignored: a virtualenv git ignores is left out) |
 | a dependency file (`pyproject.toml`, ...) | every test |
 
 ```bash
@@ -243,7 +243,7 @@ Or in `pyproject.toml`:
 impacted_map = ["reports/*.json=tests/test_bench.py", "schema/*.sql=my_package/db.py"]
 ```
 
-`GLOB` is matched as `--impacted-invalidate-all` globs are (see above); a glob may map to several paths, one entry each, and a mapped file another glob matches is mapped on. `PATH` must be relative and inside the rootdir, and is spelled as on disk, case included. One git knows no file at is named in a notice, since it selects nothing. The mapped paths join the changed files before any strategy runs, so every strategy, an extension's included, sees them as changed. The `impacted-tests` CLI takes `--map GLOB=PATH`.
+`GLOB` is matched as `--impacted-invalidate-all` globs are (see above); a glob may map to several paths, one entry each, and a mapped file another glob matches is mapped on. `PATH` must be relative and inside the rootdir, and is spelled as on disk, case included. A symlink stands for itself, as an edit to it is reported, unless it points at a directory, which it then stands for; a path through a symlinked directory reaches the file it leads to. One git knows no file at is named in a notice, since it selects nothing. The mapped paths join the changed files before any strategy runs, so every strategy, an extension's included, sees them as changed. The `impacted-tests` CLI takes `--map GLOB=PATH`.
 
 ### CompositeImpactStrategy
 
