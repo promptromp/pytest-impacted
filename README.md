@@ -144,15 +144,15 @@ else
 fi
 ```
 
-The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `--root-dir`, `--tests-dir`,
-`--verbose`, `--no-dep-files`, `--invalidate-all`, `--conftest-imports` and `--disable-ext`, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
+The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `--root-dir`, `-c/--config-file`, `--tests-dir`,
+`--verbose`, `--no-dep-files`, `--invalidate-all`, `--conftest-imports` and `--disable-ext`, each defaulting to its pytest setting (`impacted_module`, …) when one is configured, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
 In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit — and name it as the remote-tracking ref (`origin/main`): a PR checkout has no local `main`.
 
 ### Configuration via `pyproject.toml`
 
-All pytest options can be set as defaults in your `pyproject.toml` (or `pytest.ini`). The `impacted-tests` CLI reads no config file, so pass its flags explicitly.
+All pytest options can be set as defaults in your `pyproject.toml` (or `pytest.ini`). The `impacted-tests` CLI reads them too (since 0.36), from the file pytest would read for a run from `--root-dir`, so a CI script need not repeat them as flags.
 
 ```toml
 [tool.pytest.ini_options]
