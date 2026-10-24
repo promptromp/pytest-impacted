@@ -32,6 +32,7 @@ CLI_OPTION_DESTS = {
     "impacted_map",
     "impacted_conftest_imports",
     "impacted_unimpacted",
+    "impacted_early_filter",
     "impacted_disable_ext",
 }
 
