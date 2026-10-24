@@ -353,3 +353,13 @@ def test_a_node_configured_before_the_session_starts_analyses_for_itself(project
     pytest_configure_node(node)
 
     assert node.workerinput == {}
+
+
+def test_a_test_under_the_rootdir_as_given_is_handed_on_relative(project, tmp_path, monkeypatch):
+    """A strategy may return a path under the root it was given, a symlink, not the resolved one."""
+    link = tmp_path / "link"
+    link.symlink_to(project.path)
+    monkeypatch.setattr("pytest_impacted.plugin.get_impacted_tests", lambda **_: [str(link / "suite/test_a.py")])
+    config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged", f"--rootdir={link}")
+
+    assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
