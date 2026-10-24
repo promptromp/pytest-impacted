@@ -322,17 +322,16 @@ def test_the_cli_reads_the_mapping_from_the_configuration(make_git_project):
     assert result.stdout.splitlines() == [str((project.path / "suite/test_bench.py").resolve())]
 
 
-def test_a_mapped_symlink_stands_for_itself_as_an_edit_of_it_would(make_git_project, tmp_path):
-    """git tracks the link, and an edit to it is reported under the link's path."""
-    project = make_git_project({**FILES, "shared/real_test.py": "def test_real():\n    assert True\n"}, INI)
-    (project.path / "suite/test_link.py").symlink_to("../shared/real_test.py")
-    subprocess.run(["git", "add", "suite/test_link.py"], cwd=project.path, check=True)
+def test_a_mapped_symlink_stands_for_itself_as_an_edit_of_it_would(make_git_project):
+    """git tracks the link, and an edit is reported under its path: here ``requirements.txt``,
+    a dependency file by its name, which the file it points to does not have."""
+    project = make_git_project({**FILES, "config/pins.txt": "pytest\n"}, INI)
+    (project.path / "requirements.txt").symlink_to("config/pins.txt")
+    subprocess.run(["git", "add", "requirements.txt"], cwd=project.path, check=True)
     subprocess.run(["git", "commit", "-qm", "link"], cwd=project.path, check=True)
     edit(project, "reports/run.json")
 
-    result = run(project, "--impacted-map=reports/*.json=suite/test_link.py")
-
-    result.stdout.fnmatch_lines(["*test_link.py::test_real PASSED*"])
+    outcomes(run(project, "--impacted-map=reports/*.json=requirements.txt"), EVERY)
 
 
 @pytest.mark.parametrize("glob", [".", "./"])
@@ -343,9 +342,18 @@ def test_a_glob_that_matches_nothing_by_construction_is_a_usage_error(project, g
     result.stderr.fnmatch_lines(["*--impacted-map*GLOB*"])
 
 
-def test_a_tracked_file_deleted_from_the_worktree_still_counts(project):
-    """git still knows it, and a deleted module still reaches whatever imports it. In branch
-    mode, where the local deletion is no change of its own, only the mapping brings it in."""
+LATE = {
+    "app/late.py": "def late():\n    return 3\n",
+    "suite/test_late.py": "def test_late():\n    from app.late import late\n\n    assert late() == 3\n",
+}
+
+
+@pytest.mark.parametrize(("path", "runs"), [("app/late.py", True), ("app/Late.py", False)], ids=["exact", "other_case"])
+def test_a_tracked_file_deleted_from_the_worktree_still_counts(make_git_project, path, runs):
+    """git still knows it, and a deleted module still reaches whatever imports it, under its
+    own spelling only. In branch mode, where the local deletion is no change of its own, only
+    the mapping brings it in; the test imports it lazily, so only selecting it fails."""
+    project = make_git_project({**FILES, **LATE}, INI)
 
     def git(*args):
         return subprocess.run(["git", *args], cwd=project.path, check=True, capture_output=True, text=True).stdout
@@ -354,14 +362,17 @@ def test_a_tracked_file_deleted_from_the_worktree_still_counts(project):
     git("checkout", "-q", "-b", "feature")
     edit(project, "reports/run.json")
     git("commit", "-qam", "data")
-    (project.path / "app/loader.py").unlink()
+    (project.path / "app/late.py").unlink()
 
     result = project.runpytest(
         "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=branch", f"--impacted-base-branch={base}", "-v",
-        "--impacted-map=reports/*.json=app/loader.py",
+        f"--impacted-map=reports/*.json={path}",
     )  # fmt: skip
 
-    result.stdout.fnmatch_lines(["*ERROR collecting suite/test_loader.py*"])
+    if runs:
+        result.stdout.fnmatch_lines(["*test_late.py::test_late FAILED*"])
+    else:
+        result.stdout.no_fnmatch_line("*test_late.py::test_late*")
 
 
 def test_a_path_matching_nothing_is_warned_of_in_the_header(project):
