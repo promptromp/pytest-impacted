@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import logging
+import os
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -282,6 +283,36 @@ def _find_impacted_files(
         working_dir = Path(repo_dir).resolve()
         impacted_files = normalize_git_paths(impacted_files, git_root, working_dir)
     return sorted(set(impacted_files))
+
+
+def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:
+    """The files git knows at *path*, relative to *repo_dir*: tracked, or untracked but not ignored.
+
+    *path* is a file or a directory (``.`` for *repo_dir*), POSIX and relative to
+    *repo_dir*; the files come back the same way, as the changed files do. Its parent
+    directories are resolved, as git reports a file under a symlinked directory by its real
+    path; the path itself is not, so a symlink git tracks stands for itself, as an edit to
+    it is reported, unless it points at a directory, which it then stands for.
+    """
+    repo = find_repo(repo_dir)
+    if repo.working_tree_dir is None:
+        return []
+    git_root = Path(repo.working_tree_dir).resolve()
+    working_dir = Path(repo_dir).resolve()
+    joined = Path(os.path.normpath(working_dir / path))
+    target = Path(os.path.realpath(joined.parent)) / joined.name if path != "." else working_dir
+    if os.path.islink(target) and os.path.isdir(target):
+        target = Path(os.path.realpath(target))
+    if not target.is_relative_to(git_root):
+        return []
+    spec = target.relative_to(git_root).as_posix()
+    # After "--", and literal: no pathspec is an option, and none a glob.
+    output = repo.git.ls_files("--cached", "--others", "--exclude-standard", "-z", "--", f":(literal){spec}")
+    # Exact, for a file deleted from the worktree: its index entry may differ in case from *path*.
+    known = [
+        f for f in dict.fromkeys(output.split("\0")) if f and (spec == "." or f == spec or f.startswith(f"{spec}/"))
+    ]
+    return normalize_git_paths(known, git_root, working_dir)
 
 
 #: ``--name-status -z`` is what :meth:`ChangeSet.from_git_diff_name_status_output`

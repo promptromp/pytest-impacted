@@ -389,6 +389,18 @@ Duck-typed strategies need only `find_impacted_tests`: the composite skips the l
 hooks they lack, and `get_impacted_tests` wraps a bare one in a composite for the same
 reason.
 
+**`--impacted-map GLOB=PATH` is no strategy** (`file_map.py`): `get_impacted_tests` adds the
+mapped paths to the changed files, before `link_changed_files`, so every rule and extension
+sees them as it sees an edit. As a strategy re-running `PytestImpactStrategy` on the path, it
+missed the others (a file no walk reaches, `package_members`, the conftest-imports opt-in). A
+path stands for the files git knows there (`git.files_git_knows`: tracked, or untracked and not
+ignored), where changed files come from too — never an `os.walk` (a virtualenv) nor the graph's
+nodes (a file no walk reaches) — spelled exactly, checked by a fresh listing: on macOS git lists
+a wrong-case pathspec as an untracked file. Its parent directories are resolved, the path itself
+not: a symlink git tracks stands for itself, as an edit to it is reported, unless it points at a
+directory. A directory stands for every file git knows in it, not only its Python files. A path git knows nothing at is warned of in
+the report header on every run (it is written by the controller, so xdist shows it too).
+
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
 `*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and every
 "this directory and below" match — the conftest rule's `find_test_modules_under`, a changed

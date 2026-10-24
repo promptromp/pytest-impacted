@@ -14,6 +14,7 @@ import networkx as nx
 
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
+from pytest_impacted.file_map import map_changed_files
 from pytest_impacted.git import GitMode, find_impacted_files_in_repo
 from pytest_impacted.graph import (
     is_test_node,
@@ -166,13 +167,16 @@ def get_impacted_tests(
     invalidate_all_patterns: Sequence[str] = (),
     use_merge_base: bool = True,
     conftest_imports: bool = False,
+    file_map: Sequence[tuple[str, str]] = (),
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
     ``watch_dep_files``, ``invalidate_all_patterns`` and ``conftest_imports`` configure
     the default pipeline and are ignored when an explicit ``strategy`` is supplied.
     ``use_merge_base`` makes branch mode diff from the fork point (the default)
-    rather than the base branch's tip.
+    rather than the base branch's tip. ``file_map`` holds ``(glob, path)`` pairs (see
+    :mod:`pytest_impacted.file_map`): a changed file a glob matches counts as a change
+    to its path too, for every strategy.
 
     Returns ``None`` when nothing is impacted, and raises
     :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known
@@ -218,6 +222,8 @@ def get_impacted_tests(
         f"Impacted files in the repository: {impacted_files}",
         session,
     )
+    # --impacted-map: the mapped paths count as changed, for every rule below (pytest_impacted.file_map).
+    impacted_files = map_changed_files(impacted_files, file_map, root_dir, session)
 
     # Build the dependency graph once and pass it to the strategy pipeline.
     # The result is LRU-cached and must not be mutated, so we hand each run a
