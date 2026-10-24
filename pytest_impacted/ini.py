@@ -7,6 +7,7 @@ file with pytest configuration, in pytest's order of names; a ``pyproject.toml``
 any only if nothing else is found. ``tests/test_ini.py`` holds it to pytest's own answer.
 """
 
+import os
 import shlex
 import tomllib
 from dataclasses import dataclass, field
@@ -50,7 +51,13 @@ class PytestConfig:
     def args(self, name: str) -> list[str] | None:
         """An ``args`` setting: a list, or a string split as a shell would."""
         value = self._get(name, list)
-        return shlex.split(value) if isinstance(value, str) else value  # type: ignore[return-value]
+        if value is None or (isinstance(value, list) and not self.native):
+            return value  # type: ignore[return-value]
+        if isinstance(value, list):
+            if not all(isinstance(item, str) for item in value):
+                raise ValueError(f"{name} in {self.path}: expected a list of strings, got {value!r}")
+            return value
+        return shlex.split(str(value))
 
     def _get(self, name: str, native_type: type) -> object:
         value = self.values.get(name)
@@ -62,10 +69,13 @@ class PytestConfig:
 def find_pytest_config(start: Path) -> PytestConfig:
     """The configuration pytest finds for a run from *start*."""
     fallback = None
-    for directory in (start.absolute(), *start.absolute().parents):
+    # abspath, not Path.absolute(): it drops ``..``, so ``b/../sib`` walks up from ``sib``.
+    start = Path(os.path.abspath(start))
+    for directory in (start, *start.parents):
         for name in CONFIG_NAMES:
             path = directory / name
-            if not path.is_file():
+            # os.path, not Path.is_file(): that raises inside a listable but unsearchable directory.
+            if not os.path.isfile(path):
                 continue
             if (config := _load(path)) is not None:
                 return config
@@ -75,19 +85,33 @@ def find_pytest_config(start: Path) -> PytestConfig:
 
 def load_pytest_config(path: Path) -> PytestConfig:
     """The configuration of the file named by ``-c``, which pytest reads even without a pytest section."""
-    return _load(path.absolute()) or PytestConfig(path=path.absolute())
+    path = Path(os.path.abspath(path))
+    return _load(path) or PytestConfig(path=path)
 
 
 def _load(path: Path) -> PytestConfig | None:
     """*path*'s pytest configuration, or ``None`` if it has none (pytest's ``load_config_dict_from_file``)."""
     if path.suffix == ".toml":
         return _load_toml(path)
+    if path.suffix == ".cfg":
+        return _load_cfg(path)
+    if path.suffix != ".ini":
+        return None  # pytest reads no other kind of file
     sections = iniconfig.IniConfig(str(path))
-    section = "tool:pytest" if path.suffix == ".cfg" else "pytest"
-    if section in sections:
-        return PytestConfig(path, dict(sections[section].items()))
+    if "pytest" in sections:
+        return PytestConfig(path, dict(sections["pytest"].items()))
     # A pytest.ini is the configuration even when empty.
     return PytestConfig(path) if path.name in ("pytest.ini", ".pytest.ini") else None
+
+
+def _load_cfg(path: Path) -> PytestConfig | None:
+    sections = iniconfig.IniConfig(str(path))
+    if "tool:pytest" in sections:
+        return PytestConfig(path, dict(sections["tool:pytest"].items()))
+    if "pytest" in sections:
+        # pytest fails the run on one, so the search must not go on past it.
+        raise ValueError(f"{path}: [pytest] section in setup.cfg files is no longer supported, use [tool:pytest].")
+    return None
 
 
 def _load_toml(path: Path) -> PytestConfig | None:

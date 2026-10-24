@@ -5,6 +5,8 @@ own default. So a CI script runs ``impacted-tests`` with the settings ``pytest -
 uses, without repeating them as flags.
 """
 
+import os
+import sys
 from unittest.mock import patch
 
 import click
@@ -70,7 +72,7 @@ impacted_disable_ext = slow-ext
 """
 
 
-def test_every_setting_is_read(calls):
+def test_every_setting_is_read(calls, tmp_path):
     run, build = calls
     write_config(FULL)
 
@@ -92,6 +94,7 @@ def test_every_setting_is_read(calls):
         "conftest_imports": True,
         "disabled": ["slow-ext"],
         "ext_config": {},
+        "config_file": tmp_path / "pytest.ini",
     }
 
 
@@ -204,3 +207,73 @@ def test_extension_options_are_read(calls, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert build.call_args.kwargs["ext_config"] == {"impacted_ext_demo_threshold": 7}
+
+
+def test_the_root_dir_defaults_to_the_configuration_s_directory(calls, tmp_path, monkeypatch):
+    """As pytest's rootdir does: the settings' paths are relative to their file."""
+    run, _ = calls
+    write_config("[pytest]\nimpacted_module = app\n")
+    (tmp_path / "svc").mkdir()
+    monkeypatch.chdir(tmp_path / "svc")
+
+    result = invoke()
+
+    assert result.exit_code == 0, result.output
+    assert (run.call_args.kwargs["root_dir"], run.call_args.kwargs["ns_module"]) == ("..", "app")
+
+
+def test_the_root_dir_of_a_named_file_is_its_directory(calls, tmp_path):
+    run, _ = calls
+    (tmp_path / "ci/app").mkdir(parents=True)
+    write_config("[pytest]\nimpacted_module = app\n", name="ci/impacted.ini")
+
+    result = invoke("-c", "ci/impacted.ini")
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["root_dir"] == "ci"
+
+
+def test_an_error_names_the_setting_once(calls):
+    write_config("[pytest]\nimpacted_module = app\nimpacted_conftest_imports = maybe\n")
+
+    result = invoke()
+
+    assert result.exit_code == 2
+    assert result.output.count("impacted_conftest_imports in") == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_an_unreadable_configuration_is_a_usage_error(calls, tmp_path):
+    write_config("[pytest]\nimpacted_module = app\n")
+    (tmp_path / "pytest.ini").chmod(0)
+
+    result = invoke()
+
+    assert result.exit_code == 2, result.output
+    assert "pytest.ini" in result.output
+
+
+def test_an_empty_setting_is_unset(calls):
+    """As in the plugin, where ``getoption(name) or getini(name)`` passes over an empty value."""
+    run, _ = calls
+    write_config("[pytest]\nimpacted_module = app\nimpacted_base_branch =\n")
+
+    result = invoke()
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["impacted_base_branch"] == "main"
+
+
+def test_an_edit_to_the_configuration_read_selects_every_test(make_git_project):
+    """Even under a name no dependency-file pattern knows, as with ``pytest -c``."""
+    project = make_git_project({**PROJECT, "ci/impacted.ini": "[pytest]\nimpacted_module = app\n"}, "[pytest]\n")
+    edit_file(project, "ci/impacted.ini")
+
+    result = invoke(
+        "-c", str(project.path / "ci/impacted.ini"), "--root-dir", str(project.path), "--tests-dir", "suite"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sorted(result.stdout.splitlines()) == [
+        str((project.path / f"suite/test_{name}.py").resolve()) for name in ("a", "b")
+    ]

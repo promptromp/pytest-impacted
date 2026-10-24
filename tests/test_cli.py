@@ -138,6 +138,7 @@ class TestImpactedTestsCLI:
             conftest_imports=False,
             disabled=(),
             ext_config={},
+            config_file=None,
         )
         assert "invalidate-all: *.json, config/*.yaml" in result.output
 

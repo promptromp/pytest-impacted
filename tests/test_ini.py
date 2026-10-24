@@ -4,6 +4,9 @@ Each case writes a configuration and checks the reader against ``pytester.parsec
 pytest's own answer, so a format or precedence rule the reader gets wrong fails here.
 """
 
+import os
+import sys
+
 import pytest
 
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
@@ -150,3 +153,59 @@ def test_native_toml_values_must_have_their_type_as_in_pytest(pytester, line, re
         read(find_pytest_config(pytester.path), name)
     with pytest.raises(TypeError):
         pytester.parseconfig(pytester.path).getini(name)
+
+
+def test_dot_dot_in_the_start_is_resolved_as_pytest_resolves_it(pytester):
+    """``b/../sib`` is ``sib``: ``b``'s configuration is no ancestor's."""
+    write(pytester.path, {"b/pytest.ini": "[pytest]\nimpacted_module = wrong\n", "sib/x.py": ""})
+    start = pytester.path / "b" / ".." / "sib"
+
+    assert find_pytest_config(start).path == pytester.parseconfig(start).inipath
+
+
+def test_a_named_file_of_another_kind_has_no_settings(pytester):
+    """pytest reads a ``-c`` file only by its suffix: ``ci.conf`` holds nothing it reads."""
+    write(pytester.path, {"ci.conf": "[pytest]\nimpacted_module = app\n"})
+
+    ours = load_pytest_config(pytester.path / "ci.conf").string("impacted_module")
+
+    assert ours == pytester.parseconfig("-c", "ci.conf").getini("impacted_module")
+
+
+def test_a_pytest_section_in_setup_cfg_is_an_error_as_in_pytest(pytester):
+    write(pytester.path, {"setup.cfg": "[pytest]\nimpacted_module = app\n"})
+
+    with pytest.raises(ValueError, match=r"\[pytest\].*setup.cfg"):
+        find_pytest_config(pytester.path)
+    with pytest.raises(pytest.fail.Exception, match="no longer supported"):
+        pytester.parseconfig(pytester.path)
+
+
+@needs_pytest_9
+def test_a_native_list_of_other_than_strings_is_an_error_as_in_pytest(pytester):
+    write(pytester.path, {"pytest.toml": "[pytest]\nimpacted_invalidate_all = [1]\n"})
+
+    with pytest.raises(ValueError, match="list of strings"):
+        find_pytest_config(pytester.path).args("impacted_invalidate_all")
+    with pytest.raises(TypeError):
+        pytester.parseconfig(pytester.path).getini("impacted_invalidate_all")
+
+
+def test_an_ini_options_scalar_for_a_list_is_split_as_in_pytest(pytester):
+    write(pytester.path, {"pyproject.toml": "[tool.pytest.ini_options]\nimpacted_disable_ext = 5\n"})
+
+    ours = find_pytest_config(pytester.path).args("impacted_disable_ext")
+
+    assert ours == pytester.parseconfig(pytester.path).getini("impacted_disable_ext") == ["5"]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+def test_a_listable_but_unsearchable_directory_holds_no_configuration(tmp_path):
+    """``Path.is_file()`` raises inside one on Python 3.11–3.13; ``os.path.isfile`` says False."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o644)
+    try:
+        assert find_pytest_config(locked).path is None
+    finally:
+        locked.chmod(0o755)

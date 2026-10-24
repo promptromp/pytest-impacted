@@ -640,9 +640,12 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         self,
         patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_FILE_PATTERNS,
         glob_patterns: tuple[str, ...] = DEFAULT_DEPENDENCY_GLOB_PATTERNS,
+        config_file: Path | None = None,
     ):
+        """*config_file* is the one the ``impacted-tests`` CLI read, which has no pytest session."""
         self.patterns = patterns
         self.glob_patterns = glob_patterns
+        self.config_file = config_file.resolve() if config_file else None
 
     def find_impacted_tests(
         self,
@@ -656,7 +659,7 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         dep_tree: nx.DiGraph,
     ) -> list[str]:
         """Return all test modules if dependency files have changed."""
-        loaded_config = _loaded_config_file(session)
+        loaded_config = _loaded_config_file(session) or self.config_file
         dep_files = [
             f
             for f in changed_files
@@ -719,6 +722,7 @@ def get_default_strategies(
     watch_dep_files: bool = True,
     invalidate_all_patterns: Sequence[str] = (),
     conftest_imports: bool = False,
+    config_file: Path | None = None,
 ) -> list[ImpactStrategy]:
     """Return the default (built-in) strategy list for impact analysis.
 
@@ -735,6 +739,8 @@ def get_default_strategies(
             conftest importing changed *application* code impacts every test beneath
             it too (one importing changed test code always does). Without it, the
             strategy only names such conftests.
+        config_file: The pytest configuration file read without a pytest session (the
+            ``impacted-tests`` CLI), which :class:`DependencyFileImpactStrategy` watches.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),
@@ -742,7 +748,7 @@ def get_default_strategies(
         ConftestImportImpactStrategy(report_only=not conftest_imports),
     ]
     if watch_dep_files:
-        strategies.append(DependencyFileImpactStrategy())
+        strategies.append(DependencyFileImpactStrategy(config_file=config_file))
     if invalidate_all_patterns:
         strategies.append(InvalidationFileImpactStrategy(invalidate_all_patterns))
     return strategies
