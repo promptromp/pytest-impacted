@@ -12,6 +12,7 @@ from click.testing import CliRunner
 from pytest import ExitCode
 
 from pytest_impacted.cli import impacted_tests_cli
+from pytest_impacted.file_map import files_at
 
 from .git_helpers import edit_file as edit
 
@@ -103,7 +104,9 @@ def test_a_target_that_is_nowhere_is_said_so(project):
     result = run(project, "--impacted-map=reports/*.json=suite/test_bnech.py")
 
     outcomes(result, [])
-    result.stdout.fnmatch_lines(["*suite/test_bnech.py*matches no file*"])
+    result.stdout.fnmatch_lines(
+        ["*suite/test_bnech.py matches no file git knows under*"]
+    )  # the run's, not the header's
 
 
 @pytest.mark.parametrize("entry", ["reports/*.json", "=suite/test_bench.py", "reports/*.json="])
@@ -436,3 +439,11 @@ def test_mapped_files_come_in_a_stable_order(project):
 
     notices = [next(line for line in out.splitlines() if line.startswith("Mapped file")) for out in result]
     assert notices[0] == notices[1]
+
+
+def test_a_file_created_after_its_directory_was_listed_is_found(project):
+    """A long-lived process lists directories for the import lookup; the mapping lists afresh."""
+    assert files_at("suite/test_bench.py", project.path)  # lists suite/, and caches it for the lookup
+    (project.path / "suite/test_new.py").write_text("def test_new():\n    pass\n")
+
+    assert files_at("suite/test_new.py", project.path) == ["suite/test_new.py"]
