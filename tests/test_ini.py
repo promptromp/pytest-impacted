@@ -129,3 +129,24 @@ def test_both_pyproject_tables_are_an_error_as_in_pytest(pytester):
         find_pytest_config(pytester.path)
     with pytest.raises(pytest.UsageError, match="Cannot use both"):
         pytester.parseconfig(pytester.path)
+
+
+@needs_pytest_9
+@pytest.mark.parametrize(
+    ("line", "read"),
+    [
+        ('impacted_conftest_imports = "true"', PytestConfig.flag),
+        ('impacted_invalidate_all = "*.json"', PytestConfig.args),
+        ("impacted_module = 3", PytestConfig.string),
+    ],
+    ids=["flag", "args", "string"],
+)
+def test_native_toml_values_must_have_their_type_as_in_pytest(pytester, line, read):
+    """pytest's TOML mode checks types rather than converting strings."""
+    write(pytester.path, {"pytest.toml": f"[pytest]\n{line}\n"})
+    name = line.split(" = ")[0]
+
+    with pytest.raises(ValueError, match="expected a"):
+        read(find_pytest_config(pytester.path), name)
+    with pytest.raises(TypeError):
+        pytester.parseconfig(pytester.path).getini(name)

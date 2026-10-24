@@ -142,15 +142,15 @@ def test_pyproject_ini_options_are_read(calls):
     assert build.call_args.kwargs["invalidate_all_patterns"] == ["*.json"]
 
 
-def test_the_configuration_is_found_from_the_root_dir(calls, tmp_path, monkeypatch):
+def test_the_configuration_is_found_from_the_root_dir(calls, tmp_path):
     """As pytest finds it for a run there, not from the working directory."""
     run, _ = calls
-    write_config("[pytest]\nimpacted_module = app\n")
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    monkeypatch.chdir(elsewhere)
+    write_config("[pytest]\nimpacted_module = suite\n")
+    project = tmp_path / "project"
+    (project / "app").mkdir(parents=True)
+    write_config("[pytest]\nimpacted_module = app\n", name=project / "pytest.ini")
 
-    result = invoke("--root-dir", str(tmp_path))
+    result = invoke("--root-dir", str(project))
 
     assert result.exit_code == 0, result.output
     assert run.call_args.kwargs["ns_module"] == "app"

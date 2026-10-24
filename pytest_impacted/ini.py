@@ -25,8 +25,8 @@ class PytestConfig:
     """The settings of one pytest configuration file (none: ``path`` is ``None``).
 
     *native* is pytest 9's TOML mode (``pytest.toml``, ``[tool.pytest]``): values keep
-    their TOML types, which pytest checks rather than converts. Otherwise they are
-    strings, or lists from a ``[tool.pytest.ini_options]`` table, converted by type.
+    their TOML types, which pytest checks rather than converts. Otherwise each is
+    converted by type, from a string or, in ``[tool.pytest.ini_options]``, any TOML value.
     """
 
     path: Path | None = None
@@ -104,6 +104,4 @@ def _load_toml(path: Path) -> PytestConfig | None:
         return PytestConfig(path, native, native=True)
     if ini_mode is None:
         return None
-    return PytestConfig(
-        path, {key: value if isinstance(value, list) else str(value) for key, value in ini_mode.items()}
-    )
+    return PytestConfig(path, ini_mode)
