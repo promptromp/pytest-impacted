@@ -1,5 +1,4 @@
 import os
-import traceback
 from collections.abc import Callable
 from enum import StrEnum
 from functools import partial
@@ -46,10 +45,8 @@ _WORKER_INPUT_KEY = "pytest_impacted_tests"
 _DESELECTION = StashKey[int]()
 _SESSION = StashKey[pytest.Session]()
 # The run's analysis: the impacted test files, relative to the rootdir; None when it fails open.
-_ANALYSIS = StashKey[list[str] | None]()
-# Where the controller hands each pytest-xdist worker an analysis that raised, to raise again.
-_WORKER_ERROR_KEY = "pytest_impacted_error"
-_ANALYSIS_ERROR = StashKey[str]()
+# What the controller hands every pytest-xdist worker: {_WORKER_INPUT_KEY: the analysis}, or nothing.
+_HANDOFF = StashKey[dict[str, list[str] | None]]()
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 
@@ -306,25 +303,36 @@ def pytest_configure_node(node) -> None:
     Workers analysing for themselves could disagree (a file written meanwhile), and
     xdist aborts a run whose workers collect different tests. This runs before any
     worker starts, and here, unlike in a worker, a notice reaches the terminal.
+
+    Only an optimisation over each worker analysing, as before 0.36, and dropped for
+    one whenever it could differ: with an extension installed, which may read what only
+    a worker has (``session.items``, ``workerinput``), or when the analysis fails here.
     """
     config = node.config
     session = config.stash.get(_SESSION, None)
     if session is None or not get_option_from_config(config, "impacted"):
         return
-    if _ANALYSIS not in config.stash and _ANALYSIS_ERROR not in config.stash:
-        try:
-            config.stash[_ANALYSIS] = _analyse(session, config)
-        except pytest.exit.Exception:
-            raise
-        except Exception:  # noqa: BLE001 — not swallowed: every worker raises it
-            # Raised here it would escape xdist's session start, and pytest would skip
-            # every pytest_sessionfinish (no JUnit XML, no combined coverage). So each
-            # worker raises it at collection instead, none analysing again.
-            config.stash[_ANALYSIS_ERROR] = traceback.format_exc()
-    if _ANALYSIS_ERROR in config.stash:
-        node.workerinput[_WORKER_ERROR_KEY] = config.stash[_ANALYSIS_ERROR]
-    else:
-        node.workerinput[_WORKER_INPUT_KEY] = config.stash[_ANALYSIS]
+    if _HANDOFF not in config.stash:
+        config.stash[_HANDOFF] = _handoff(session, config)
+    node.workerinput.update(config.stash[_HANDOFF])
+
+
+def _handoff(session: pytest.Session, config: Config) -> dict[str, list[str] | None]:
+    """The controller's analysis for the workers, or nothing, leaving each to analyse for itself."""
+    disabled = set(get_option_from_config(config, "impacted_disable_ext") or [])
+    if any(ext.name not in disabled for ext in discover_extension_metadata()):
+        return {}
+    try:
+        return {_WORKER_INPUT_KEY: _analyse(session, config)}
+    except (Exception, pytest.fail.Exception, pytest.skip.Exception) as err:  # noqa: BLE001 — warned, and retried
+        # Raised here it would escape xdist's session start, and pytest would skip every
+        # pytest_sessionfinish (no JUnit XML, no combined coverage); in a worker it may
+        # not even happen. So each worker analyses for itself, raising it there if it must.
+        warn(
+            f"pytest-impacted: the analysis failed on the controller ({err!r}); each worker analyses for itself.",
+            session,
+        )
+        return {}
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
@@ -388,12 +396,10 @@ def pytest_collection_modifyitems(session, config, items):
     get_option = partial(get_option_from_config, config)
     if not get_option("impacted"):
         return
-    # Afresh: a second collection on one config (looponfail) must not see the first's.
+    # Afresh: a second collection on one config must not count the first's deselection.
     config.stash[_UNIMPACTED_ITEMS] = set()
-    config.stash[_DESELECTION] = 0
+    _record(config, 0)
     workerinput = getattr(config, "workerinput", {})
-    if _WORKER_ERROR_KEY in workerinput:
-        raise RuntimeError(f"pytest-impacted: the analysis failed on the controller:\n{workerinput[_WORKER_ERROR_KEY]}")
     impacted_tests = workerinput[_WORKER_INPUT_KEY] if _WORKER_INPUT_KEY in workerinput else _analyse(session, config)
     if impacted_tests is None:
         return

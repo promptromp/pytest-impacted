@@ -240,7 +240,7 @@ class MyScanningStrategy(ImpactStrategy):
 
 `ImpactStrategy` exposes three optional lifecycle methods that run once per pytest invocation: `enrich_dep_tree`, `setup`, and `teardown`. They give extensions proper places to hang one-time work and — critically — to inject synthetic dependency edges that the built-in AST traversal will then follow automatically.
 
-**Where the pipeline runs.** Without pytest-xdist, every hook and `find_impacted_tests` run during collection, in the process that runs the tests. Under pytest-xdist (since 0.36) they run once, on the controller, before any worker starts, and the workers only filter their tests by the result: workers analysing for themselves could disagree, and xdist stops a run whose workers collect different tests. So `session` is then the controller's session, which collects nothing (`session.items` is empty), and state `setup` creates stays in the controller, never reaching a worker. If the analysis raises there, every worker raises its error at collection.
+**Where the pipeline runs.** Every hook and `find_impacted_tests` run during collection, in the process that runs the tests: under pytest-xdist, in each worker, with that worker's session. (With only the built-in strategies, pytest-xdist's controller analyses once instead and hands every worker the result, since workers analysing for themselves could disagree; an installed extension keeps the analysis in the workers, where it may rely on what only a worker has. Disable one with `--impacted-disable-ext` and the controller analyses again.)
 
 ### `setup` and `teardown` — one-time work per run
 

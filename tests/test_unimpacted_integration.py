@@ -15,8 +15,10 @@ from pytest import ExitCode
 
 from pytest_impacted.plugin import (
     _DESELECTION,
+    _SESSION,
     _UNIMPACTED_ITEMS,
     _WORKER_INPUT_KEY,
+    _WORKER_OUTPUT_KEY,
     _analyse,
     _relative_to,
     pytest_collection_modifyitems,
@@ -297,18 +299,19 @@ def test_the_analysis_handed_to_workers_is_relative_to_the_rootdir(project):
     assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
 
 
-def test_under_xdist_an_analysis_error_reaches_every_worker(make_git_project):
-    """Raised on the controller it would escape xdist's session start, skipping every
-    ``pytest_sessionfinish`` (no JUnit XML, no combined coverage). So every worker raises
-    the controller's error at collection, none analysing again: they could disagree."""
+@pytest.mark.parametrize("raises", ["RuntimeError('broke')", "pytest.fail('broke')"])
+def test_under_xdist_a_controller_failure_leaves_the_workers_to_analyse(make_git_project, raises):
+    """As before the controller analysed: raised there it would escape xdist's session start
+    and skip every ``pytest_sessionfinish``; it may also need what only a worker has."""
     pytest.importorskip("xdist")
     fails = (
-        "import pytest_impacted.plugin as plugin\n\n"
+        "import pytest\nimport pytest_impacted.plugin as plugin\n\n"
         "def pytest_configure(config):\n"
+        "    original = plugin.get_impacted_tests\n"
         "    def analyse(**kwargs):\n"
-        "        if hasattr(config, 'workerinput'):\n"
-        "            open('worker-analysed', 'w').close()\n"
-        "        raise RuntimeError('the analysis broke')\n"
+        "        if not hasattr(config, 'workerinput'):\n"
+        f"            raise {raises}\n"
+        "        return original(**kwargs)\n"
         "    plugin.get_impacted_tests = analyse\n"
     )
     project = make_git_project({**FILES, "conftest.py": fails}, INI)
@@ -318,22 +321,40 @@ def test_under_xdist_an_analysis_error_reaches_every_worker(make_git_project):
         "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2", "--junitxml=out.xml"
     )
 
-    assert result.ret not in (ExitCode.OK, ExitCode.NO_TESTS_COLLECTED)
-    assert (project.path / "out.xml").exists()
-    result.stdout.fnmatch_lines(["*the analysis broke*"])
-    assert not (project.path / "worker-analysed").exists()
+    assert result.ret == ExitCode.OK
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["*the analysis failed on the controller*broke*each worker analyses for itself*"])
+
+
+@pytest.mark.parametrize(("disabled", "handed_on"), [([], False), (["demo"], True)], ids=["enabled", "disabled"])
+def test_with_an_extension_each_worker_analyses_for_itself(project, monkeypatch, disabled, handed_on):
+    """An extension may read what only a worker has (``session.items``, ``workerinput``)."""
+    monkeypatch.setattr(
+        "pytest_impacted.plugin.discover_extension_metadata", lambda: [SimpleNamespace(name="demo", config_options=[])]
+    )
+    edit(project, "app/a.py")
+    args = [f"--impacted-disable-ext={name}" for name in disabled]
+    config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged", *args)
+    config.stash[_SESSION] = SimpleNamespace(config=config)
+    node = SimpleNamespace(config=config, workerinput={})
+
+    pytest_configure_node(node)
+
+    assert (_WORKER_INPUT_KEY in node.workerinput) == handed_on
 
 
 def test_each_collection_starts_afresh(project):
-    """A second collection on one config (looponfail) must not count the first's deselection."""
+    """A second collection on one config must not count the first's deselection."""
     config = project.parseconfig("--impacted")
     config.stash[_DESELECTION] = 5
     config.stash[_UNIMPACTED_ITEMS] = {object()}
     config.workerinput = {_WORKER_INPUT_KEY: None}  # handed off: fail open
+    config.workeroutput = {_WORKER_OUTPUT_KEY: 5}
 
     pytest_collection_modifyitems(None, config, [])
 
     assert (config.stash[_DESELECTION], config.stash[_UNIMPACTED_ITEMS]) == (0, set())
+    assert config.workeroutput[_WORKER_OUTPUT_KEY] == 0
 
 
 def test_the_analysis_is_relative_to_a_rootdir_reached_through_a_symlink(project, tmp_path):
