@@ -1,4 +1,5 @@
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from functools import partial
@@ -36,17 +37,21 @@ class Unimpacted(StrEnum):
 NOT_IMPACTED = "not impacted by the changes"
 # Where a pytest-xdist worker reports its deselection to the controller.
 _WORKER_OUTPUT_KEY = "pytest_impacted_deselected"
+# Where the controller hands each pytest-xdist worker its analysis.
+_WORKER_INPUT_KEY = "pytest_impacted_tests"
 
 
 @dataclass(frozen=True)
 class _Deselection:
-    """How many tests this plugin deselected, and whether that left the run with none."""
+    """How many tests this plugin deselected."""
 
     count: int
-    emptied: bool
 
 
 _DESELECTION = StashKey[_Deselection]()
+_SESSION = StashKey[pytest.Session]()
+# The run's analysis: the impacted test files, relative to the rootdir; None when it fails open.
+_ANALYSIS = StashKey[list[str] | None]()
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 
@@ -291,60 +296,87 @@ def pytest_report_header(config: Config) -> list[str]:
     return lines
 
 
-def pytest_collection_modifyitems(session, config, items):
-    """pytest hook to modify the collected test items.
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Keep the session for ``pytest_configure_node``, which gets none."""
+    session.config.stash[_SESSION] = session
 
-    This is called after the tests have been collected and before
-    they are run. It marks them, before ``-k`` and ``-m`` filter (``-m impacted``);
-    ``pytest_deselect_unimpacted`` deselects after them.
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node) -> None:
+    """pytest-xdist hook, on the controller: analyse once, and hand every worker the result.
+
+    Workers analysing for themselves could disagree (a file written meanwhile), and
+    xdist aborts a run whose workers collect different tests. This runs before any
+    worker starts, and here, unlike in a worker, a notice reaches the terminal.
     """
-    get_option = partial(get_option_from_config, config)
-    impacted = get_option("impacted")
-    if not impacted:
+    config = node.config
+    if not get_option_from_config(config, "impacted"):
         return
+    if _ANALYSIS not in config.stash:
+        config.stash[_ANALYSIS] = _analyse(config.stash[_SESSION], config)
+    node.workerinput[_WORKER_INPUT_KEY] = config.stash[_ANALYSIS]
 
-    ns_module = get_option("impacted_module")
-    impacted_git_mode = get_option("impacted_git_mode")
-    impacted_base_branch = get_option("impacted_base_branch")
-    use_merge_base = not get_option("impacted_no_merge_base")
-    impacted_tests_dir = get_option("impacted_tests_dir")
-    no_dep_files = get_option("no_impacted_dep_files")
-    invalidate_all = get_option("impacted_invalidate_all") or []
-    conftest_imports = get_option("impacted_conftest_imports")
+
+def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
+    """The impacted test files, relative to the rootdir, or ``None`` to run every test.
+
+    Relative, so a pytest-xdist worker in another directory reads them as well.
+    """
+    # Any: ini values are untyped, and validate_config has checked the ones that must be set.
+    get_option: Callable[[str], Any] = partial(get_option_from_config, config)
     root_dir = config.rootpath
-
-    disabled_ext = get_option("impacted_disable_ext") or []
-    ext_config = _collect_ext_config(config)
     strategy = build_strategy_with_extensions(
-        watch_dep_files=not no_dep_files,
-        invalidate_all_patterns=invalidate_all,
-        conftest_imports=conftest_imports,
-        disabled=disabled_ext,
-        ext_config=ext_config,
+        watch_dep_files=not get_option("no_impacted_dep_files"),
+        invalidate_all_patterns=get_option("impacted_invalidate_all") or [],
+        conftest_imports=get_option("impacted_conftest_imports"),
+        disabled=get_option("impacted_disable_ext") or [],
+        ext_config=_collect_ext_config(config),
     )
-
     try:
         impacted_tests = get_impacted_tests(
-            impacted_git_mode=impacted_git_mode,
-            impacted_base_branch=impacted_base_branch,
+            impacted_git_mode=get_option("impacted_git_mode"),
+            impacted_base_branch=get_option("impacted_base_branch"),
             root_dir=root_dir,
-            ns_module=ns_module,
-            tests_dir=impacted_tests_dir,
+            ns_module=get_option("impacted_module"),
+            tests_dir=get_option("impacted_tests_dir"),
             session=session,
             strategy=strategy,
-            use_merge_base=use_merge_base,
+            use_merge_base=not get_option("impacted_no_merge_base"),
         )
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not
         # warnings.warn — `filterwarnings = error` would turn it into a crash.
         # When git was missing at import, pytest_report_header has already said
-        # so; only a failure discovered now needs reporting here. (Under
-        # pytest-xdist that report is lost with the workers' output.)
+        # so; only a failure discovered now needs reporting here.
         if GIT_AVAILABLE:
             warn(f"pytest-impacted: {err} Running every test.", session)
+        return None
+    return [_relative_to(root_dir, test) for test in impacted_tests or []]
+
+
+def _relative_to(root_dir: Path, test: str) -> str:
+    path = Path(test)
+    return os.path.relpath(path, root_dir) if path.is_absolute() and path.is_relative_to(root_dir) else test
+
+
+def pytest_collection_modifyitems(session, config, items):
+    """pytest hook to modify the collected test items.
+
+    This is called after the tests have been collected and before
+    they are run. It marks them, before ``-k`` and ``-m`` filter (``-m impacted``);
+    ``pytest_deselect_unimpacted`` deselects after them. A pytest-xdist worker takes
+    the controller's analysis (``pytest_configure_node``).
+
+    """
+    get_option = partial(get_option_from_config, config)
+    if not get_option("impacted"):
         return
-    impacted_items = _impacted_items(items, impacted_tests or [], root_dir)
+    workerinput = getattr(config, "workerinput", {})
+    impacted_tests = workerinput[_WORKER_INPUT_KEY] if _WORKER_INPUT_KEY in workerinput else _analyse(session, config)
+    if impacted_tests is None:
+        return
+    root_dir = config.rootpath
+    impacted_items = _impacted_items(items, impacted_tests, root_dir)
     skip = get_option("impacted_unimpacted") == Unimpacted.SKIP
     unimpacted: set[pytest.Item] = set()
     for item in items:
@@ -362,9 +394,9 @@ def pytest_collection_modifyitems(session, config, items):
 def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None:
     """Deselect what ``pytest_collection_modifyitems`` judged not impacted.
 
-    Last, after ``-k`` and ``-m``: whether this plugin is what left the run without
-    tests decides its exit status (``pytest_sessionfinish``), and a ``-k`` matching
-    nothing is a mistake to report, even when the changes impact no test.
+    Last, after ``-k`` and ``-m``: whether this plugin deselected anything decides the
+    exit status of a run left without tests (``pytest_sessionfinish``), and a ``-k``
+    matching nothing is a mistake to report, even when the changes impact no test.
     """
     judged = config.stash.get(_UNIMPACTED_ITEMS, set())
     kept: list[pytest.Item] = []
@@ -375,7 +407,7 @@ def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None
     if unimpacted:
         config.hook.pytest_deselected(items=unimpacted)
         items[:] = kept
-        _record(config, _Deselection(count=len(unimpacted), emptied=not kept))
+        _record(config, _Deselection(count=len(unimpacted)))
 
 
 def _record(config: Config, deselection: _Deselection) -> None:
@@ -398,23 +430,23 @@ def pytest_testnodedown(node, error) -> None:
     """
     if reported := getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY):
         # Field by field: a worker on another version of the plugin may send other keys.
-        count, emptied = reported.get("count", 0), bool(reported.get("emptied"))
-        node.config.stash[_DESELECTION] = _Deselection(count=count, emptied=emptied)
+        node.config.stash[_DESELECTION] = _Deselection(count=reported.get("count", 0))
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session: pytest.Session) -> None:
-    """A run this plugin left with no tests passes, as one skipping every test does.
+    """A run left with no tests passes when this plugin deselected some, as skipped ones did.
 
     pytest exits 5 when no test runs, so deselecting every test would fail a run whose
-    changes impact nothing, such as a docs-only commit. Only a run *this plugin*
-    emptied: one emptied by ``-k``, or with no tests at all, still exits 5. Early
+    changes impact nothing, such as a docs-only commit, or a shard a later plugin handed
+    only tests this one deselected. One with no tests at all, or emptied by ``-k`` (which
+    runs first, leaving this plugin nothing to deselect), still exits 5. Early
     (``tryfirst``), so most other plugins reading ``session.exitstatus`` see the run's
     status, and any may still set a failure of its own; the hooks' ``exitstatus``
     argument, and so pytest's own summary ("no tests ran"), stays pytest's 5.
     """
     deselection = session.config.stash.get(_DESELECTION, None)
-    if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.emptied:
+    if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.count:
         session.exitstatus = ExitCode.OK
 
 

@@ -131,7 +131,7 @@ def test_an_item_added_after_the_judging_is_kept():
     pytest_deselect_unimpacted(config, items)
 
     assert (items, deselected) == ([impacted, added], [judged])
-    assert config.stash[_DESELECTION] == _Deselection(count=1, emptied=False)
+    assert config.stash[_DESELECTION] == _Deselection(count=1)
 
 
 def test_only_tests_left_by_k_are_deselected(project):
@@ -145,16 +145,20 @@ def test_only_tests_left_by_k_are_deselected(project):
     result.stdout.fnmatch_lines([NOT_IMPACTED])
 
 
-def test_a_run_a_later_filter_empties_still_exits_5(make_git_project):
-    """A plugin deselecting the rest after this one, not this one, is what left the run empty."""
-    wrapper = (
+def test_a_shard_left_with_only_deselected_tests_passes(make_git_project):
+    """A sharding plugin running after this one may hand a shard none of the impacted tests.
+
+    The shard is empty because this plugin deselected what it would have run, so it
+    passes, as a shard of skipped tests did.
+    """
+    shard = (
         "import pytest\n\n@pytest.hookimpl(wrapper=True)\ndef pytest_collection_modifyitems(config, items):\n"
         "    yield\n    config.hook.pytest_deselected(items=list(items))\n    items[:] = []\n"
     )
-    project = make_git_project({**FILES, "conftest.py": wrapper}, INI)
+    project = make_git_project({**FILES, "conftest.py": shard}, INI)
     edit(project, "app/a.py")
 
-    assert run(project).ret == ExitCode.NO_TESTS_COLLECTED
+    assert run(project).ret == ExitCode.OK
 
 
 def test_other_plugins_see_the_status_of_an_emptied_run(make_git_project):
@@ -225,3 +229,28 @@ def test_under_xdist(project, edited, outcomes, line):
     assert result.ret == ExitCode.OK
     result.assert_outcomes(**outcomes)
     result.stdout.fnmatch_lines([line])
+
+
+def test_under_xdist_the_controller_analyses_once_for_every_worker(make_git_project):
+    """Workers analysing for themselves could disagree, and xdist aborts a run whose workers
+    collect different tests: here each writes a file the invalidation glob matches before it
+    collects. The controller's analysis, made before any worker starts, is every worker's.
+    Its notices reach the terminal too, which a worker's never do.
+    """
+    pytest.importorskip("xdist")
+    # By workerinput: PYTEST_XDIST_WORKER is inherited from this suite's own workers too.
+    writes = (
+        "def pytest_configure(config):\n"
+        "    if hasattr(config, 'workerinput'):\n"
+        "        open('late.json', 'w').close()\n"
+    )
+    project = make_git_project({**FILES, "conftest.py": writes}, INI + "impacted_invalidate_all = *.json\n")
+    edit(project, "app/a.py")
+
+    result = project.runpytest_subprocess(
+        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2"
+    )
+
+    assert result.ret == ExitCode.OK
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["*Impacted files in the repository: ['app/a.py'*", NOT_IMPACTED])

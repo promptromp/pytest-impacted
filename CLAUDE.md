@@ -187,7 +187,7 @@ than returning `None`, because `None` means "nothing changed" and skips every te
 plugin catches it and **fails open** (runs everything), the CLI exits non-zero. Never
 collapse "unknown" into "no changes". The notice is printed exactly once: by
 `pytest_report_header` when git was missing at import (the controller writes the header,
-so it survives pytest-xdist), otherwise by the collection hook. Never via `warnings.warn`,
+so it survives pytest-xdist), otherwise by the analysis. Never via `warnings.warn`,
 which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path.
 
 **Branch mode diffs from the merge base**, not the base tip: `_merge_bases` runs
@@ -200,9 +200,9 @@ always uses the tip.
 
 **Anything the user must see goes through `display.notify` / `display.warn` with the
 session.** A `logger` record is swallowed during collection, and `warnings.warn` becomes an
-INTERNALERROR under `filterwarnings = error`. Under pytest-xdist even terminal output is
-lost (collection runs on the workers), so only `pytest_report_header` reliably reaches the
-user there.
+INTERNALERROR under `filterwarnings = error`. Under pytest-xdist a worker's terminal output is
+lost, so the analysis runs on the controller (below), and the rest must be written there:
+`pytest_report_header`, `pytest_terminal_summary`.
 
 **Every diff goes through `_name_status_diff` with fixed `--name-status -z --no-renames`.**
 `-z` stops git C-quoting non-ASCII paths (`core.quotePath`), which would never match a
@@ -256,18 +256,26 @@ from non-Python files (`--doctest-glob`, YAML collectors) and `DoctestItem`s —
 nothing at all is impacted.
 
 **Unselected items are deselected, unless `--impacted-unimpacted=skip`.** pytest exits 5 when
-no test runs, so a run *this plugin* emptied is turned back into exit 0 in
-`pytest_sessionfinish` (a docs-only commit must pass, as it did when every test was skipped);
-one emptied by `-k` or with nothing collected keeps its 5. Hence two hooks: marking stays at
+no test runs, so a run left empty after this plugin deselected anything is turned back into
+exit 0 in `pytest_sessionfinish` (a docs-only commit must pass, as it did when every test was
+skipped, and so must a shard a later plugin handed only deselected tests); one emptied by `-k`
+(which runs first, leaving nothing to deselect) or with nothing collected keeps its 5. Hence two hooks: marking stays at
 the default position, before pytest's `-k`/`-m` (`-m impacted` needs the marker), and the
 deselection is a second, `trylast` `pytest_collection_modifyitems` (`pytest_deselect_unimpacted`,
 via `specname`: pytest registers only `pytest_`-prefixed names) — after `-k`, or a mistyped
 `-k` on a docs-only commit passes. It deselects only the items the first judged: one another
 plugin added in between was never judged, and runs. The exit fix-up is `tryfirst`, so most later
 plugins reading `session.exitstatus` see the final status and any may still set a failure (the
-hooks' `exitstatus` argument stays 5; it cannot be changed). Under pytest-xdist the controller
-collects nothing, so each worker reports its deselection through `config.workeroutput` and the
-controller merges it in `pytest_testnodedown` (an `optionalhook`: xdist need not be installed).
+hooks' `exitstatus` argument stays 5; it cannot be changed).
+
+**Under pytest-xdist the controller analyses, once, and the workers only filter.** Each worker
+analysing for itself could disagree with another (a file written in between: git sees the
+working tree), and xdist aborts a run whose workers collect different tests. So
+`pytest_configure_node` (on the controller, before any worker starts) runs `_analyse` and hands
+the impacted files to every worker in `workerinput`, relative to the rootdir; the workers'
+`pytest_collection_modifyitems` takes them from there. The controller collects nothing, so
+each worker reports its deselection through `config.workeroutput`, which `pytest_testnodedown`
+keeps for the exit status and summary. Both are `optionalhook`s: xdist need not be installed.
 
 **Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
 every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
