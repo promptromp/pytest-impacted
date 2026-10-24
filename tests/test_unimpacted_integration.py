@@ -6,8 +6,12 @@ A run that deselects every test exits 0, as one that skips every test does: a ch
 impacts nothing is no failure, while pytest exits 5 when no test runs.
 """
 
+from types import SimpleNamespace
+
 import pytest
 from pytest import ExitCode
+
+from pytest_impacted.plugin import _DESELECTION, _UNIMPACTED_ITEMS, _Deselection, pytest_deselect_unimpacted
 
 from .git_helpers import edit_file as edit
 
@@ -109,6 +113,25 @@ def test_m_impacted_selects_the_impacted_tests(project, args):
 
     result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines(["*test_a.py::test_a PASSED*"])
+
+
+def test_an_item_added_after_the_judging_is_kept():
+    """An item a plugin adds between the marking and the deselection was never judged, so it runs.
+
+    Called directly: pytest offers no way to place a hook between two others.
+    """
+    judged, added, impacted = object(), object(), object()
+    deselected = []
+    config = SimpleNamespace(
+        stash=pytest.Stash(), hook=SimpleNamespace(pytest_deselected=lambda items: deselected.extend(items))
+    )
+    config.stash[_UNIMPACTED_ITEMS] = {judged}
+    items = [impacted, judged, added]
+
+    pytest_deselect_unimpacted(config, items)
+
+    assert (items, deselected) == ([impacted, added], [judged])
+    assert config.stash[_DESELECTION] == _Deselection(count=1, emptied=False)
 
 
 def test_only_tests_left_by_k_are_deselected(project):

@@ -47,8 +47,8 @@ class _Deselection:
 
 
 _DESELECTION = StashKey[_Deselection]()
-# The items to keep, for pytest_deselect_unimpacted: those this plugin judged impacted, or could not judge.
-_IMPACTED_ITEMS = StashKey[set[pytest.Item]]()
+# The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
+_UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 
 
 def pytest_addoption(parser: Parser):
@@ -346,13 +346,16 @@ def pytest_collection_modifyitems(session, config, items):
         return
     impacted_items = _impacted_items(items, impacted_tests or [], root_dir)
     skip = get_option("impacted_unimpacted") == Unimpacted.SKIP
+    unimpacted: set[pytest.Item] = set()
     for item in items:
         if item in impacted_items:
             item.add_marker(pytest.mark.impacted)
         elif skip:
             item.add_marker(pytest.mark.skip(reason=NOT_IMPACTED))
-    if not skip:
-        config.stash[_IMPACTED_ITEMS] = impacted_items
+        else:
+            unimpacted.add(item)
+    if unimpacted:
+        config.stash[_UNIMPACTED_ITEMS] = unimpacted
 
 
 @pytest.hookimpl(trylast=True, specname="pytest_collection_modifyitems")
@@ -363,13 +366,12 @@ def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None
     tests decides its exit status (``pytest_sessionfinish``), and a ``-k`` matching
     nothing is a mistake to report, even when the changes impact no test.
     """
-    impacted_items = config.stash.get(_IMPACTED_ITEMS, None)
-    if impacted_items is None:
-        return
+    judged = config.stash.get(_UNIMPACTED_ITEMS, set())
     kept: list[pytest.Item] = []
     unimpacted: list[pytest.Item] = []
     for item in items:
-        (kept if item in impacted_items else unimpacted).append(item)
+        # Only what was judged: an item another plugin added since was not, and runs.
+        (unimpacted if item in judged else kept).append(item)
     if unimpacted:
         config.hook.pytest_deselected(items=unimpacted)
         items[:] = kept
@@ -406,9 +408,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
     pytest exits 5 when no test runs, so deselecting every test would fail a run whose
     changes impact nothing, such as a docs-only commit. Only a run *this plugin*
-    emptied: one emptied by ``-k``, or with no tests at all, still exits 5. First, so
-    other plugins reading ``session.exitstatus`` see the run's status, and may still set
-    a failure of their own (the hooks' ``exitstatus`` argument stays pytest's 5).
+    emptied: one emptied by ``-k``, or with no tests at all, still exits 5. Early
+    (``tryfirst``), so most other plugins reading ``session.exitstatus`` see the run's
+    status, and any may still set a failure of its own; the hooks' ``exitstatus``
+    argument, and so pytest's own summary ("no tests ran"), stays pytest's 5.
     """
     deselection = session.config.stash.get(_DESELECTION, None)
     if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.emptied:

@@ -262,9 +262,10 @@ one emptied by `-k` or with nothing collected keeps its 5. Hence two hooks: mark
 the default position, before pytest's `-k`/`-m` (`-m impacted` needs the marker), and the
 deselection is a second, `trylast` `pytest_collection_modifyitems` (`pytest_deselect_unimpacted`,
 via `specname`: pytest registers only `pytest_`-prefixed names) — after `-k`, or a mistyped
-`-k` on a docs-only commit passes. The exit fix-up is `tryfirst`, so later plugins reading
-`session.exitstatus` see the final status and may still set a failure (the hooks' `exitstatus`
-argument stays 5; it cannot be changed). Under pytest-xdist the controller
+`-k` on a docs-only commit passes. It deselects only the items the first judged: one another
+plugin added in between was never judged, and runs. The exit fix-up is `tryfirst`, so most later
+plugins reading `session.exitstatus` see the final status and any may still set a failure (the
+hooks' `exitstatus` argument stays 5; it cannot be changed). Under pytest-xdist the controller
 collects nothing, so each worker reports its deselection through `config.workeroutput` and the
 controller merges it in `pytest_testnodedown` (an `optionalhook`: xdist need not be installed).
 
