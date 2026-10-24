@@ -34,6 +34,8 @@ INI_NAMES = {
     "conftest_imports": "impacted_conftest_imports",
     "disable_ext": "impacted_disable_ext",
 }
+# The prefix of an extension option's name, which is its pytest setting's too.
+EXT_PREFIX = "impacted_ext_"
 # Options with no pytest setting.
 _CLI_ONLY = {"root_dir", "config_file", "verbose"}
 
@@ -129,18 +131,25 @@ def impacted_tests_cli(ctx, **options):
     relative to ``--root-dir``, as there.
     """
     config = _pytest_config(options["root_dir"], options.pop("config_file"))
-    options |= _settings(ctx, config)
+    settings = _settings(ctx, config)
+    options |= settings
     if not options["module"]:
         raise click.UsageError("Missing option '--module' (or impacted_module in the pytest configuration).")
-    _run(config, **options)
+    sources = {name: f"{_setting_of(name)} in {config.path}" for name in settings}
+    _run(config, sources, **options)
 
 
 def _pytest_config(root_dir: str, config_file: str | None) -> PytestConfig:
-    """The configuration named by ``--config-file``, or the one pytest finds from *root_dir*."""
+    """The configuration named by ``--config-file``, or the one pytest finds from *root_dir*.
+
+    One it cannot read is warned of and passed over, as before the CLI read any: a run
+    with its options on the command line must not fail on a file it does not need.
+    """
     try:
         return load_pytest_config(Path(config_file)) if config_file else find_pytest_config(Path(root_dir))
     except (OSError, ValueError, iniconfig.ParseError, tomllib.TOMLDecodeError) as err:
-        raise click.UsageError(str(err)) from err
+        click.secho(f"The pytest configuration could not be read, so none is: {err}", fg="yellow", err=True)
+        return PytestConfig()
 
 
 def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
@@ -154,7 +163,9 @@ def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
         name = param.name
         if name is None or name in _CLI_ONLY or ctx.get_parameter_source(name) is not ParameterSource.DEFAULT:
             continue
-        setting = INI_NAMES.get(name, name)
+        setting = _setting_of(name)
+        if setting is None:
+            continue
         try:
             value = _read(config, setting, param)
         except ValueError as err:  # it names the setting and the file
@@ -162,11 +173,19 @@ def _settings(ctx: click.Context, config: PytestConfig) -> dict[str, Any]:
         # Empty is unset, as in the plugin, which reads ``getoption(name) or getini(name)``.
         if value is None or value in ("", []):
             continue
+        if setting.startswith(EXT_PREFIX):
+            settings[name] = value  # raw, for the extension's own conversion, as in the plugin
+            continue
         try:
             settings[name] = value if param.multiple or _is_flag(param) else param.type.convert(value, param, ctx)
         except click.BadParameter as err:
             raise click.UsageError(f"{setting} in {config.path}: {err.format_message()}") from err
     return settings
+
+
+def _setting_of(name: str) -> str | None:
+    """The pytest setting option *name* defaults to: an extension's option is named as its setting."""
+    return INI_NAMES.get(name) or (name if name.startswith(EXT_PREFIX) else None)
 
 
 def _read(config: PytestConfig, setting: str, param: click.Parameter) -> Any:
@@ -181,6 +200,7 @@ def _is_flag(param: click.Parameter) -> bool:
 
 def _run(
     config: PytestConfig,
+    sources: dict[str, str],
     *,
     git_mode,
     base_branch,
@@ -216,11 +236,11 @@ def _run(
 
     # Paths are relative to --root-dir, which need not be the working directory. Dotted
     # names are accepted here as they are by discover_submodules, but ``./suite`` is a path.
-    for option, value in (("--module", module), ("--tests-dir", tests_dir)):
+    for name, option, value in (("module", "--module", module), ("tests_dir", "--tests-dir", tests_dir)):
         candidates = (Path(root_dir) / value, Path(root_dir) / value.replace(".", os.sep)) if value else ()
         if value and not any(os.path.isdir(candidate) for candidate in candidates):
             raise click.BadParameter(
-                f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=option
+                f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=sources.get(name, option)
             )
 
     strategy = build_strategy_with_extensions(

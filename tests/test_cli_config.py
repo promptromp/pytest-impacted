@@ -197,7 +197,7 @@ def test_an_invalid_setting_is_a_usage_error(calls, config, message):
 
 
 def test_extension_options_are_read(calls, monkeypatch):
-    """An extension's setting is read as its option's value would be."""
+    """An extension's setting is passed on raw, for the extension to convert, as in the plugin."""
     _, build = calls
     write_config("[pytest]\nimpacted_module = app\nimpacted_ext_demo_threshold = 7\n")
     option = click.Option(["--impacted-ext-demo-threshold"], type=int, default=None)
@@ -207,7 +207,7 @@ def test_extension_options_are_read(calls, monkeypatch):
     result = invoke()
 
     assert result.exit_code == 0, result.output
-    assert build.call_args.kwargs["ext_config"] == {"impacted_ext_demo_threshold": 7}
+    assert build.call_args.kwargs["ext_config"] == {"impacted_ext_demo_threshold": "7"}
 
 
 def test_the_root_dir_is_not_moved_to_the_configuration_s_directory(calls, tmp_path, monkeypatch):
@@ -312,3 +312,73 @@ def test_list_items_that_are_not_strings_are_read_as_strings(calls):
 
     assert result.exit_code == 0, result.output
     assert build.call_args.kwargs["disabled"] == ["1", "x"]
+
+
+def test_an_extension_setting_is_passed_on_as_the_plugin_reads_it(calls, monkeypatch):
+    """Raw, for the extension's own conversion: ``on`` is no truth value to it, as in the plugin."""
+    _, build = calls
+    write_config("[pytest]\nimpacted_module = app\nimpacted_ext_demo_enabled = on\n")
+    option = click.Option(["--impacted-ext-demo-enabled"], type=click.BOOL, default=None)
+    option.name = "impacted_ext_demo_enabled"
+    monkeypatch.setattr(impacted_tests_cli, "params", [*impacted_tests_cli.params, option])
+
+    result = invoke()
+
+    assert result.exit_code == 0, result.output
+    assert build.call_args.kwargs["ext_config"] == {"impacted_ext_demo_enabled": "on"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param('[tool]\npytest = "x"\n', id="not_a_table"),
+        pytest.param(
+            "[tool.pytest]\nminversion = '9'\n[tool.pytest.ini_options]\nimpacted_module = 'x'\n",
+            id="both_tables",
+            marks=pytest.mark.skipif(pytest.version_tuple < (9,), reason="pytest 8 reads no [tool.pytest]"),
+        ),
+        pytest.param("this is = not [toml", id="unparsable"),
+    ],
+)
+def test_a_configuration_it_cannot_read_is_warned_of_and_passed_over(calls, text):
+    """As before the CLI read any: the command line's options still run."""
+    run, _ = calls
+    write_config(text, name="pyproject.toml")
+
+    result = invoke("--module", "app")
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["ns_module"] == "app"
+    assert "pyproject.toml" in result.output and "could not be read" in result.output
+
+
+def test_a_bad_directory_from_the_configuration_names_the_setting(calls):
+    write_config("[pytest]\nimpacted_module = app\nimpacted_tests_dir = nope\n")
+
+    result = invoke()
+
+    assert result.exit_code == 2
+    assert "impacted_tests_dir" in result.output and "pytest.ini" in result.output
+
+
+def test_a_list_for_a_string_setting_is_a_usage_error(calls):
+    write_config('[tool.pytest.ini_options]\nimpacted_module = ["app"]\n', name="pyproject.toml")
+
+    result = invoke()
+
+    assert result.exit_code == 2
+    assert "impacted_module" in result.output and "expected a string" in result.output
+
+
+def test_an_option_with_no_setting_reads_none(calls, monkeypatch):
+    """Only an extension's option is named as its setting; another would read a stray key."""
+    write_config("[pytest]\nimpacted_module = app\noutput = surprise\n")
+    option = click.Option(["--output"], default="out")
+    option.name = "output"
+    monkeypatch.setattr(impacted_tests_cli, "params", [*impacted_tests_cli.params, option])
+    seen = {}
+    monkeypatch.setattr("pytest_impacted.cli._run", lambda config, sources, **options: seen.update(options))
+
+    invoke()
+
+    assert seen["output"] == "out"

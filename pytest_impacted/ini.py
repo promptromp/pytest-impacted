@@ -19,6 +19,7 @@ import pytest
 
 # pytest.toml and native TOML (``[tool.pytest]``) are new in pytest 9; pytest 8 reads neither.
 PYTEST_9 = pytest.version_tuple >= (9,)
+PYTEST_8_1 = pytest.version_tuple >= (8, 1)
 CONFIG_NAMES = (
     *(("pytest.toml", ".pytest.toml") if PYTEST_9 else ()),
     "pytest.ini",
@@ -46,7 +47,11 @@ class PytestConfig:
 
     def string(self, name: str) -> str | None:
         """A setting the plugin declares untyped, such as ``impacted_module``."""
-        return None if (value := self._get(name, str)) is None else str(value)
+        if (value := self._get(name, str)) is None:
+            return None
+        if isinstance(value, list):
+            raise ValueError(f"{name} in {self.path}: expected a string, got {value!r}")  # noqa: TRY004 — a config error
+        return str(value)
 
     def flag(self, name: str) -> bool | None:
         """A ``bool`` setting, read as pytest reads one."""
@@ -91,7 +96,8 @@ def find_pytest_config(start: Path) -> PytestConfig:
                 continue
             if (config := _load(path)) is not None:
                 return config
-            fallback = fallback or (path if name == "pyproject.toml" else None)
+            # pytest 8.1 made a pyproject.toml without pytest settings the configuration, as a last resort.
+            fallback = fallback or (path if name == "pyproject.toml" and PYTEST_8_1 else None)
     return PytestConfig(path=fallback)
 
 
@@ -127,13 +133,18 @@ def _load_cfg(path: Path) -> PytestConfig | None:
 
 
 def _load_toml(path: Path) -> PytestConfig | None:
-    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    try:
+        document = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as err:
+        raise ValueError(f"{path}: {err}") from err  # as pytest names the file
     if PYTEST_9 and path.name in ("pytest.toml", ".pytest.toml"):
         # Like a pytest.ini, the configuration even when empty.
-        return PytestConfig(path, document.get("pytest", {}), native=True)
-    tool = document.get("tool", {}).get("pytest", {})
+        return PytestConfig(path, _table(document, "pytest", path), native=True)
+    tool = _table(_table(document, "tool", path), "pytest", path)
     native = {key: value for key, value in tool.items() if key != "ini_options"} if PYTEST_9 else {}
     ini_mode = tool.get("ini_options")
+    if ini_mode is not None and not isinstance(ini_mode, dict):
+        raise ValueError(f"{path}: [tool.pytest.ini_options] is not a table.")
     if native and ini_mode:
         raise ValueError(f"{path}: Cannot use both [tool.pytest] and [tool.pytest.ini_options].")
     if native:
@@ -141,3 +152,11 @@ def _load_toml(path: Path) -> PytestConfig | None:
     if ini_mode is None:
         return None
     return PytestConfig(path, ini_mode)
+
+
+def _table(document: dict, key: str, path: Path) -> dict:
+    """*document*'s table *key*, empty when absent; a value that is no table is an error."""
+    value = document.get(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: {key} is not a table.")  # noqa: TRY004 — a config error, caught with the rest
+    return value
