@@ -1,4 +1,3 @@
-import fnmatch
 import os
 import re
 from collections.abc import Callable
@@ -9,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+# pytest's own python_files rule (a pattern with a / matches the path); private, stable since pytest 7.
+from _pytest.python import path_matches_patterns
 from pytest import Config, DoctestItem, ExitCode, Parser, StashKey, UsageError
 
 from pytest_impacted._rust import RUST_AVAILABLE
@@ -60,10 +62,21 @@ class _Handoff:
 
 # The controller's handoff, or None for none: each worker then analyses for itself.
 _HANDOFF = StashKey[_Handoff | None]()
-# --impacted-early-filter: this process's analysis, made when collection starts, and the
-# test files it kept from being collected (resolved). None: it filters nothing.
-_EARLY = StashKey[_Handoff | None]()
+
+
+@dataclass(frozen=True)
+class _Early:
+    """``--impacted-early-filter``'s analysis: the impacted test files, and the same resolved."""
+
+    tests: list[str]
+    resolved: frozenset[str]
+
+
+# This collection's early analysis, or None when the early filter filters nothing.
+_EARLY = StashKey[_Early | None]()
+# Test files it passed over, and whether that left nothing to collect (for the exit status).
 _IGNORED = StashKey[int]()
+_IGNORED_EMPTIED = StashKey[bool]()
 _WORKER_IGNORED_KEY = "pytest_impacted_ignored"
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
@@ -467,25 +480,37 @@ def _unknown_paths_or_none(file_map: list[tuple[str, str]], root_dir: Path) -> l
         return []
 
 
+def pytest_collection(session: pytest.Session) -> None:
+    """Each collection starts afresh: the early filter analyses again, and counts again."""
+    stash = session.config.stash
+    if _EARLY in stash:
+        del stash[_EARLY]
+    if _IGNORED in stash:
+        del stash[_IGNORED]
+    if _IGNORED_EMPTIED in stash:
+        del stash[_IGNORED_EMPTIED]
+
+
 def pytest_ignore_collect(collection_path: Path, config: Config) -> bool | None:
     """``--impacted-early-filter``: pass over a test file the analysis does not impact.
 
-    Only ``.py`` files pytest would collect tests from (``python_files``): conftests,
-    directories and other modules are never passed over. Not with ``--doctest-modules``,
-    whose doctests always run, and in a pytest-xdist worker only with the controller's
-    analysis: workers analysing alone skip, and a file never collected cannot be skipped.
+    Only ``.py`` files pytest would collect tests from (``python_files``, by pytest's own
+    rule), never a conftest or an ``__init__.py``. Not with ``--doctest-modules``, whose
+    doctests always run, nor with an extension (it may pick tests from ``session.items``,
+    empty this early), and in a pytest-xdist worker only with the controller's analysis:
+    workers analysing alone skip, and a file never collected cannot be skipped.
     """
-    if collection_path.suffix != ".py" or not _filters_early(config):
+    if collection_path.suffix != ".py" or collection_path.name in ("conftest.py", "__init__.py"):
         return None
-    if not any(fnmatch.fnmatch(collection_path.name, pattern) for pattern in config.getini("python_files")):
+    if not _filters_early(config) or not path_matches_patterns(collection_path, config.getini("python_files")):
         return None
     early = _early_analysis(config)
-    if early is None or early.tests is None:
+    if early is None or os.path.realpath(collection_path) in early.resolved:
         return None
-    root = canonical_root(config.rootpath)
-    if os.path.realpath(collection_path) in {os.path.realpath(root / test) for test in early.tests}:
-        return None
-    _count_ignored(config)
+    count = config.stash.get(_IGNORED, 0) + 1
+    config.stash[_IGNORED] = count
+    if hasattr(config, "workeroutput"):
+        config.workeroutput[_WORKER_IGNORED_KEY] = count
     return True
 
 
@@ -495,28 +520,40 @@ def _filters_early(config: Config) -> bool:
         return False
     if config.getoption("doctestmodules", default=False):
         return False
+    if enabled_extension_metadata(get_option("impacted_disable_ext") or []):
+        return False
     workerinput = getattr(config, "workerinput", None)
     return workerinput is None or _WORKER_INPUT_KEY in workerinput
 
 
-def _early_analysis(config: Config) -> _Handoff | None:
-    """This process's analysis, made once: the controller's in a worker, else its own."""
+def _early_analysis(config: Config) -> _Early | None:
+    """This collection's analysis, made once: the controller's in a worker, else its own.
+
+    None when there is none to filter by: running every test (git missing), no session,
+    or an analysis that raised — the items' hook then analyses as without the filter, and
+    fails the run once, as without it, rather than as a collection error per directory.
+    """
     if _EARLY not in config.stash:
-        workerinput = getattr(config, "workerinput", None)
-        if workerinput is not None:
-            config.stash[_EARLY] = _Handoff(workerinput[_WORKER_INPUT_KEY])
-        elif (session := config.stash.get(_SESSION, None)) is not None:
-            config.stash[_EARLY] = _Handoff(_analyse(session, config))
-        else:
-            config.stash[_EARLY] = None
+        config.stash[_EARLY] = _make_early(config)
     return config.stash[_EARLY]
 
 
-def _count_ignored(config: Config) -> None:
-    count = config.stash.get(_IGNORED, 0) + 1
-    config.stash[_IGNORED] = count
-    if hasattr(config, "workeroutput"):
-        config.workeroutput[_WORKER_IGNORED_KEY] = count
+def _make_early(config: Config) -> _Early | None:
+    workerinput = getattr(config, "workerinput", None)
+    session = config.stash.get(_SESSION, None)
+    if workerinput is not None:
+        tests = workerinput[_WORKER_INPUT_KEY]
+    elif session is None:
+        return None
+    else:
+        try:
+            tests = _analyse(session, config)
+        except (Exception, pytest.fail.Exception, pytest.skip.Exception):  # noqa: BLE001 — raised again, by the items' hook
+            return None
+    if tests is None:
+        return None
+    root = canonical_root(config.rootpath)
+    return _Early(tests, frozenset(os.path.realpath(root / test) for test in tests))
 
 
 def pytest_collection_modifyitems(session, config, items):
@@ -536,6 +573,10 @@ def pytest_collection_modifyitems(session, config, items):
     _record(config, 0)
     workerinput = getattr(config, "workerinput", None)
     handed_on = workerinput is not None and _WORKER_INPUT_KEY in workerinput
+    if config.stash.get(_IGNORED, 0) and not items:
+        config.stash[_IGNORED_EMPTIED] = True  # before -k and -m, which then had nothing to take
+        if hasattr(config, "workeroutput"):
+            config.workeroutput[_WORKER_IGNORED_KEY + "_emptied"] = True
     if (early := config.stash.get(_EARLY, None)) is not None:
         impacted_tests = early.tests  # the early filter's: one analysis per collection
     else:
@@ -602,6 +643,8 @@ def pytest_testnodedown(node, error) -> None:
     for key, stash_key in ((_WORKER_OUTPUT_KEY, _DESELECTION), (_WORKER_IGNORED_KEY, _IGNORED)):
         if isinstance(reported := workeroutput.get(key), int):
             config.stash[stash_key] = max(reported, config.stash.get(stash_key, 0))
+    if workeroutput.get(_WORKER_IGNORED_KEY + "_emptied"):
+        config.stash[_IGNORED_EMPTIED] = True
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -617,7 +660,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     argument, and so pytest's own summary ("no tests ran"), stays pytest's 5.
     """
     stash = session.config.stash
-    if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and (stash.get(_DESELECTION, 0) or stash.get(_IGNORED, 0)):
+    # Ignored files count only when they left nothing to collect: else -k, say, emptied the run.
+    if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and (
+        stash.get(_DESELECTION, 0) or stash.get(_IGNORED_EMPTIED, False)
+    ):
         session.exitstatus = ExitCode.OK
 
 
@@ -690,13 +736,13 @@ def validate_config(config: Config):
     if not get_option("impacted_git_mode"):
         raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
     unimpacted = get_option("impacted_unimpacted")
+    if unimpacted not in list(Unimpacted):
+        choices = ", ".join(f"'{action}'" for action in Unimpacted)
+        raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
     if get_option("impacted_early_filter") and unimpacted != Unimpacted.DESELECT:
         raise UsageError(
             "--impacted-early-filter needs --impacted-unimpacted=deselect: a file never collected cannot be skipped."
         )
-    if unimpacted not in list(Unimpacted):
-        choices = ", ".join(f"'{action}'" for action in Unimpacted)
-        raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
 
     try:
         parse_file_map(get_option("impacted_map") or [])

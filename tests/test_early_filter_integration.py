@@ -131,3 +131,67 @@ def test_under_xdist_the_workers_ignore_by_the_controller_s_analysis(project):
     assert result.ret == ExitCode.OK
     result.assert_outcomes(passed=1)
     assert imported(project) == {"imported-a"}
+
+
+def test_a_k_matching_nothing_still_exits_5(project):
+    edit(project, "app/a.py")
+
+    assert run(project, "-k", "no_such_test").ret == ExitCode.NO_TESTS_COLLECTED
+
+
+def test_an_analysis_error_fails_the_run_as_without_the_filter(project, monkeypatch):
+    """Once, from the items' hook, not as a collection error of every test directory."""
+    calls = []
+
+    def broken(**kwargs):
+        calls.append(1)
+        raise RuntimeError("the analysis broke")
+
+    monkeypatch.setattr(plugin, "get_impacted_tests", broken)
+    edit(project, "app/a.py")
+
+    result = run(project)
+
+    assert result.ret == ExitCode.INTERNAL_ERROR
+    result.stdout.no_fnmatch_line("*ERROR collecting*")
+    assert len(calls) == 2  # the early filter's, then the items' as without it
+
+
+def test_with_an_extension_it_filters_nothing(project, monkeypatch):
+    """An extension may pick tests from ``session.items``, which is empty this early."""
+    monkeypatch.setattr(
+        "pytest_impacted.extensions.discover_extension_metadata",
+        lambda: [type("Ext", (), {"name": "demo", "config_options": []})()],
+    )
+    edit(project, "app/a.py")
+
+    run(project)
+
+    assert imported(project) == {"imported-a", "imported-b"}
+
+
+def test_conftests_and_init_files_are_never_passed_over(make_git_project):
+    files = {**FILES, "suite/__init__.py": IMPORTED.format(name="imported-init"), "suite/conftest.py": ""}
+    project = make_git_project(files, INI + "python_files = *.py\n")
+    edit(project, "app/a.py")
+
+    run(project)
+
+    assert (project.path / "imported-init").exists()
+
+
+def test_python_files_are_matched_as_pytest_matches_them(make_git_project):
+    """A pattern with a ``/`` is matched against the path, as pytest does, not the name."""
+    project = make_git_project(FILES, INI + "python_files = suite/test_*.py\n")
+    edit(project, "app/a.py")
+
+    run(project)
+
+    assert imported(project) == {"imported-a"}
+
+
+def test_an_invalid_unimpacted_value_is_named_as_such(project):
+    result = run(project, "-o", "impacted_unimpacted=deslect")
+
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*Invalid impacted_unimpacted value 'deslect'*"])

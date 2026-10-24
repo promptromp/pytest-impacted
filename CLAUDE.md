@@ -289,10 +289,15 @@ need not be installed.
 
 **`--impacted-early-filter` analyses in `pytest_ignore_collect`, on the first test file
 asked about**, and `pytest_collection_modifyitems` reuses that analysis (`_EARLY`): one per
-collection. It passes over only `.py` files matching `python_files`, never with
-`--doctest-modules`, needs deselect mode (an ignored file cannot be skipped), and in an xdist
-worker only with the controller's handoff (workers analysing alone skip). Opt-in: it loses the
-`item.location` match for a test inherited across files with no import edge.
+collection (`pytest_collection` clears it). It passes over only `.py` files pytest's own
+`path_matches_patterns` matches against `python_files` (never a conftest or `__init__.py`),
+never with `--doctest-modules` or an enabled extension (it may read `session.items`, empty
+then), needs deselect mode (an ignored file cannot be skipped), and in an xdist worker works
+only with the controller's handoff (workers analysing alone skip). An analysis raising there
+makes it stand aside, so the items' hook raises it once, as without the filter, not each
+directory's collection. Ignored files count for the exit fix-up only when nothing at all was
+collected (`_IGNORED_EMPTIED`, judged before `-k`). Opt-in: it loses the `item.location` match
+for a test inherited across files with no import edge, and an ignored file's import errors.
 
 **Changed-file paths are POSIX strings.** `normalize_git_paths` emits `as_posix()` because
 every matcher is `PurePosixPath`-based; an OS-native Windows path would carry backslashes
