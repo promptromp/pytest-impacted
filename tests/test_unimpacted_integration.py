@@ -311,10 +311,10 @@ def test_the_analysis_is_relative_to_a_rootdir_reached_through_a_symlink(project
     assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
 
 
-def test_a_node_configured_before_the_session_starts_analyses_for_itself(pytester):
+def test_a_node_configured_before_the_session_starts_analyses_for_itself(project):
     """No session to analyse with: the worker gets nothing, and analyses as without xdist."""
-    pytester.makeini(INI)
-    node = SimpleNamespace(config=pytester.parseconfig("--impacted"), workerinput={})
+    edit(project, "app/a.py")
+    node = SimpleNamespace(config=project.parseconfig("--impacted", "--impacted-git-mode=unstaged"), workerinput={})
 
     pytest_configure_node(node)
 
