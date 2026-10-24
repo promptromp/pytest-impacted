@@ -19,7 +19,7 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.file_map import parse_file_map
+from pytest_impacted.file_map import parse_file_map, unknown_paths
 from pytest_impacted.git import (
     GIT_AVAILABLE,
     GitMode,
@@ -315,6 +315,11 @@ def pytest_report_header(config: Config) -> list[str]:
     if ext_names:
         header.append(f"extensions={','.join(ext_names)}")
     lines = ["pytest-impacted: " + ", ".join(header)]
+    if get_option("impacted") and GIT_AVAILABLE and (file_map := _file_map_or_none(get_option("impacted_map"))):
+        unknown = _unknown_paths_or_none(file_map, config.rootpath)
+        lines.extend(
+            f"pytest-impacted: WARNING: --impacted-map path {path} matches no file git knows." for path in unknown
+        )
     if get_option("impacted") and not GIT_AVAILABLE:
         # The header is written by the controller, so this survives pytest-xdist,
         # whose workers run collection and whose terminal output is discarded.
@@ -420,6 +425,21 @@ def _relative_to(roots: list[Path], test: str) -> str:
             if path.is_relative_to(root):
                 return os.path.relpath(path, root)
     return test
+
+
+def _file_map_or_none(entries) -> list[tuple[str, str]]:
+    try:
+        return parse_file_map(entries or [])
+    except ValueError:
+        return []  # validate_config has said so
+
+
+def _unknown_paths_or_none(file_map: list[tuple[str, str]], root_dir: Path) -> list[str]:
+    """For the header: the mapped paths git knows nothing at; none when git cannot tell."""
+    try:
+        return unknown_paths(file_map, root_dir)
+    except Exception:  # noqa: BLE001 — a header line, never a failure of its own; the run reports git
+        return []
 
 
 def pytest_collection_modifyitems(session, config, items):

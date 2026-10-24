@@ -320,3 +320,60 @@ def test_the_cli_reads_the_mapping_from_the_configuration(make_git_project):
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [str((project.path / "suite/test_bench.py").resolve())]
+
+
+def test_a_mapped_symlink_stands_for_itself_as_an_edit_of_it_would(make_git_project, tmp_path):
+    """git tracks the link, and an edit to it is reported under the link's path."""
+    project = make_git_project({**FILES, "shared/real_test.py": "def test_real():\n    assert True\n"}, INI)
+    (project.path / "suite/test_link.py").symlink_to("../shared/real_test.py")
+    subprocess.run(["git", "add", "suite/test_link.py"], cwd=project.path, check=True)
+    subprocess.run(["git", "commit", "-qm", "link"], cwd=project.path, check=True)
+    edit(project, "reports/run.json")
+
+    result = run(project, "--impacted-map=reports/*.json=suite/test_link.py")
+
+    result.stdout.fnmatch_lines(["*test_link.py::test_real PASSED*"])
+
+
+@pytest.mark.parametrize("glob", [".", "./"])
+def test_a_glob_that_matches_nothing_by_construction_is_a_usage_error(project, glob):
+    result = run(project, f"--impacted-map={glob}=suite/test_bench.py")
+
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*--impacted-map*GLOB*"])
+
+
+def test_a_tracked_file_deleted_from_the_worktree_still_counts(project):
+    """git still knows it, and a deleted module still reaches whatever imports it. In branch
+    mode, where the local deletion is no change of its own, only the mapping brings it in."""
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=project.path, check=True, capture_output=True, text=True).stdout
+
+    base = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    git("checkout", "-q", "-b", "feature")
+    edit(project, "reports/run.json")
+    git("commit", "-qam", "data")
+    (project.path / "app/loader.py").unlink()
+
+    result = project.runpytest(
+        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=branch", f"--impacted-base-branch={base}", "-v",
+        "--impacted-map=reports/*.json=app/loader.py",
+    )  # fmt: skip
+
+    result.stdout.fnmatch_lines(["*ERROR collecting suite/test_loader.py*"])
+
+
+def test_a_path_matching_nothing_is_warned_of_in_the_header(project):
+    """Every run, not only when its glob matches a change: a misspelt path is a configuration error."""
+    result = run(project, "--impacted-map=reports/*.json=suite/test_Bench.py")
+
+    result.stdout.fnmatch_lines(["*WARNING*--impacted-map path suite/test_Bench.py matches no file git knows*"])
+
+
+def test_mapped_files_come_in_a_stable_order(project):
+    edit(project, "reports/run.json")
+    result = [run(project, "--impacted-map=reports/*.json=suite").stdout.str() for _ in range(2)]
+
+    notices = [next(line for line in out.splitlines() if line.startswith("Mapped file")) for out in result]
+    assert notices[0] == notices[1]

@@ -297,15 +297,20 @@ def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:
         return []
     git_root = Path(repo.working_tree_dir).resolve()
     working_dir = Path(repo_dir).resolve()
-    target = (working_dir / path).resolve()
+    # Normalised, not resolved: a symlink git tracks stands for itself, as an edit to it is reported.
+    target = Path(os.path.normpath(working_dir / path))
     if not target.is_relative_to(git_root):
         return []
-    if not _spelled_as_on_disk(working_dir, path):
+    if os.path.lexists(target) and not _spelled_as_on_disk(working_dir, path):
         return []  # git trusts a filesystem ignoring case, and would list it under this spelling
     spec = target.relative_to(git_root).as_posix()
     # After "--", and literal: no pathspec is an option, and none a glob.
     output = repo.git.ls_files("--cached", "--others", "--exclude-standard", "-z", "--", f":(literal){spec}")
-    return normalize_git_paths([f for f in dict.fromkeys(output.split("\0")) if f], git_root, working_dir)
+    # Exact, for a file deleted from the worktree: its index entry may differ in case from *path*.
+    known = [
+        f for f in dict.fromkeys(output.split("\0")) if f and (spec == "." or f == spec or f.startswith(f"{spec}/"))
+    ]
+    return normalize_git_paths(known, git_root, working_dir)
 
 
 def _spelled_as_on_disk(base: Path, path: str) -> bool:

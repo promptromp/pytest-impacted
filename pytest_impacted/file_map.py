@@ -16,7 +16,7 @@ import os
 import posixpath
 from collections import deque
 from collections.abc import Iterable, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pytest_impacted.display import notify
 from pytest_impacted.git import files_git_knows
@@ -35,6 +35,10 @@ def parse_file_map(entries: Iterable[str]) -> list[tuple[str, str]]:
         if entry.count("=") != 1 or not all(part.strip() for part in entry.split("=")):
             raise ValueError(f"Invalid --impacted-map entry {entry!r}: expected GLOB=PATH, one '='.")
         glob, path = (part.strip().replace(os.sep, "/") for part in entry.split("="))
+        try:
+            PurePosixPath("x").match(glob)
+        except ValueError as err:  # "." and "/" leave no pattern
+            raise ValueError(f"Invalid --impacted-map entry {entry!r}: GLOB {glob!r} matches no path ({err}).") from err
         posix = posixpath.normpath(path)
         if posixpath.isabs(posix) or os.path.isabs(posix) or posix == ".." or posix.startswith("../"):
             raise ValueError(f"Invalid --impacted-map entry {entry!r}: PATH must be relative, inside the rootdir.")
@@ -54,6 +58,7 @@ def map_changed_files(
     if not file_map:
         return changed_files
     known = set(changed_files)
+    added: list[str] = []
     queue = deque(changed_files)
     targets: dict[str, list[str]] = {}
     hits: dict[str, list[str]] = {}
@@ -69,16 +74,17 @@ def map_changed_files(
             for file in targets[path]:
                 if file not in known:
                     known.add(file)
+                    added.append(file)
                     queue.append(file)
     if hits:
         notify("Mapped file changes detected: " + "; ".join(_described(path, by) for path, by in hits.items()), session)
-    return [*changed_files, *(file for file in known - set(changed_files))] if hits else changed_files
+    return [*changed_files, *added]
 
 
 def _files_at(path: str, root_dir: Path, session) -> list[str]:
     """The files *path* stands for: itself, or a directory's Python files; a notice for none."""
     files = files_git_knows(root_dir, path)
-    if files != [path]:
+    if path not in files:  # a directory: its Python files
         files = sorted(file for file in files if file.endswith(".py"))
     if not files:
         notify(f"--impacted-map path {path} matches no file git knows under {root_dir}.", session)
@@ -92,3 +98,8 @@ def _described(path: str, changed: list[str]) -> str:
         return f"{path} ({shown})"
     more = f", and {len(changed) - 3} more" if len(changed) > 3 else ""
     return f"{path} ({len(changed)} files: {shown}{more})"
+
+
+def unknown_paths(file_map: Sequence[tuple[str, str]], root_dir: Path) -> list[str]:
+    """The mapped paths git knows no file at: a misspelt one, whether or not its glob matched a change."""
+    return [path for path in dict.fromkeys(path for _, path in file_map) if not files_git_knows(root_dir, path)]
