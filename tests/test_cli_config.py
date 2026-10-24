@@ -299,3 +299,16 @@ def test_an_edit_to_the_configuration_read_selects_every_test(make_git_project):
     assert sorted(result.stdout.splitlines()) == [
         str((project.path / f"suite/test_{name}.py").resolve()) for name in ("a", "b")
     ]
+
+
+def test_list_items_that_are_not_strings_are_read_as_strings(calls):
+    """``[tool.pytest.ini_options]`` keeps a TOML list as it is; the CLI joins its items to print them."""
+    _, build = calls
+    write_config(
+        '[tool.pytest.ini_options]\nimpacted_module = "app"\nimpacted_disable_ext = [1, "x"]\n', "pyproject.toml"
+    )
+
+    result = invoke()
+
+    assert result.exit_code == 0, result.output
+    assert build.call_args.kwargs["disabled"] == ["1", "x"]
