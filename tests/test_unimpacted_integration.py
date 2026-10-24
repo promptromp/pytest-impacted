@@ -100,6 +100,17 @@ def test_a_run_another_filter_empties_still_exits_5(project, edited, args):
     assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
+@pytest.mark.parametrize("args", [[], ["--impacted-unimpacted=skip"]], ids=["deselect", "skip"])
+def test_m_impacted_selects_the_impacted_tests(project, args):
+    """The ``impacted`` marker is added before ``-m`` filters, so ``-m impacted`` keeps them."""
+    edit(project, "app/a.py")
+
+    result = run(project, "-m", "impacted", *args)
+
+    result.assert_outcomes(passed=1, deselected=1)
+    result.stdout.fnmatch_lines(["*test_a.py::test_a PASSED*"])
+
+
 def test_only_tests_left_by_k_are_deselected(project):
     """``-k`` keeps ``test_b``, which nothing impacts: deselecting it empties the run, which passes."""
     edit(project, "app/a.py")

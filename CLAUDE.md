@@ -258,9 +258,13 @@ nothing at all is impacted.
 **Unselected items are deselected, unless `--impacted-unimpacted=skip`.** pytest exits 5 when
 no test runs, so a run *this plugin* emptied is turned back into exit 0 in
 `pytest_sessionfinish` (a docs-only commit must pass, as it did when every test was skipped);
-one emptied by `-k` or with nothing collected keeps its 5. Hence the filter is `trylast`
-(after `-k`/`-m`: else a mistyped `-k` on a docs-only commit passes) and the exit fix-up
-`tryfirst` (every other plugin sees the final status, and may still set a failure). Under pytest-xdist the controller
+one emptied by `-k` or with nothing collected keeps its 5. Hence two hooks: marking stays at
+the default position, before pytest's `-k`/`-m` (`-m impacted` needs the marker), and the
+deselection is a second, `trylast` `pytest_collection_modifyitems` (`pytest_deselect_unimpacted`,
+via `specname`: pytest registers only `pytest_`-prefixed names) — after `-k`, or a mistyped
+`-k` on a docs-only commit passes. The exit fix-up is `tryfirst`, so later plugins reading
+`session.exitstatus` see the final status and may still set a failure (the hooks' `exitstatus`
+argument stays 5; it cannot be changed). Under pytest-xdist the controller
 collects nothing, so each worker reports its deselection through `config.workeroutput` and the
 controller merges it in `pytest_testnodedown` (an `optionalhook`: xdist need not be installed).
 

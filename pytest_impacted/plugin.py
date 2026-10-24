@@ -47,6 +47,8 @@ class _Deselection:
 
 
 _DESELECTION = StashKey[_Deselection]()
+# The items to keep, for pytest_deselect_unimpacted: those this plugin judged impacted, or could not judge.
+_IMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 
 
 def pytest_addoption(parser: Parser):
@@ -289,13 +291,12 @@ def pytest_report_header(config: Config) -> list[str]:
     return lines
 
 
-@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(session, config, items):
     """pytest hook to modify the collected test items.
 
     This is called after the tests have been collected and before
-    they are run. Last, after ``-k`` and ``-m``: whether this plugin is what left
-    the run without tests decides its exit status (``pytest_sessionfinish``).
+    they are run. It marks them, before ``-k`` and ``-m`` filter (``-m impacted``);
+    ``pytest_deselect_unimpacted`` deselects after them.
 
     """
     get_option = partial(get_option_from_config, config)
@@ -344,16 +345,35 @@ def pytest_collection_modifyitems(session, config, items):
             warn(f"pytest-impacted: {err} Running every test.", session)
         return
     impacted_items = _impacted_items(items, impacted_tests or [], root_dir)
-    unimpacted = [item for item in items if item not in impacted_items]
-    for item in impacted_items:
-        item.add_marker(pytest.mark.impacted)
-    if get_option("impacted_unimpacted") == Unimpacted.SKIP:
-        for item in unimpacted:
+    skip = get_option("impacted_unimpacted") == Unimpacted.SKIP
+    for item in items:
+        if item in impacted_items:
+            item.add_marker(pytest.mark.impacted)
+        elif skip:
             item.add_marker(pytest.mark.skip(reason=NOT_IMPACTED))
-    elif unimpacted:
+    if not skip:
+        config.stash[_IMPACTED_ITEMS] = impacted_items
+
+
+@pytest.hookimpl(trylast=True, specname="pytest_collection_modifyitems")
+def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None:
+    """Deselect what ``pytest_collection_modifyitems`` judged not impacted.
+
+    Last, after ``-k`` and ``-m``: whether this plugin is what left the run without
+    tests decides its exit status (``pytest_sessionfinish``), and a ``-k`` matching
+    nothing is a mistake to report, even when the changes impact no test.
+    """
+    impacted_items = config.stash.get(_IMPACTED_ITEMS, None)
+    if impacted_items is None:
+        return
+    kept: list[pytest.Item] = []
+    unimpacted: list[pytest.Item] = []
+    for item in items:
+        (kept if item in impacted_items else unimpacted).append(item)
+    if unimpacted:
         config.hook.pytest_deselected(items=unimpacted)
-        items[:] = [item for item in items if item in impacted_items]
-        _record(config, _Deselection(count=len(unimpacted), emptied=not items))
+        items[:] = kept
+        _record(config, _Deselection(count=len(unimpacted), emptied=not kept))
 
 
 def _record(config: Config, deselection: _Deselection) -> None:
@@ -375,7 +395,9 @@ def pytest_testnodedown(node, error) -> None:
     worker's report is the run's.
     """
     if reported := getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY):
-        node.config.stash[_DESELECTION] = _Deselection(**reported)
+        # Field by field: a worker on another version of the plugin may send other keys.
+        count, emptied = reported.get("count", 0), bool(reported.get("emptied"))
+        node.config.stash[_DESELECTION] = _Deselection(count=count, emptied=emptied)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -385,7 +407,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     pytest exits 5 when no test runs, so deselecting every test would fail a run whose
     changes impact nothing, such as a docs-only commit. Only a run *this plugin*
     emptied: one emptied by ``-k``, or with no tests at all, still exits 5. First, so
-    every other plugin sees the run's status, and may still set a failure of its own.
+    other plugins reading ``session.exitstatus`` see the run's status, and may still set
+    a failure of their own (the hooks' ``exitstatus`` argument stays pytest's 5).
     """
     deselection = session.config.stash.get(_DESELECTION, None)
     if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.emptied:
@@ -457,7 +480,7 @@ def validate_config(config: Config):
     if not get_option("impacted_git_mode"):
         raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
     unimpacted = get_option("impacted_unimpacted")
-    if unimpacted not in Unimpacted.__members__.values():
+    if unimpacted not in list(Unimpacted):
         choices = ", ".join(f"'{action}'" for action in Unimpacted)
         raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
 
