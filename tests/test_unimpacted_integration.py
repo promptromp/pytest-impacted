@@ -17,8 +17,8 @@ from pytest_impacted.plugin import (
     _DESELECTION,
     _UNIMPACTED_ITEMS,
     _analyse,
-    _Deselection,
     _relative_to,
+    pytest_configure_node,
     pytest_deselect_unimpacted,
 )
 
@@ -140,7 +140,7 @@ def test_an_item_added_after_the_judging_is_kept():
     pytest_deselect_unimpacted(config, items)
 
     assert (items, deselected) == ([impacted, added], [judged])
-    assert config.stash[_DESELECTION] == _Deselection(count=1)
+    assert config.stash[_DESELECTION] == 1
 
 
 def test_only_tests_left_by_k_are_deselected(project):
@@ -283,3 +283,39 @@ def test_the_analysis_handed_to_workers_is_relative_to_the_rootdir(project):
     config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged")
 
     assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
+
+
+def test_under_xdist_an_analysis_error_is_the_workers_to_report(pytester):
+    """Raised on the controller it would escape xdist's session start, skipping every
+    ``pytest_sessionfinish``: no JUnit XML, no combined coverage. So the workers analyse
+    for themselves and report it, as before the controller analysed."""
+    pytest.importorskip("xdist")
+    pytester.makepyfile(**{"app/__init__.py": "", "suite/test_a.py": "def test_a():\n    pass\n"})
+    pytester.makeini(INI)  # no git repository: GitPython raises
+
+    result = pytester.runpytest_subprocess(
+        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2", "--junitxml=out.xml"
+    )
+
+    assert result.ret != ExitCode.OK
+    assert (pytester.path / "out.xml").exists()
+    result.stdout.fnmatch_lines(["*InvalidGitRepositoryError*"])
+
+
+def test_the_analysis_is_relative_to_a_rootdir_reached_through_a_symlink(project, tmp_path):
+    link = tmp_path / "link"
+    link.symlink_to(project.path)
+    edit(project, "app/a.py")
+    config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged", f"--rootdir={link}")
+
+    assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]
+
+
+def test_a_node_configured_before_the_session_starts_analyses_for_itself(pytester):
+    """No session to analyse with: the worker gets nothing, and analyses as without xdist."""
+    pytester.makeini(INI)
+    node = SimpleNamespace(config=pytester.parseconfig("--impacted"), workerinput={})
+
+    pytest_configure_node(node)
+
+    assert node.workerinput == {}

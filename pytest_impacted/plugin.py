@@ -1,6 +1,5 @@
 import os
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
@@ -41,17 +40,12 @@ _WORKER_OUTPUT_KEY = "pytest_impacted_deselected"
 _WORKER_INPUT_KEY = "pytest_impacted_tests"
 
 
-@dataclass(frozen=True)
-class _Deselection:
-    """How many tests this plugin deselected."""
-
-    count: int
-
-
-_DESELECTION = StashKey[_Deselection]()
+# How many tests this plugin deselected.
+_DESELECTION = StashKey[int]()
 _SESSION = StashKey[pytest.Session]()
 # The run's analysis: the impacted test files, relative to the rootdir; None when it fails open.
 _ANALYSIS = StashKey[list[str] | None]()
+_ANALYSIS_FAILED = StashKey[bool]()
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 
@@ -310,11 +304,19 @@ def pytest_configure_node(node) -> None:
     worker starts, and here, unlike in a worker, a notice reaches the terminal.
     """
     config = node.config
-    if not get_option_from_config(config, "impacted"):
+    session = config.stash.get(_SESSION, None)
+    if session is None or not get_option_from_config(config, "impacted"):
         return
     if _ANALYSIS not in config.stash:
-        config.stash[_ANALYSIS] = _analyse(config.stash[_SESSION], config)
-    node.workerinput[_WORKER_INPUT_KEY] = config.stash[_ANALYSIS]
+        try:
+            config.stash[_ANALYSIS] = _analyse(session, config)
+        except Exception:  # noqa: BLE001
+            # Raised here it would escape xdist's session start, and pytest would skip
+            # every pytest_sessionfinish (no JUnit XML, no combined coverage). Handing
+            # nothing on, each worker analyses for itself, and reports it as before.
+            config.stash[_ANALYSIS_FAILED] = True
+    if not config.stash.get(_ANALYSIS_FAILED, False):
+        node.workerinput[_WORKER_INPUT_KEY] = config.stash[_ANALYSIS]
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
@@ -351,7 +353,8 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
         if GIT_AVAILABLE:
             warn(f"pytest-impacted: {err} Running every test.", session)
         return None
-    return [_relative_to(root_dir, test) for test in impacted_tests or []]
+    # Resolved: the analysis names every file under the canonical (resolved) root.
+    return [_relative_to(Path(os.path.realpath(root_dir)), test) for test in impacted_tests or []]
 
 
 def _relative_to(root_dir: Path, test: str) -> str:
@@ -386,8 +389,7 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(pytest.mark.skip(reason=NOT_IMPACTED))
         else:
             unimpacted.add(item)
-    if unimpacted:
-        config.stash[_UNIMPACTED_ITEMS] = unimpacted
+    config.stash[_UNIMPACTED_ITEMS] = unimpacted  # even empty: a second collection must not see the first's
 
 
 @pytest.hookimpl(trylast=True, specname="pytest_collection_modifyitems")
@@ -407,30 +409,31 @@ def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None
     if unimpacted:
         config.hook.pytest_deselected(items=unimpacted)
         items[:] = kept
-        _record(config, _Deselection(count=len(unimpacted)))
+        _record(config, len(unimpacted))
 
 
-def _record(config: Config, deselection: _Deselection) -> None:
-    """Keep *deselection* for the exit status and the summary.
+def _record(config: Config, count: int) -> None:
+    """Keep the *count* deselected for the exit status and the summary.
 
     A pytest-xdist worker reports it in its ``workeroutput`` too: the controller
     collects nothing itself, so it learns only what the workers report.
     """
-    config.stash[_DESELECTION] = deselection
+    config.stash[_DESELECTION] = count
     if hasattr(config, "workeroutput"):
-        config.workeroutput[_WORKER_OUTPUT_KEY] = asdict(deselection)
+        config.workeroutput[_WORKER_OUTPUT_KEY] = count
 
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node, error) -> None:
-    """pytest-xdist hook, on the controller: keep what a finished worker deselected.
+    """pytest-xdist hook, on the controller: keep the most any finished worker deselected.
 
-    Every worker collects the same items and deselects the same ones, so any one
-    worker's report is the run's.
+    Workers usually collect and deselect the same tests; the most is what the summary
+    names when they do not (``--dist each`` across Python versions).
     """
-    if reported := getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY):
-        # Field by field: a worker on another version of the plugin may send other keys.
-        node.config.stash[_DESELECTION] = _Deselection(count=reported.get("count", 0))
+    reported = getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY)
+    if isinstance(reported, int):
+        config = node.config
+        config.stash[_DESELECTION] = max(reported, config.stash.get(_DESELECTION, 0))
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -445,8 +448,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     status, and any may still set a failure of its own; the hooks' ``exitstatus``
     argument, and so pytest's own summary ("no tests ran"), stays pytest's 5.
     """
-    deselection = session.config.stash.get(_DESELECTION, None)
-    if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.count:
+    if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and session.config.stash.get(_DESELECTION, 0):
         session.exitstatus = ExitCode.OK
 
 
@@ -455,10 +457,10 @@ def pytest_terminal_summary(terminalreporter, config: Config) -> None:
 
     Not under ``-qq``, which asks for no more than pytest's own summary.
     """
-    deselection = config.stash.get(_DESELECTION, None)
-    if deselection and config.get_verbosity() > -2:
-        tests = "test" if deselection.count == 1 else "tests"
-        terminalreporter.write_line(f"pytest-impacted: {deselection.count} {tests} {NOT_IMPACTED}, deselected")
+    count = config.stash.get(_DESELECTION, 0)
+    if count and config.get_verbosity() > -2:
+        tests = "test" if count == 1 else "tests"
+        terminalreporter.write_line(f"pytest-impacted: {count} {tests} {NOT_IMPACTED}, deselected")
 
 
 def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_dir: Path) -> set[pytest.Item]:
