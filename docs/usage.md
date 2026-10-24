@@ -26,7 +26,7 @@ Tests no change impacts are **deselected**, as `-k` and `-m` deselect theirs: th
 
 A run whose changes impact no test, such as a docs-only commit, exits with status 0. pytest itself exits with status 5 when no test runs; that still happens when the plugin is not what left the run empty (`-k` deselecting the rest, or no tests collected at all).
 
-To mark them skipped instead, as releases before 0.36 did, pass `--impacted-unimpacted=skip` (ini: `impacted_unimpacted = "skip"`). Each then reports `SKIPPED (not impacted by the changes)`. `--impacted-unimpacted=deselect` restores the default when the ini says `skip`.
+To mark them skipped instead, as releases up to 0.35 did, pass `--impacted-unimpacted=skip` (ini: `impacted_unimpacted = "skip"`). Each then reports `SKIPPED (not impacted by the changes)`. `--impacted-unimpacted=deselect` restores the default when the ini says `skip`.
 
 ## Git Modes
 

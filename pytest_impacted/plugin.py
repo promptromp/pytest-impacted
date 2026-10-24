@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
@@ -206,7 +206,7 @@ def pytest_addoption(parser: Parser):
         choices=[action.value for action in Unimpacted],
         help=(
             "What to do with the tests no change impacts: 'deselect' them (the default), or mark "
-            + "them 'skip'ped, as releases before 0.36 did."
+            + "them 'skip'ped, as releases up to 0.35 did."
         ),
     )
     parser.addini(
@@ -289,11 +289,13 @@ def pytest_report_header(config: Config) -> list[str]:
     return lines
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(session, config, items):
     """pytest hook to modify the collected test items.
 
     This is called after the tests have been collected and before
-    they are run.
+    they are run. Last, after ``-k`` and ``-m``: whether this plugin is what left
+    the run without tests decides its exit status (``pytest_sessionfinish``).
 
     """
     get_option = partial(get_option_from_config, config)
@@ -349,56 +351,54 @@ def pytest_collection_modifyitems(session, config, items):
         for item in unimpacted:
             item.add_marker(pytest.mark.skip(reason=NOT_IMPACTED))
     elif unimpacted:
-        _deselect(config, items, unimpacted)
+        config.hook.pytest_deselected(items=unimpacted)
+        items[:] = [item for item in items if item in impacted_items]
+        _record(config, _Deselection(count=len(unimpacted), emptied=not items))
 
 
-def _deselect(config: Config, items: list[pytest.Item], unimpacted: list[pytest.Item]) -> None:
-    """Deselect *unimpacted*, and record it for the exit status and the summary.
+def _record(config: Config, deselection: _Deselection) -> None:
+    """Keep *deselection* for the exit status and the summary.
 
-    A pytest-xdist worker records it in its ``workeroutput`` too: the controller
+    A pytest-xdist worker reports it in its ``workeroutput`` too: the controller
     collects nothing itself, so it learns only what the workers report.
     """
-    config.hook.pytest_deselected(items=unimpacted)
-    deselected = set(unimpacted)
-    items[:] = [item for item in items if item not in deselected]
-    deselection = _Deselection(count=len(unimpacted), emptied=not items)
     config.stash[_DESELECTION] = deselection
     if hasattr(config, "workeroutput"):
-        config.workeroutput[_WORKER_OUTPUT_KEY] = (deselection.count, deselection.emptied)
+        config.workeroutput[_WORKER_OUTPUT_KEY] = asdict(deselection)
 
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node, error) -> None:
-    """pytest-xdist hook, on the controller: merge what a finished worker deselected.
+    """pytest-xdist hook, on the controller: keep what a finished worker deselected.
 
-    Every worker collects the same items and deselects the same ones, so the count
-    is any one worker's, not their sum.
+    Every worker collects the same items and deselects the same ones, so any one
+    worker's report is the run's.
     """
-    reported = getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY)
-    if reported is None:
-        return
-    count, emptied = reported
-    config = node.config
-    if previous := config.stash.get(_DESELECTION, None):
-        count, emptied = max(count, previous.count), emptied or previous.emptied
-    config.stash[_DESELECTION] = _Deselection(count=count, emptied=emptied)
+    if reported := getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY):
+        node.config.stash[_DESELECTION] = _Deselection(**reported)
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session) -> None:
     """A run this plugin left with no tests passes, as one skipping every test does.
 
     pytest exits 5 when no test runs, so deselecting every test would fail a run whose
     changes impact nothing, such as a docs-only commit. Only a run *this plugin*
-    emptied: one emptied by ``-k``, or with no tests at all, still exits 5.
+    emptied: one emptied by ``-k``, or with no tests at all, still exits 5. Last, and
+    from ``session.exitstatus``: a status another plugin set here is kept.
     """
     deselection = session.config.stash.get(_DESELECTION, None)
-    if exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.emptied:
+    if session.exitstatus == ExitCode.NO_TESTS_COLLECTED and deselection and deselection.emptied:
         session.exitstatus = ExitCode.OK
 
 
-def pytest_terminal_summary(terminalreporter, exitstatus: int, config: Config) -> None:
-    """Say how many tests were deselected as not impacted; pytest-xdist's summary omits it."""
-    if deselection := config.stash.get(_DESELECTION, None):
+def pytest_terminal_summary(terminalreporter, config: Config) -> None:
+    """Say how many tests were deselected as not impacted; pytest-xdist's summary omits it.
+
+    Not under ``-qq``, which asks for no more than pytest's own summary.
+    """
+    deselection = config.stash.get(_DESELECTION, None)
+    if deselection and config.get_verbosity() > -2:
         tests = "test" if deselection.count == 1 else "tests"
         terminalreporter.write_line(f"pytest-impacted: {deselection.count} {tests} {NOT_IMPACTED}, deselected")
 

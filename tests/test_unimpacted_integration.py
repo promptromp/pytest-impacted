@@ -1,7 +1,7 @@
 """End-to-end tests for what happens to tests no change impacts: deselected, or skipped.
 
 They are deselected by default (pytest's idiom: ``-k`` and ``-m`` do the same), and
-``--impacted-unimpacted=skip`` marks them skipped instead, as releases before 0.36 did.
+``--impacted-unimpacted=skip`` marks them skipped instead, as releases up to 0.35 did.
 A run that deselects every test exits 0, as one that skips every test does: a change that
 impacts nothing is no failure, while pytest exits 5 when no test runs.
 """
@@ -86,13 +86,48 @@ def test_without_impacted_nothing_is_deselected(project):
     result.stdout.no_fnmatch_line("*pytest-impacted: * deselected*")
 
 
-def test_a_run_another_filter_empties_still_exits_5(project):
-    """Only a run *this plugin* emptied exits 0: ``-k`` deselecting the rest is pytest's business."""
-    edit(project, "app/a.py")
+@pytest.mark.parametrize("edited", ["app/a.py", "docs/notes.md"], ids=["impacting_one", "impacting_none"])
+@pytest.mark.parametrize("args", [[], ["--impacted-unimpacted=skip"]], ids=["deselect", "skip"])
+def test_a_run_another_filter_empties_still_exits_5(project, edited, args):
+    """Only a run *this plugin* emptied exits 0: a ``-k`` that matches nothing is a mistake to report.
 
-    result = run(project, "-k", "no_such_test")
+    Also when the changes impact nothing, whichever of the two filters pytest runs first.
+    """
+    edit(project, edited)
+
+    result = run(project, "-k", "no_such_test", *args)
 
     assert result.ret == ExitCode.NO_TESTS_COLLECTED
+
+
+def test_only_tests_left_by_k_are_deselected(project):
+    """``-k`` keeps ``test_b``, which nothing impacts: deselecting it empties the run, which passes."""
+    edit(project, "app/a.py")
+
+    result = run(project, "-k", "test_b")
+
+    assert result.ret == ExitCode.OK
+    result.assert_outcomes(deselected=2)
+    result.stdout.fnmatch_lines([NOT_IMPACTED])
+
+
+def test_a_failure_another_plugin_reports_is_kept(make_git_project):
+    """A conftest setting a failing status in ``pytest_sessionfinish`` must not be turned into 0."""
+    project = make_git_project(
+        {**FILES, "conftest.py": "def pytest_sessionfinish(session):\n    session.exitstatus = 3\n"}, INI
+    )
+    edit(project, "docs/notes.md")
+
+    assert run(project).ret == 3
+
+
+def test_qq_hides_the_summary_line(project):
+    edit(project, "app/a.py")
+
+    result = project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-qq")
+
+    assert result.ret == ExitCode.OK
+    result.stdout.no_fnmatch_line("*pytest-impacted:*deselected*")
 
 
 def test_a_suite_without_tests_still_exits_5(make_git_project):
