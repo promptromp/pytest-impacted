@@ -1,10 +1,11 @@
 """The pytest settings the ``impacted-tests`` CLI reads, from the file pytest would read them from.
 
 The CLI must not build a pytest ``Config`` to ask it: that imports the initial conftests,
-and analysis never runs project code. So this mirrors pytest 9's search
+and analysis never runs project code. So this mirrors the installed pytest's search
 (``_pytest.config.findpaths``) instead: the first directory, from the start up, holding a
 file with pytest configuration, in pytest's order of names; a ``pyproject.toml`` without
-any only if nothing else is found. ``tests/test_ini.py`` holds it to pytest's own answer.
+any only if nothing else is found. Where pytest 8.1, 9 and 9.2 changed the rules, a
+version gate follows them. ``tests/test_ini.py`` holds it to pytest's own answer.
 """
 
 import os
@@ -20,6 +21,9 @@ import pytest
 # pytest.toml and native TOML (``[tool.pytest]``) are new in pytest 9; pytest 8 reads neither.
 PYTEST_9 = pytest.version_tuple >= (9,)
 PYTEST_8_1 = pytest.version_tuple >= (8, 1)
+# pytest 9.2 refuses a -c file it has no loader for, reads a -c TOML file's [pytest] table,
+# and refuses options outside the [pytest] table of a pytest.toml.
+PYTEST_9_2 = pytest.version_tuple >= (9, 2)
 CONFIG_NAMES = (
     *(("pytest.toml", ".pytest.toml") if PYTEST_9 else ()),
     "pytest.ini",
@@ -104,17 +108,20 @@ def find_pytest_config(start: Path) -> PytestConfig:
 def load_pytest_config(path: Path) -> PytestConfig:
     """The configuration of the file named by ``-c``, which pytest reads even without a pytest section."""
     path = Path(os.path.abspath(path))
+    # A path that is no regular file (/dev/null) holds no configuration, and is no error.
+    if PYTEST_9_2 and path.suffix not in _LOADERS and os.path.isfile(path):
+        supported = ", ".join(sorted(_LOADERS))
+        raise ValueError(f"Config file '{path}' has an unsupported format. Supported extensions are: {supported}.")
     return _load(path) or PytestConfig(path=path)
 
 
 def _load(path: Path) -> PytestConfig | None:
     """*path*'s pytest configuration, or ``None`` if it has none (pytest's ``load_config_dict_from_file``)."""
-    if path.suffix == ".toml":
-        return _load_toml(path)
-    if path.suffix == ".cfg":
-        return _load_cfg(path)
-    if path.suffix != ".ini":
-        return None  # pytest reads no other kind of file
+    loader = _LOADERS.get(path.suffix)
+    return loader(path) if loader else None  # pytest reads no other kind of file
+
+
+def _load_ini(path: Path) -> PytestConfig | None:
     sections = iniconfig.IniConfig(str(path))
     if "pytest" in sections:
         return PytestConfig(path, dict(sections["pytest"].items()))
@@ -139,7 +146,21 @@ def _load_toml(path: Path) -> PytestConfig | None:
         raise ValueError(f"{path}: {err}") from err  # as pytest names the file
     if PYTEST_9 and path.name in ("pytest.toml", ".pytest.toml"):
         # Like a pytest.ini, the configuration even when empty.
-        return PytestConfig(path, _table(document, "pytest", path), native=True)
+        return PytestConfig(path, _pytest_table(document, path) or {}, native=True)
+    config = _tool_pytest(document, path)
+    if not PYTEST_9_2 or path.name == "pyproject.toml":
+        return config
+    # Named by -c: since pytest 9.2 read as a pytest.toml when it has no [tool.pytest] tables.
+    if config is None:
+        table = _pytest_table(document, path)
+        return None if table is None else PytestConfig(path, table, native=True)
+    if "pytest" in document:
+        raise ValueError(f"{path}: Cannot use both [pytest] and [tool.pytest]/[tool.pytest.ini_options] in one file.")
+    return config
+
+
+def _tool_pytest(document: dict, path: Path) -> PytestConfig | None:
+    """The configuration in the ``[tool.pytest]`` tables, or ``None`` (pytest's ``_config_from_tool_pytest``)."""
     tool = _table(_table(document, "tool", path), "pytest", path)
     native = {key: value for key, value in tool.items() if key != "ini_options"} if PYTEST_9 else {}
     ini_mode = tool.get("ini_options")
@@ -152,6 +173,23 @@ def _load_toml(path: Path) -> PytestConfig | None:
     if ini_mode is None:
         return None
     return PytestConfig(path, ini_mode)
+
+
+def _pytest_table(document: dict, path: Path) -> dict | None:
+    """The ``[pytest]`` table, or ``None`` (pytest's ``_config_from_pytest_table``)."""
+    if "pytest" in document:
+        return _table(document, "pytest", path)
+    stray = [key for key, value in document.items() if not isinstance(value, dict)]
+    if PYTEST_9_2 and stray:
+        # The usual way of getting the table wrong: pytest 9.2 says so, rather than read nothing.
+        raise ValueError(
+            f"{path}: pytest configuration must be under a [pytest] table (found top-level options: {', '.join(stray)})"
+        )
+    return None
+
+
+# pytest's loaders by suffix; within one, a file's name (pytest.toml, pyproject.toml) picks its rules.
+_LOADERS = {".cfg": _load_cfg, ".ini": _load_ini, ".toml": _load_toml}
 
 
 def _table(document: dict, key: str, path: Path) -> dict:

@@ -14,6 +14,11 @@ from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_co
 
 PYTEST_9 = int(pytest.__version__.split(".")[0]) >= 9
 needs_pytest_9 = pytest.mark.skipif(not PYTEST_9, reason="pytest.toml and [tool.pytest] are new in pytest 9")
+PYTEST_9_2 = pytest.version_tuple >= (9, 2)
+needs_pytest_9_2 = pytest.mark.skipif(not PYTEST_9_2, reason="pytest 9.2 changed how -c files and pytest.toml read")
+before_pytest_9_2 = pytest.mark.skipif(PYTEST_9_2, reason="pytest 9.2 changed how -c files and pytest.toml read")
+# What pytest's getini raises for a value of the wrong type: a usage error since pytest 9.2.
+PYTEST_REJECTS = pytest.UsageError if PYTEST_9_2 else TypeError
 
 # The same three settings, one per type the plugin declares: a string, a bool and "args".
 INI_LINES = (
@@ -159,7 +164,7 @@ def test_native_toml_values_must_have_their_type_as_in_pytest(pytester, line, re
 
     with pytest.raises(ValueError, match="expected a"):
         read(find_pytest_config(pytester.path), name)
-    with pytest.raises(TypeError):
+    with pytest.raises(PYTEST_REJECTS):
         pytester.parseconfig(pytester.path).getini(name)
 
 
@@ -171,6 +176,7 @@ def test_dot_dot_in_the_start_is_resolved_as_pytest_resolves_it(pytester):
     assert find_pytest_config(start).path == pytester.parseconfig(start).inipath
 
 
+@before_pytest_9_2
 def test_a_named_file_of_another_kind_has_no_settings(pytester):
     """pytest reads a ``-c`` file only by its suffix: ``ci.conf`` holds nothing it reads."""
     write(pytester.path, {"ci.conf": "[pytest]\nimpacted_module = app\n"})
@@ -178,6 +184,130 @@ def test_a_named_file_of_another_kind_has_no_settings(pytester):
     ours = load_pytest_config(pytester.path / "ci.conf").string("impacted_module")
 
     assert ours == pytester.parseconfig("-c", "ci.conf").getini("impacted_module")
+
+
+@needs_pytest_9_2
+def test_a_named_file_of_another_kind_is_an_error_as_in_pytest(pytester):
+    write(pytester.path, {"ci.conf": "[pytest]\nimpacted_module = app\n"})
+
+    with pytest.raises(ValueError, match=r"ci.conf' has an unsupported format"):
+        load_pytest_config(pytester.path / "ci.conf")
+    with pytest.raises(pytest.UsageError, match="unsupported format"):
+        pytester.parseconfig("-c", "ci.conf")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs /dev/null")
+def test_a_named_path_that_is_no_regular_file_has_no_settings(pytester):
+    """``-c /dev/null`` is how to ask pytest for no configuration: no error, even in pytest 9.2."""
+    ours = load_pytest_config(os.devnull)
+    theirs = pytester.parseconfig("-c", os.devnull)
+
+    assert (ours.path, ours.values) == (theirs.inipath, {})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("[tool.pytest.ini_options]\n" + TOML_INI_MODE, id="tool.pytest.ini_options"),
+        pytest.param("[tool.pytest]\n" + TOML_NATIVE, id="tool.pytest", marks=needs_pytest_9),
+        pytest.param("[pytest]\n" + TOML_NATIVE, id="pytest", marks=needs_pytest_9_2),
+    ],
+)
+def test_a_named_toml_file_reads_as_pytest_reads_it(pytester, text):
+    """A ``-c`` TOML file of another name than pytest's own: its ``[pytest]`` table too, since pytest 9.2."""
+    write(pytester.path, {"ci.toml": text})
+
+    ours = load_pytest_config(pytester.path / "ci.toml")
+    theirs = pytester.parseconfig("-c", "ci.toml")
+
+    assert ours.path == theirs.inipath
+    for name, read in SETTINGS:
+        assert read(ours, name) == theirs.getini(name), name
+
+
+@needs_pytest_9_2
+def test_a_named_toml_file_s_pytest_table_has_native_types_as_in_pytest(pytester):
+    """Read as a ``pytest.toml`` is: a string where a bool belongs is an error, not converted."""
+    write(pytester.path, {"ci.toml": '[pytest]\nimpacted_conftest_imports = "true"\n'})
+
+    with pytest.raises(ValueError, match="expected a bool"):
+        load_pytest_config(pytester.path / "ci.toml").flag("impacted_conftest_imports")
+    with pytest.raises(pytest.UsageError, match="expects a bool"):
+        pytester.parseconfig("-c", "ci.toml").getini("impacted_conftest_imports")
+
+
+@needs_pytest_9_2
+@pytest.mark.parametrize(
+    "tables",
+    ["[tool.pytest]\nminversion = '9'\n", "[tool.pytest.ini_options]\nminversion = '9'\n"],
+    ids=["tool.pytest", "tool.pytest.ini_options"],
+)
+def test_a_named_toml_file_with_both_styles_is_an_error_as_in_pytest(pytester, tables):
+    write(pytester.path, {"ci.toml": "[pytest]\nimpacted_module = 'app'\n" + tables})
+
+    with pytest.raises(ValueError, match=r"Cannot use both \[pytest\]"):
+        load_pytest_config(pytester.path / "ci.toml")
+    with pytest.raises(pytest.UsageError, match="Cannot use both"):
+        pytester.parseconfig("-c", "ci.toml")
+
+
+def test_a_pyproject_named_reads_no_pytest_table_as_in_pytest(pytester):
+    """A file's name wins over its suffix: ``-c pyproject.toml`` reads only the ``[tool.pytest]`` tables."""
+    write(pytester.path, {"ci/pyproject.toml": "[pytest]\nimpacted_module = 'app'\n"})
+
+    ours = load_pytest_config(pytester.path / "ci/pyproject.toml").string("impacted_module")
+
+    assert ours == pytester.parseconfig("-c", "ci/pyproject.toml").getini("impacted_module")
+
+
+@needs_pytest_9_2
+@pytest.mark.parametrize(
+    ("files", "args"),
+    [
+        pytest.param({"pytest.toml": "impacted_module = 'app'\n"}, (), id="pytest.toml"),
+        pytest.param({".pytest.toml": "impacted_module = 'app'\n"}, (), id=".pytest.toml"),
+        pytest.param({"ci.toml": "impacted_module = 'app'\n"}, ("-c", "ci.toml"), id="named"),
+    ],
+)
+def test_options_outside_the_pytest_table_are_an_error_as_in_pytest(pytester, files, args):
+    """The usual way of getting the table wrong; pytest 9.2 says so rather than read nothing."""
+    write(pytester.path, files)
+    path = pytester.path / next(iter(files))
+
+    with pytest.raises(ValueError, match=r"must be under a \[pytest\] table.*impacted_module"):
+        load_pytest_config(path) if args else find_pytest_config(pytester.path)
+    with pytest.raises(pytest.UsageError, match="must be under a"):
+        pytester.parseconfig(*args, pytester.path)
+
+
+@needs_pytest_9
+@before_pytest_9_2
+@pytest.mark.parametrize(
+    ("files", "args"),
+    [
+        pytest.param({"pytest.toml": "impacted_module = 'app'\n"}, (), id="pytest.toml_top_level"),
+        pytest.param({"ci.toml": "impacted_module = 'app'\n"}, ("-c", "ci.toml"), id="named_top_level"),
+        pytest.param({"ci.toml": "[pytest]\nimpacted_module = 'app'\n"}, ("-c", "ci.toml"), id="named_pytest_table"),
+    ],
+)
+def test_a_toml_file_s_options_outside_tool_pytest_are_not_read_before_pytest_9_2(pytester, files, args):
+    write(pytester.path, files)
+    path = pytester.path / next(iter(files))
+
+    ours = (load_pytest_config(path) if args else find_pytest_config(pytester.path)).string("impacted_module")
+
+    assert ours == pytester.parseconfig(*args, pytester.path).getini("impacted_module")
+
+
+@pytest.mark.parametrize("name", ["pytest.toml", "ci.toml"])
+def test_a_toml_file_with_other_tables_only_has_no_settings_as_in_pytest(pytester, name):
+    """Only top-level *options* are refused: a table pytest does not read is no mistake."""
+    write(pytester.path, {name: "[tool.other]\nx = 1\n"})
+
+    ours = load_pytest_config(pytester.path / name)
+
+    assert ours.values == {}
+    assert ours.path == pytester.parseconfig("-c", name).inipath
 
 
 def test_a_pytest_section_in_setup_cfg_is_an_error_as_in_pytest(pytester):
@@ -195,7 +325,7 @@ def test_a_native_list_of_other_than_strings_is_an_error_as_in_pytest(pytester):
 
     with pytest.raises(ValueError, match="list of strings"):
         find_pytest_config(pytester.path).args("impacted_invalidate_all")
-    with pytest.raises(TypeError):
+    with pytest.raises(PYTEST_REJECTS):
         pytester.parseconfig(pytester.path).getini("impacted_invalidate_all")
 
 
