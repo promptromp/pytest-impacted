@@ -12,7 +12,8 @@ import pytest
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
 
 
-PYTEST_9 = int(pytest.__version__.split(".")[0]) >= 9
+# The tests' own version gates, not ini.py's: a gate moved there by mistake must fail a test here.
+PYTEST_9 = pytest.version_tuple >= (9,)
 needs_pytest_9 = pytest.mark.skipif(not PYTEST_9, reason="pytest.toml and [tool.pytest] are new in pytest 9")
 PYTEST_9_2 = pytest.version_tuple >= (9, 2)
 needs_pytest_9_2 = pytest.mark.skipif(not PYTEST_9_2, reason="pytest 9.2 changed how -c files and pytest.toml read")
@@ -97,6 +98,42 @@ def test_the_file_found_is_the_one_pytest_finds(pytester, files, start):
     directory.mkdir(exist_ok=True)
 
     assert find_pytest_config(directory).path == pytester.parseconfig(directory).inipath
+
+
+@needs_pytest_9
+@pytest.mark.parametrize(
+    ("files", "error"),
+    [
+        pytest.param({"pyproject.toml": "this is = not [toml"}, pytest.UsageError, id="unparsable_pyproject"),
+        pytest.param(
+            {"pyproject.toml": "[tool.pytest]\nminversion = '9'\n[tool.pytest.ini_options]\nminversion = '9'\n"},
+            pytest.UsageError,
+            id="both_pyproject_tables",
+        ),
+        pytest.param({"setup.cfg": "[pytest]\nimpacted_module = x\n"}, pytest.fail.Exception, id="setup.cfg_pytest"),
+        pytest.param(
+            {".pytest.toml": "impacted_module = 'x'\n"},
+            pytest.UsageError,
+            id="top_level_options",
+            marks=needs_pytest_9_2,
+        ),
+    ],
+)
+def test_an_error_in_a_file_after_the_one_read_is_an_error_as_in_pytest(pytester, files, error):
+    """pytest 9 loads the directory's later files too, to report them as ignored: their errors fail the run."""
+    write(pytester.path, {"pytest.toml": "[pytest]\nimpacted_module = 'app'\n", **files})
+
+    with pytest.raises(ValueError, match=next(iter(files))):
+        find_pytest_config(pytester.path)
+    with pytest.raises(error):
+        pytester.parseconfig(pytester.path)
+
+
+@pytest.mark.skipif(PYTEST_9, reason="pytest 9 loads a directory's later files too")
+def test_a_file_after_the_one_read_is_not_read_before_pytest_9(pytester):
+    write(pytester.path, {"pytest.ini": "[pytest]\nimpacted_module = app\n", "pyproject.toml": "this is = not [toml"})
+
+    assert find_pytest_config(pytester.path).path == pytester.parseconfig(pytester.path).inipath
 
 
 def test_an_unset_setting_is_none(pytester):
@@ -245,7 +282,7 @@ def test_a_named_toml_file_s_pytest_table_has_native_types_as_in_pytest(pytester
 def test_a_named_toml_file_with_both_styles_is_an_error_as_in_pytest(pytester, tables):
     write(pytester.path, {"ci.toml": "[pytest]\nimpacted_module = 'app'\n" + tables})
 
-    with pytest.raises(ValueError, match=r"Cannot use both \[pytest\]"):
+    with pytest.raises(ValueError, match=r"Cannot use both \[pytest\].* in the same file"):
         load_pytest_config(pytester.path / "ci.toml")
     with pytest.raises(pytest.UsageError, match="Cannot use both"):
         pytester.parseconfig("-c", "ci.toml")

@@ -93,12 +93,17 @@ def find_pytest_config(start: Path) -> PytestConfig:
     # abspath, not Path.absolute(): it drops ``..``, so ``b/../sib`` walks up from ``sib``.
     start = Path(os.path.abspath(start))
     for directory in (start, *start.parents):
-        for name in CONFIG_NAMES:
+        for index, name in enumerate(CONFIG_NAMES):
             path = directory / name
             # os.path, not Path.is_file(): that raises inside a listable but unsearchable directory.
             if not os.path.isfile(path):
                 continue
             if (config := _load(path)) is not None:
+                if PYTEST_9:
+                    # pytest 9 loads the later files too, to report them as ignored: their errors fail the run.
+                    for later in CONFIG_NAMES[index + 1 :]:
+                        if os.path.isfile(directory / later):
+                            _load(directory / later)
                 return config
             # pytest 8.1 made a pyproject.toml without pytest settings the configuration, as a last resort.
             fallback = fallback or (path if name == "pyproject.toml" and PYTEST_8_1 else None)
@@ -155,7 +160,11 @@ def _load_toml(path: Path) -> PytestConfig | None:
         table = _pytest_table(document, path)
         return None if table is None else PytestConfig(path, table, native=True)
     if "pytest" in document:
-        raise ValueError(f"{path}: Cannot use both [pytest] and [tool.pytest]/[tool.pytest.ini_options] in one file.")
+        raise ValueError(
+            f"{path}: Cannot use both [pytest] and [tool.pytest]/[tool.pytest.ini_options] in the same file. "
+            "Please use [pytest], which is what pytest's own configuration files use; "
+            "the [tool.pytest] tables are meant for pyproject.toml."
+        )
     return config
 
 
