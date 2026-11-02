@@ -362,6 +362,31 @@ def test_a_named_configuration_it_cannot_read_is_a_usage_error(calls):
     assert "ci.toml" in result.output
 
 
+needs_pytest_9_2 = pytest.mark.skipif(pytest.version_tuple < (9, 2), reason="pytest 9.2 changed how -c files read")
+
+
+@needs_pytest_9_2
+def test_a_named_file_of_a_kind_pytest_refuses_is_a_usage_error(calls):
+    write_config("[pytest]\nimpacted_module = app\n", name="ci.conf")
+
+    result = invoke("-c", "ci.conf")
+
+    assert result.exit_code == 2, result.output
+    assert "ci.conf' has an unsupported format" in result.output
+
+
+@needs_pytest_9_2
+def test_a_named_toml_file_s_pytest_table_is_read(calls):
+    """As pytest 9.2 reads it, as in a ``pytest.toml``: passed over, its settings would be lost."""
+    run, _ = calls
+    write_config("[pytest]\nimpacted_module = 'app'\n", name="ci.toml")
+
+    result = invoke("-c", "ci.toml")
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["ns_module"] == "app"
+
+
 class _Demo:
     config_options: ClassVar[list[ConfigOption]] = [
         ConfigOption(name="threshold", help="Minimum", type=int, default=80)
