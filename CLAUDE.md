@@ -320,8 +320,11 @@ mirrors the installed pytest's search and conversions instead, and `tests/test_i
 `pytester.parseconfig` for every file format and precedence rule — when pytest changes how it
 finds or reads configuration, that test is what notices. Each change is followed behind a
 version gate (`PYTEST_8_1`, `PYTEST_9`, `PYTEST_9_2`), never by dropping the old rule: the
-package supports pytest 8.0 and later, and CI runs only the locked pytest, so run `test_ini.py`
-and `test_cli_config.py` under the older ones too (`uv run --with pytest==9.1.1 …`). An option takes its setting only when
+package supports pytest 8.0 and later. The gates sit in pytest's own two tables, loaders by file
+name and then by suffix (`_BY_NAME`, `_BY_SUFFIX`), one loader per pytest function — a rule
+threaded through name checks inside suffix loaders is how two of them were missed. The test job
+runs only the locked pytest; CI's `config-parity` job runs `test_ini.py` and `test_cli_config.py`
+under older ones, so add a version there when a new gate needs one. An option takes its setting only when
 `ctx.get_parameter_source` says the command line left it at its default (`cli._settings`).
 The root stays `--root-dir` (default `.`), as for `pytest --rootdir`, never the file's directory:
 moving it reinterprets an explicit `--module` (two review rounds oscillated on this).

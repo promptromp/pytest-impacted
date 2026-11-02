@@ -82,6 +82,8 @@ def test_each_format_reads_as_pytest_reads_it(pytester, files):
         pytest.param({"tox.ini": "[pytest]\n", "setup.cfg": "[tool:pytest]\n"}, ".", id="tox_before_setup.cfg"),
         pytest.param({"tox.ini": "[tox]\n", "setup.cfg": "[tool:pytest]\n"}, ".", id="tox.ini_without_pytest"),
         pytest.param({"pytest.ini": "", "tox.ini": "[pytest]\n"}, ".", id="an_empty_pytest.ini_counts"),
+        # Since pytest 9; pytest 8 passes an empty .pytest.ini over, as a tox.ini without [pytest].
+        pytest.param({"tox.ini": "[pytest]\n", "sub/.pytest.ini": ""}, "sub", id="an_empty_.pytest.ini"),
         pytest.param({"pytest.ini": "[pytest]\n", "sub/tox.ini": "[pytest]\n"}, "sub", id="the_nearest_directory"),
         pytest.param(
             {"pytest.ini": "[pytest]\n", "sub/pyproject.toml": "[project]\nname = 'x'\n"},
