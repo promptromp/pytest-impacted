@@ -92,41 +92,12 @@ jobs:
       run: uv sync --all-extras --dev
     - name: Run tests
       run: uv run pytest
-
-  # The CLI's config reader (ini.py) follows the installed pytest behind version gates, and the
-  # test job runs only the locked pytest: this runs its tests under the older ones it supports.
-  config-parity:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        pytest: ["8.0.*", "8.4.*", "9.0.*", "9.1.*"]
-
-    name: config parity (pytest ${{ matrix.pytest }})
-    steps:
-    - uses: actions/checkout@v7
-    - name: Install uv and set the python version
-      id: setup-uv
-      # Downloading uv sometimes fails with a transient "fetch failed"; retried once below.
-      continue-on-error: true
-      uses: astral-sh/setup-uv@v10.3.3
-      with:
-        python-version: "3.11"
-        version: "latest"
-        enable-cache: true
-    - name: Wait before retrying the uv install
-      if: steps.setup-uv.outcome == 'failure'
-      run: sleep 20
-    - name: Install uv and set the python version (retry)
-      if: steps.setup-uv.outcome == 'failure'
-      uses: astral-sh/setup-uv@v10.3.3
-      with:
-        python-version: "3.11"
-        version: "latest"
-        enable-cache: true
-    - name: Install the project
-      run: uv sync --dev
-    - name: Run the config tests under pytest ${{ matrix.pytest }}
+    # The CLI's config reader (ini.py) follows the installed pytest behind version gates, and the
+    # steps above run only the locked pytest: this reruns its tests under the older ones it supports.
+    - name: Run the config tests under older pytest
+      if: matrix.python-version == '3.11' && matrix.backend == 'python'
       run: |
-        uv run --with "pytest==${{ matrix.pytest }}" python -c "import pytest; print(pytest.__version__); assert pytest.__version__.startswith('${{ matrix.pytest }}'.rstrip('*'))"
-        uv run --with "pytest==${{ matrix.pytest }}" python -m pytest tests/test_ini.py tests/test_cli_config.py
+        for version in "8.0.*" "8.4.*" "9.0.*" "9.1.*"; do
+          uv run --with "pytest==$version" python -c "import pytest; print('pytest', pytest.__version__); assert pytest.__version__.startswith('$version'.rstrip('*'))"
+          uv run --with "pytest==$version" python -m pytest -q tests/test_ini.py tests/test_cli_config.py
+        done

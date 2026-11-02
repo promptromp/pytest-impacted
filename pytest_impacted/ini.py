@@ -84,8 +84,9 @@ def find_pytest_config(start: Path) -> PytestConfig:
     fallback = None
     # abspath, not Path.absolute(): it drops ``..``, so ``b/../sib`` walks up from ``sib``.
     start = Path(os.path.abspath(start))
+    loaders = tuple(_BY_NAME.items())
     for directory in (start, *start.parents):
-        for index, (name, load) in enumerate(_BY_NAME.items()):
+        for index, (name, load) in enumerate(loaders):
             path = directory / name
             # os.path, not Path.is_file(): that raises inside a listable but unsearchable directory.
             if not os.path.isfile(path):
@@ -93,7 +94,7 @@ def find_pytest_config(start: Path) -> PytestConfig:
             if (config := load(path)) is not None:
                 if PYTEST_9:
                     # pytest 9 loads the later files too, to report them as ignored: their errors fail the run.
-                    for later, load_later in list(_BY_NAME.items())[index + 1 :]:
+                    for later, load_later in loaders[index + 1 :]:
                         if os.path.isfile(directory / later):
                             load_later(directory / later)
                 return config
@@ -103,7 +104,11 @@ def find_pytest_config(start: Path) -> PytestConfig:
 
 
 def load_pytest_config(path: Path) -> PytestConfig:
-    """The configuration of the file named by ``-c``, which pytest reads even without a pytest section."""
+    """The configuration of the file named by ``-c``, which pytest reads even without a pytest section.
+
+    A ``ValueError`` where pytest refuses the file: one it cannot parse, and since pytest 9.2 one
+    of a kind it has no loader for (``ci.conf``) or with options outside its ``[pytest]`` table.
+    """
     path = Path(os.path.abspath(path))
     # By its name, else by its suffix (pytest's ``_get_config_loader``).
     if (load := _BY_NAME.get(path.name) or _BY_SUFFIX.get(path.suffix)) is not None:
