@@ -248,7 +248,7 @@ def test_every_plugin_setting_the_cli_has_an_option_for_is_read(_mock_extensions
     pytest_addoption(parser)
     declared = {call.args[0] for call in parser.addini.call_args_list}
 
-    plugin_only = {"impacted", "impacted_unimpacted"}  # the CLI has no session to filter
+    plugin_only = {"impacted", "impacted_unimpacted", "impacted_early_filter"}  # the CLI collects nothing
     assert set(INI_NAMES.values()) == declared - plugin_only
 
 

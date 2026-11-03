@@ -186,6 +186,7 @@ Command-line flags override these defaults. A boolean set to `true` here has no 
 | `--impacted-map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH` — a test file, a module, a `conftest.py` or a directory (repeatable) |
 | `--impacted-conftest-imports` | `false` | Also select every test beneath a `conftest.py` that imports changed *application* code — see [below](#strategy-based-architecture) |
 | `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them (the behaviour up to 0.35) |
+| `--impacted-early-filter` | `false` | Never import the test files no change impacts (faster; opt-in, see the usage guide) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension (see `pytest --help`) |
 
