@@ -684,12 +684,17 @@ def _changes_by_role(
     @cache
     def application_depends_on() -> set[str]:
         # Everything application code reaches through its imports, in one walk up the graph —
-        # its sure imports alone. Two kinds of edge only reach, never place: a changed __init__'s
-        # ``runs_init`` link, and an import found only under an assumed import root.
+        # its sure imports alone. Three kinds of edge only reach, never place: a changed __init__'s
+        # ``runs_init`` link, an import found only under an assumed import root, and one through
+        # pytest's test basedirs (``basedir``: which file it means depends on the collection order).
         sources = [node for node in dep_tree if not dep_tree.nodes[node].get("external") and is_application_file(node)]
         imports = dep_tree
-        if dep_tree.graph.get("runs_init") or dep_tree.graph.get("assumed_roots"):  # few graphs have any to skip
-            imports = nx.subgraph_view(dep_tree, filter_edge=lambda u, v: not _only_reaches(dep_tree.edges[u, v]))
+        graph = dep_tree.graph
+        if graph.get("runs_init") or graph.get("assumed_roots") or graph.get("basedir_edges"):  # few have any to skip
+            # Found once, then hidden by a set lookup: a filter reading every edge's attributes was the walk's cost.
+            imports = nx.restricted_view(
+                dep_tree, [], [(u, v) for u, v, data in dep_tree.edges(data=True) if _only_reaches(data)]
+            )
         return set().union(*nx.bfs_layers(nx.reverse_view(imports), sources))
 
     def is_application_code(module: str) -> bool:
@@ -702,7 +707,7 @@ def _changes_by_role(
 
 def _only_reaches(edge: dict) -> bool:
     """Whether a graph edge links a dependent without saying that application code imports the module."""
-    return bool(edge.get("runs_init") or edge.get("assumed_root"))
+    return bool(edge.get("runs_init") or edge.get("assumed_root") or edge.get("basedir"))
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):

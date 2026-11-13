@@ -9,6 +9,8 @@ from itertools import chain
 from pathlib import Path
 from typing import NamedTuple
 
+from pytest_impacted.parsing import is_conftest_module, is_test_module
+
 
 logger = logging.getLogger(__name__)
 
@@ -259,11 +261,13 @@ def forget_listings() -> None:
     """Drop the cached directory listings the on-disk lookup uses (:func:`locate_module`)."""
     top_level_entries.cache_clear()
     _entries.cache_clear()
+    basedir_of.cache_clear()  # an __init__.py may have come or gone
 
 
 def clear_discovery_cache() -> None:
     """Drop every cached discovery result (see :func:`discover_submodules`)."""
     _discover_submodules.cache_clear()
+    basedir_of.cache_clear()
     installed_top_levels.cache_clear()
     top_level_entries.cache_clear()
     _entries.cache_clear()
@@ -601,6 +605,35 @@ def pythonpath_roots(pythonpath: str | os.PathLike | Iterable[str | os.PathLike]
     return list(dict.fromkeys(entry for entry in resolved if entry.is_relative_to(root) or root.is_relative_to(entry)))
 
 
+def rootless_test_dirs(modules: Mapping[str, str], root: Path) -> list[Path]:
+    """The directories pytest's default import mode puts on ``sys.path``: each test module's or conftest's *basedir*.
+
+    Before importing one of *modules* (name to file) that is a test module or a conftest, pytest's
+    ``prepend`` mode inserts the first directory from its own upward without an ``__init__.py``,
+    and never takes it out: ``import helpers`` then means a ``helpers.py`` there, or in any such
+    directory inserted earlier. Those inside *root* only. A test module is one the project calls
+    one (:func:`~pytest_impacted.parsing.is_test_module`), so a ``python_files`` beyond pytest's
+    default is mostly covered. Under ``--import-mode=importlib`` nothing is inserted, and these only
+    look up more than Python does. Never import roots: only the modules beneath one import from it.
+    """
+    found = dict.fromkeys(
+        basedir_of(os.path.dirname(path))
+        for name, path in modules.items()
+        if is_test_module(name) or is_conftest_module(name)
+    )
+    # pathlib once per directory, not per module.
+    return [Path(directory) for directory in found if Path(directory).is_relative_to(root)]
+
+
+@lru_cache(maxsize=8192)
+def basedir_of(directory: str) -> str:
+    """The first directory from *directory* upward without an ``__init__.py``: the one pytest puts on ``sys.path``."""
+    parent = os.path.dirname(directory)
+    # As pytest's resolve_package_path: a package directory not named as an identifier ends the package too.
+    in_package = os.path.isfile(os.path.join(directory, "__init__.py")) and os.path.basename(directory).isidentifier()
+    return basedir_of(parent) if in_package and parent != directory else directory
+
+
 def split_import_roots(
     packages: Iterable[str],
     modules: Mapping[str, str],
@@ -619,8 +652,8 @@ def split_import_roots(
     another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and so is any
     directory between the rootdir and one of these that is no regular package. So is each of
     pytest's *pythonpath* entries inside the rootdir or above it that is not an assumed root anyway: pytest
-    puts it on ``sys.path``, so ``import awake`` means ``lib/awake.py`` with ``lib`` there, though
-    the walk names it ``lib.awake``. One that is (``src/`` with an ``__init__.py`` above
+    puts it on ``sys.path``, so ``import alpha`` means ``lib/alpha.py`` with ``lib`` there, though
+    the walk names it ``lib.alpha``. One that is (``src/`` with an ``__init__.py`` above
     ``src/app``) stays assumed: placing through it would turn a library the app imports into
     application code, and the conftest importing it opt-in — fewer tests than before it was read.
     It is *certain* though (``graph.build_dep_tree``): every name is looked up there.
@@ -638,7 +671,10 @@ def split_import_roots(
 
     Never a root: a regular package inside the analysed package, which would invent names
     like ``types`` for ``pkg/types.py`` (unless pytest's *pythonpath* names it, which puts it
-    on ``sys.path``); and the directory of a rootless test module, which pytest inserts itself.
+    on ``sys.path``); and a test module's or conftest's basedir (:func:`rootless_test_dirs`).
+    pytest puts that on ``sys.path`` for the modules beneath it, so their imports are looked up
+    there (``graph._Linker.local_targets``) — but as a root, every import of the project was
+    looked up under each such directory.
     """
     root = canonical_root(root_dir)
     packages = list(packages)
@@ -694,7 +730,7 @@ def _directories_above(packages: list[str], root: Path) -> list[Path]:
     ]
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=1024)  # an import root's, and each test basedir's (graph._Linker.local_targets)
 def top_level_entries(directory: Path) -> frozenset[str]:
     """The names of the entries in *directory*; none when it cannot be listed."""
     try:

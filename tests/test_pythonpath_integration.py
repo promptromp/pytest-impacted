@@ -1,9 +1,9 @@
 """End-to-end: a directory on pytest's ``pythonpath`` is an import root.
 
 pytest puts each ``pythonpath`` entry on ``sys.path``, so a flat directory of modules there
-(``lib/awake.py``) is imported by its bare name (``import awake``), while the walk of
-``--impacted-module=lib`` names it ``lib.awake``. Without the entry as an import root, an edit
-to ``lib/awake.py`` selected no test.
+(``lib/alpha.py``) is imported by its bare name (``import alpha``), while the walk of
+``--impacted-module=lib`` names it ``lib.alpha``. Without the entry as an import root, an edit
+to ``lib/alpha.py`` selected no test.
 """
 
 import pytest
@@ -16,11 +16,11 @@ from .git_helpers import edit_file as edit
 
 
 FILES = {
-    "lib/awake.py": "def up():\n    return True\n",
-    "lib/ledger.py": "import awake\n\ndef record():\n    return awake.up()\n",
+    "lib/alpha.py": "def up():\n    return True\n",
+    "lib/beta.py": "import alpha\n\ndef record():\n    return alpha.up()\n",
     "lib/other.py": "def other():\n    return 1\n",
-    "suite/test_awake.py": "import awake\n\ndef test_awake():\n    assert awake.up()\n",
-    "suite/test_ledger.py": "import ledger\n\ndef test_ledger():\n    assert ledger.record()\n",
+    "suite/test_awake.py": "import alpha\n\ndef test_awake():\n    assert alpha.up()\n",
+    "suite/test_ledger.py": "import beta\n\ndef test_ledger():\n    assert beta.record()\n",
     "suite/test_other.py": "import other\n\ndef test_other():\n    assert other.other() == 1\n",
 }
 INI = "[pytest]\npythonpath = lib\nimpacted_module = lib\nimpacted_tests_dir = suite\n"
@@ -38,8 +38,8 @@ def project(make_git_project):
 @pytest.mark.parametrize(
     ("edited", "selected"),
     [
-        pytest.param("lib/awake.py", ["test_awake", "test_ledger"], id="imported_directly_and_through_ledger"),
-        pytest.param("lib/ledger.py", ["test_ledger"], id="imported_directly"),
+        pytest.param("lib/alpha.py", ["test_awake", "test_ledger"], id="imported_directly_and_through_ledger"),
+        pytest.param("lib/beta.py", ["test_ledger"], id="imported_directly"),
     ],
 )
 def test_an_edit_on_the_pythonpath_selects_its_importers(project, edited, selected):
@@ -52,7 +52,7 @@ def test_an_edit_on_the_pythonpath_selects_its_importers(project, edited, select
 
 
 def test_the_cli_reads_the_pythonpath_setting(project):
-    edit(project, "lib/ledger.py")
+    edit(project, "lib/beta.py")
 
     result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(project.path)])
 

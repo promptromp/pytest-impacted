@@ -22,6 +22,7 @@ from pytest_impacted.traversal import (
     _discover_project,
     _Discovered,
     _is_regular_package,
+    basedir_of,
     canonical_root,
     forget_listings,
     import_base,
@@ -30,6 +31,7 @@ from pytest_impacted.traversal import (
     modules_for_files,
     package_name_to_path,
     pythonpath_roots,
+    rootless_test_dirs,
     split_import_roots,
 )
 
@@ -411,6 +413,7 @@ class _Linker:
         root: Path,
         gateways: dict[Path, frozenset[str]] | None = None,
         certain: frozenset[Path] = frozenset(),
+        basedirs: Iterable[Path] = (),
     ):
         self.modules = dict(discovered.modules)
         self.aliases = dict(discovered.aliases)
@@ -425,6 +428,22 @@ class _Linker:
         self._located: dict[str, list[str]] = {}
         self._only_assumed: dict[str, set[str]] = {}
         self._named_by_path: set[str] = set()
+        # Strings: asked once per import of every module, where pathlib would cost more than the lookup.
+        self._basedirs = frozenset(map(str, basedirs))
+        self._local: dict[tuple[tuple[str, ...], str, bool], list[str]] = {}
+        self._disk: dict[tuple[str, str], list[str]] = {}
+        self._chains: dict[str, tuple[str, ...]] = {}
+        self._searched: dict[tuple[str, ...], list[str]] = {}
+        self._root_str = str(root)
+        self._root_prefix = os.path.join(str(root), "")
+        self._implied = frozenset(map(str, roots))
+        # ``{name: [(module, basedir)]}``: each walked module beneath a basedir, by its name from there — not
+        # one the import roots search already (a root conftest makes the rootdir a basedir).
+        self._by_bare: dict[str, list[tuple[str, str]]] = {}
+        for node, path in self.modules.items():
+            for base in self._searched[self.chain_of(path)]:
+                for name in _importable_names(Path(path), [Path(base)]):
+                    self._by_bare.setdefault(name, []).append((node, base))
 
     def activate(self, candidates: Iterable[str]) -> None:
         """Mark active each assumed root that one of *candidates* spells an analysed module from."""
@@ -455,6 +474,74 @@ class _Linker:
         if guessed:
             self._only_assumed[candidate] = set(nodes[len(sure) :])
         return nodes
+
+    def chain_of(self, importer_path: str) -> tuple[str, ...]:
+        """The basedirs from the directory of the module at *importer_path* up to the rootdir, nearest first."""
+        directory = os.path.dirname(importer_path)
+        if (chain := self._chains.get(directory)) is None:
+            found, current = [], directory
+            while current == self._root_str or current.startswith(self._root_prefix):
+                if current in self._basedirs:
+                    found.append(current)
+                if (parent := os.path.dirname(current)) == current:
+                    break
+                current = parent
+            chain = self._chains[directory] = tuple(found)
+            self._searched.setdefault(chain, [base for base in chain if base not in self._implied])
+        return chain
+
+    def looks_locally(self, importer_path: str, candidate: str) -> bool:
+        """Whether :meth:`local_targets` may find anything: a cheap check, asked for every import of every module."""
+        return candidate in self._by_bare or bool(self._searched[self.chain_of(importer_path)])
+
+    def loads_first(self, name: str, path: str) -> bool:
+        """Whether *name* is the root conftest, whose ``pytest_plugins`` pytest imports before any test basedir is
+        on ``sys.path``. Not so its own imports: one inside a fixture runs when the test basedirs are there."""
+        return is_conftest_module(name) and os.path.dirname(path) == self._root_str
+
+    def local_targets(self, importer_path: str, candidate: str, *, above_only: bool = False) -> list[str]:
+        """The modules an import of *candidate* by the module at *importer_path* may mean through pytest's basedirs.
+
+        pytest puts each test module's or conftest's basedir on ``sys.path``
+        (:func:`~pytest_impacted.traversal.rootless_test_dirs`) and never takes it out, and
+        ``sys.modules`` keeps the first module of a name for every later import: so ``import
+        helpers`` anywhere may mean a ``helpers.py`` beneath any of them, whichever came first. So
+        every walked module of that name beneath one (an index, one lookup per name), and a file no
+        walk names beneath a basedir above the importer (a conftest's directory above the package).
+        *above_only*: only beneath those above it — those certainly on ``sys.path`` when it is
+        imported, for the root conftest's ``pytest_plugins`` entries. Under no alias, as no single
+        file is what the name means; edges to them only reach (``basedir``).
+        """
+        chain = self.chain_of(importer_path)
+        searched = self._searched[chain]  # the import roots looked in the others
+        hits = self._by_bare.get(candidate)
+        if (found := self._local.get((chain, candidate, above_only))) is None:
+            found = [node for node, under in hits or () if not above_only or under in chain]
+            for base in searched:
+                found += [node for node in self._on_disk(base, candidate) if node not in found]
+            self._local[chain, candidate, above_only] = found
+        return found
+
+    def _on_disk(self, base: str, candidate: str) -> list[str]:
+        """The modules *candidate* names beneath *base*, a file no walk names joining the graph (once per pair)."""
+        if (found := self._disk.get((base, candidate))) is None:
+            found = [self._local_node(path) for path in locate_module(candidate, [Path(base)], self._root)]
+            self._disk[base, candidate] = found
+        return found
+
+    def _local_node(self, path: str) -> str:
+        """The walk's node for *path*, else an external one named as its path reads from the import roots."""
+        if (node := self._by_path.get(path)) is not None:
+            return node
+        node = _free_name(
+            _importable_names(Path(path), self._by_depth), _last_resort_name(Path(path), self._root), self._taken
+        )
+        self.modules[node] = path
+        self.external.add(node)
+        self._by_path[path] = node
+        # Named as its path reads, never looked up by that name: it may mean another file too (see targets).
+        self._named_by_path.add(node)
+        return node
 
     def only_assumed(self, candidate: str) -> set[str]:
         """Those of *candidate*'s :meth:`targets` that are guesses: found under an assumed import root alone."""
@@ -504,7 +591,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     node, nor is an existing file no walk reaches and nothing imports. Each gets one on
     *dep_tree* — the run's copy, never the cached graph — with an edge to every module
     whose import of one of its names matched nothing (``graph["unresolved"]``; flagged
-    ``assumed_root`` when only a name under an assumed import root matched). A deleted
+    ``assumed_root`` when only a name under an assumed import root matched, ``basedir`` when only one
+    from a test basedir did: see :meth:`_Linker.local_targets`). A deleted
     file nothing imports gets none — unless it is an ``__init__.py`` whose package has importers
     of a missing name (below): nothing else is left for it to impact.
 
@@ -523,6 +611,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     implied, assumed = _import_roots_of(dep_tree, root)
     implied = sorted(implied, key=lambda directory: -len(directory.parts))
     inside = cache(lambda: _importers_inside(unresolved))
+    basedir_of.cache_clear()  # the graph may be cached from before an __init__.py came or went
+    basedir_paths = [Path(directory) for directory in dep_tree.graph.get("rootless_test_dirs", ())]
     added = []
     for file in filenames:
         path = (root / file).resolve()
@@ -539,10 +629,15 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
                 *names,
                 *([node, *(alias for alias, target in aliases.items() if target == node)] if node else []),
             }
+            # And its names from pytest's basedirs: ``import hp.fast`` beneath ``suite/`` runs ``suite/hp/__init__.py``.
+            package |= set(_importable_names(path, _basedirs_of_changed(path, basedir_paths, root)))
             runners = {runner for name in package for runner in inside().get(name, ())}
         if node is None:
             importers = {importer for name in names for importer in unresolved.get(name, ())}
-            if not importers and not runners and not os.path.exists(path):
+            # Through pytest's basedirs, as build_dep_tree links them: these only reach.
+            neighbours = _neighbour_importers(path, unresolved, _basedirs_of_changed(path, basedir_paths, root))
+            neighbours -= importers
+            if not importers and not neighbours and not runners and not os.path.exists(path):
                 continue
             guessed = importers - {importer for name in sure for importer in unresolved.get(name, ())}
             node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
@@ -553,6 +648,9 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
             dep_tree.add_edges_from((node, importer) for importer in importers - guessed)
             dep_tree.add_edges_from(((node, importer) for importer in guessed), assumed_root=True)
+            if neighbours:
+                dep_tree.add_edges_from(((node, importer) for importer in neighbours), basedir=True)
+                dep_tree.graph["basedir_edges"] = True
             by_path[str(path)] = node
             added.append(node)
         # Only to reach them (``runs_init``), never to place the package as application code or test
@@ -561,6 +659,27 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             dep_tree.add_edges_from(((node, runner) for runner in runs), runs_init=True)
             dep_tree.graph["runs_init"] = True
     return added
+
+
+def _basedirs_of_changed(path: Path, basedir_paths: list[Path], root: Path) -> list[Path]:
+    """The test basedirs a changed file is beneath: the graph's, and its own if it looks like test code.
+
+    Its own, as one deleted with the test modules that made it a basedir is in the run's graph no
+    more — but only for a test-looking path (``tests/helpers.py``): a ``scripts/utils.py`` beside no
+    test is in no directory pytest puts on ``sys.path``.
+    """
+    under = [directory for directory in basedir_paths if path.is_relative_to(directory)]
+    # A package's from above it: a deleted __init__.py no longer makes its directory one.
+    own = Path(basedir_of(str(path.parent.parent if path.name == "__init__.py" else path.parent)))
+    parts = module_parts(path.relative_to(root))
+    if own not in under and own.is_relative_to(root) and parts and is_test_module(".".join(parts)):
+        under.append(own)
+    return under
+
+
+def _neighbour_importers(path: Path, unresolved: dict[str, list[str]], basedirs: list[Path]) -> set[str]:
+    """The modules importing *path* by a name from one of the test *basedirs* it is beneath, as build links them."""
+    return {importer for name in _importable_names(path, basedirs) for importer in unresolved.get(name, ())}
 
 
 def _importers_inside(unresolved: dict[str, list[str]]) -> dict[str, set[str]]:
@@ -608,7 +727,16 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
             continue
         edges[name] = []
         for declared in declarations(linker.modules[name]):
-            plugins = linker.targets(declared)
+            # pytest imports a declared plugin by its name, from sys.path: its basedirs too.
+            # A copy: targets() hands out its cache. pytest imports the entry with its declarer, before
+            # other basedirs need be on sys.path: so the declarer's own only.
+            plugins = [*linker.targets(declared)]
+            path = linker.modules[name]
+            plugins += [
+                plugin
+                for plugin in linker.local_targets(path, declared, above_only=linker.loads_first(name, path))
+                if plugin not in plugins
+            ]
             if not plugins:
                 logger.debug(
                     "pytest_plugins entry %r in %s is not a module in the project; not followed", declared, name
@@ -632,9 +760,12 @@ def _parse_project(linker: _Linker) -> tuple[dict[str, list[str]], dict[str, lis
     linker.activate(candidate for candidates in imports.values() for candidate in candidates)
     while True:
         imports |= _parse_all_module_imports({name: path for name, path in pending.items() if name not in imports})
-        for name in pending:
+        for name, path in pending.items():
             for candidate in imports[name]:
                 linker.targets(candidate)
+                # In the fixpoint: what it finds no walk named is parsed in turn.
+                if linker.looks_locally(path, candidate):
+                    linker.local_targets(path, candidate)
         plugin_edges = _pytest_plugin_edges(linker, declarations)
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
@@ -647,10 +778,12 @@ def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: boo
     Whether an assumed root is on ``sys.path`` is a guess, and a bare name matched there may be
     a coincidence: such an edge reaches the importer, but never places the module as application
     code (see ``strategies._changes_by_role``), which could make a conftest rule opt-in — fewer tests.
+    A sure import supersedes that flag, and a ``basedir`` one (see :meth:`_Linker.local_targets`).
     """
     if not guessed:
         digraph.add_edge(importer, module)
         digraph.edges[importer, module].pop("assumed_root", None)
+        digraph.edges[importer, module].pop("basedir", None)
     elif not digraph.has_edge(importer, module):
         digraph.add_edge(importer, module, assumed_root=True)
 
@@ -712,8 +845,10 @@ def build_dep_tree(
         base: frozenset(d.relative_to(base).parts[0] for d in directories if d.is_relative_to(base) and d != base)
         for base in assumed_roots
     }
+    # What pytest puts on sys.path for each test module and conftest (see _Linker.local_targets).
+    basedirs = rootless_test_dirs(discovered.modules, root)
     # One that is on pytest's pythonpath is so for certain: every name is looked up there, its edges still only reach.
-    linker = _Linker(discovered, roots, root, gateways, frozenset(pythonpath))
+    linker = _Linker(discovered, roots, root, gateways, frozenset(pythonpath), basedirs)
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
@@ -721,6 +856,7 @@ def build_dep_tree(
 
     digraph = nx.DiGraph()
     unresolved: dict[str, set[str]] = {}
+    basedir_edges = False
     for name, file_path in linker.modules.items():
         digraph.add_node(name, path=file_path)
         for candidate in imports[name]:
@@ -728,6 +864,13 @@ def build_dep_tree(
             guessed = linker.only_assumed(candidate)
             for target in linker.targets(candidate):
                 _add_import(digraph, name, target, guessed=target in guessed)
+            # Through pytest's basedirs: which file depends on the collection order, and a bare name may be
+            # a coincidence (an app module's ``import helpers``), so these only reach, never place.
+            if linker.looks_locally(file_path, candidate):  # not for most imports of most modules
+                for target in linker.local_targets(file_path, candidate):
+                    if target != name and not digraph.has_edge(name, target):
+                        digraph.add_edge(name, target, basedir=True)
+                        basedir_edges = True
             if _may_name_a_module(candidate, discovered):
                 unresolved.setdefault(candidate, set()).add(name)
         for plugin in plugin_edges.get(name, ()):
@@ -744,6 +887,10 @@ def build_dep_tree(
     # For a changed file the graph lacks — deleted, or created since — see link_changed_files.
     digraph.graph["unresolved"] = {name: sorted(importers) for name, importers in unresolved.items()}
     digraph.graph["import_roots"] = [str(directory) for directory in (*roots, *linker.assumed)]
+    # For a file created or deleted in one of them since (link_changed_files): neighbours import it by its bare name.
+    digraph.graph["rootless_test_dirs"] = [str(directory) for directory in basedirs]
+    if basedir_edges:  # strategies._changes_by_role skips reach-only edges only when a graph has some
+        digraph.graph["basedir_edges"] = True
     digraph.graph["assumed_roots"] = {
         # ``certain`` only when set: a graph without pythonpath entries reads as it always did.
         str(base): {"gateways": sorted(how.gateways), "active": how.active} | ({"certain": True} if how.certain else {})

@@ -108,6 +108,23 @@ and the walks are: respelling them alone in on-disk case (for a case-insensitive
 them disagree with a rootdir or `--impacted-module` typed in another case — fix case once for every
 path, or not at all.
 
+Before importing a test module or conftest, pytest's `prepend` mode puts its *basedir* (the first
+directory upward without an `__init__.py`, or not named as an identifier;
+`traversal.rootless_test_dirs`) on `sys.path` and never takes it out, while `sys.modules` keeps the
+first module of a name for every later import. So any module's bare import may mean that name
+beneath *any* basedir: `_Linker.local_targets` links all through an index (one lookup per name),
+plus a file no walk names beneath a basedir above the importer. Only a root conftest's
+`pytest_plugins` entries see just the basedirs above it, being imported for certain before any
+other is on `sys.path` (across all, every service's `fixtures.py` was a plugin). Its own imports
+see them all: one in a fixture runs at test time, and the source cannot tell it from a module-level
+one — a false positive (a helper edit reaching it, running every test) over a missed test. These
+edges are flagged `basedir` and only
+reach (`graph["basedir_edges"]`): placing, an app module's coincidental `import helpers` made a test
+helper's import application code and a conftest rule opt-in. Never import roots (every unresolved
+import of the project was then looked up under each), nor the importer's own directory alone
+(that missed a helper beside a conftest above, the basedir above a tests package, and the other
+service's helper the session really loaded).
+
 A file found on any root becomes an `external` node, parsed and followed in turn
 (`_parse_project` runs to a fixpoint, `pytest_plugins` entries included). Every candidate the
 *walks* do not define goes into `graph["unresolved"]` (`_may_name_a_module`, judged by the walks
