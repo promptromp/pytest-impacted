@@ -2,7 +2,8 @@
 
 import os
 import sys
-from pathlib import Path
+from functools import partial
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 import networkx as nx
@@ -10,7 +11,7 @@ import pytest
 
 from pytest_impacted import graph
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
-from pytest_impacted.traversal import _Discovered, path_to_package_name, resolve_files_to_modules
+from pytest_impacted.traversal import _Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
 
 from .git_helpers import write_files
 
@@ -1965,3 +1966,142 @@ def test_resolve_impacted_tests_judges_each_node_once_however_many_modules_chang
 
     assert result == ["tests.test_last"]
     assert len(judged) <= 2 * len(dep_tree)
+
+
+FLAT_LIB = {
+    "lib/awake.py": "def up():\n    return True\n",
+    "lib/ledger.py": "import awake\n",
+    "tests/test_awake.py": "import awake\n",
+    "tests/test_ledger.py": "import ledger\n",
+}
+
+
+@pytest.mark.parametrize(
+    ("pythonpath", "importers"),
+    [
+        pytest.param(["project/lib"], {"lib.ledger", "tests.test_awake"}, id="on_the_pythonpath"),
+        pytest.param(["link/lib"], {"lib.ledger", "tests.test_awake"}, id="through_a_symlink_to_the_rootdir"),
+        pytest.param([], set(), id="not"),
+        pytest.param(["elsewhere"], set(), id="outside_the_rootdir"),
+    ],
+)
+def test_a_pythonpath_entry_is_an_import_root(tmp_path, pythonpath, importers):
+    """pytest puts each ``pythonpath`` entry on ``sys.path``: ``import awake`` means ``lib/awake.py``,
+    which the walk names ``lib.awake``. One outside the rootdir holds no file of the project."""
+    root = tmp_path / "project"
+    write_files(root, FLAT_LIB)
+    write_files(tmp_path, {"elsewhere/awake.py": ""})
+    (tmp_path / "link").symlink_to(root)
+
+    dep_tree = graph.build_dep_tree(
+        "lib", tests_package="tests", root_dir=root, pythonpath=[tmp_path / entry for entry in pythonpath]
+    )
+
+    assert set(dep_tree.successors("lib.awake")) == importers
+    roots = dep_tree.graph["import_roots"]
+    assert (str((root / "lib").resolve()) in roots, str((tmp_path / "elsewhere").resolve()) in roots) == (
+        bool(importers),
+        False,
+    )
+    assert all(Path(path).is_relative_to(root.resolve()) for path in nx.get_node_attributes(dep_tree, "path").values())
+
+
+def test_the_cached_graph_is_keyed_on_the_pythonpath(tmp_path):
+    write_files(tmp_path, FLAT_LIB)
+    clear_dep_tree_cache()
+
+    without = cached_build_dep_tree("lib", tests_package="tests", root_dir=tmp_path)
+    with_lib = cached_build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "lib"])
+
+    assert "tests.test_awake" not in without.successors("lib.awake")
+    assert "tests.test_awake" in with_lib.successors("lib.awake")
+
+
+def test_a_namespace_package_in_a_pythonpath_entry_is_looked_up_there(tmp_path):
+    """``import sub.mod`` names a directory of ``lib/``, not a file. Without an ``__init__.py`` it has
+    no alias of its own (a regular package's ``sub.mod`` is one): only the entry leads to it."""
+    write_files(tmp_path, {"lib/sub/mod.py": "", "tests/test_mod.py": "import sub.mod\n"})
+
+    dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "lib"])
+
+    assert "tests.test_mod" in dep_tree.successors("lib.sub.mod")
+
+
+@pytest.mark.parametrize("entry", [".", "src"], ids=["the_rootdir", "the_src_prefix"])
+def test_a_pythonpath_entry_the_names_imply_is_unchanged(tmp_path, entry):
+    """``pythonpath = .`` (or ``src`` for src-layout) is a root the names imply already: it stays one."""
+    write_files(tmp_path, {"src/app/__init__.py": "", "src/app/a.py": "", "tests/test_a.py": "import app.a\n"})
+
+    build = partial(graph.build_dep_tree, "src/app", tests_package="tests", root_dir=tmp_path)
+
+    without, with_entry = build(), build(pythonpath=[tmp_path / entry])
+
+    assert (with_entry.graph["import_roots"], with_entry.graph["assumed_roots"]) == (
+        without.graph["import_roots"],
+        without.graph["assumed_roots"],
+    )
+
+
+def test_a_lone_string_is_one_pythonpath_entry(tmp_path):
+    write_files(tmp_path, FLAT_LIB)
+
+    dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath="lib")
+
+    assert "tests.test_awake" in dep_tree.successors("lib.awake")
+
+
+def test_entries_the_graph_does_not_read_share_its_cache_entry(tmp_path):
+    """Outside the root, or repeated: the same graph, built once."""
+    write_files(tmp_path, FLAT_LIB)
+    clear_dep_tree_cache()
+
+    build = partial(cached_build_dep_tree, "lib", tests_package="tests", root_dir=tmp_path)
+
+    assert build(pythonpath=["lib", "../elsewhere", str(tmp_path / "lib")]) is build(pythonpath=["lib"])
+
+
+def test_a_pythonpath_entry_above_the_rootdir_is_an_import_root(tmp_path):
+    """A monorepo's ``pythonpath = .`` read for one service: its files import under longer names from there."""
+    root = tmp_path / "services/api"
+    write_files(root, {"app/__init__.py": "", "app/x.py": "", "tests/test_x.py": "import services.api.app.x\n"})
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=root, pythonpath=[tmp_path])
+
+    assert "tests.test_x" in dep_tree.successors("app.x")
+
+
+def test_a_guessed_root_on_the_pythonpath_looks_up_every_name_and_still_only_reaches(tmp_path):
+    """``src/`` with an ``__init__.py`` above ``src/app`` is guessed at, but on the pythonpath it is there for
+    certain: ``import shared`` and ``import queue`` (shadowing the standard library) are looked up though no
+    import spells the package from it — and, as from any assumed root, the edges only reach."""
+    write_files(
+        tmp_path,
+        {
+            **SRC_IS_A_PACKAGE,
+            "src/shared.py": "",
+            "src/queue.py": "",
+            "tests/test_x.py": "import src.app.core\nimport shared\nimport queue\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "src"])
+
+    by_path = {Path(path).name: node for node, path in nx.get_node_attributes(dep_tree, "path").items()}
+    for name in ("shared.py", "queue.py"):
+        assert dep_tree.edges[by_path[name], "tests.test_x"].get("assumed_root") is True
+    assert dep_tree.graph["assumed_roots"][str((tmp_path / "src").resolve())]["certain"] is True
+
+
+def test_pythonpath_entries_given_as_an_iterator_are_read_once(tmp_path):
+    """Read twice, an iterator reads empty the second time: the guessed root lost ``certain``."""
+    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "src/shared.py": "", "tests/test_x.py": "import shared\n"})
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path, pythonpath=iter(["src"]))
+
+    assert dep_tree.graph["assumed_roots"][str((tmp_path / "src").resolve())].get("certain") is True
+
+
+def test_a_lone_path_of_any_kind_is_one_pythonpath_entry(tmp_path):
+    root = tmp_path.resolve()
+
+    assert pythonpath_roots(PurePosixPath("lib"), root) == [root / "lib"]

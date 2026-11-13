@@ -29,6 +29,7 @@ from pytest_impacted.traversal import (
     module_parts,
     modules_for_files,
     package_name_to_path,
+    pythonpath_roots,
     split_import_roots,
 )
 
@@ -334,6 +335,8 @@ class _Assumed(NamedTuple):
     gateways: frozenset[str]
     #: Whether some import spells an analysed module from it (``app.models``): evidence it is on ``sys.path``.
     active: bool
+    #: Whether it is on ``sys.path`` for certain, being one of pytest's ``pythonpath`` entries: no guess to gate.
+    certain: bool = False
 
     def looks_up(self, name: str) -> bool:
         """Whether an import of *name* is looked up here.
@@ -341,10 +344,11 @@ class _Assumed(NamedTuple):
         Always when it spells its way to an analysed directory (``app.models``). Anything else
         (``import settings`` for a module beside the package) only on evidence, and never a
         standard-library name: a ``logging.py`` in a directory really on ``sys.path`` would
-        shadow the standard library for the whole project.
+        shadow the standard library for the whole project. Every name when it is *certain*
+        (pytest's ``pythonpath``): it is on ``sys.path``, as the rootdir is.
         """
         top = name.partition(".")[0]
-        return top in self.gateways or (self.active and top not in _STANDARD_LIBRARY)
+        return self.certain or top in self.gateways or (self.active and top not in _STANDARD_LIBRARY)
 
 
 def _lookup(name: str, implied: list[Path], assumed: dict[Path, _Assumed], root: Path) -> tuple[list[str], list[str]]:
@@ -374,7 +378,7 @@ def _names_of(path: Path, implied: list[Path], assumed: dict[Path, _Assumed]) ->
 def _import_roots_of(dep_tree: nx.DiGraph, root: Path | None = None) -> tuple[list[Path], dict[Path, _Assumed]]:
     """The graph's import roots: those the names imply, rootdir first, and the assumed ones."""
     assumed = {
-        Path(base): _Assumed(frozenset(how["gateways"]), how["active"])
+        Path(base): _Assumed(frozenset(how["gateways"]), how["active"], how.get("certain", False))
         for base, how in dep_tree.graph.get("assumed_roots", {}).items()
     }
     default = [str(root)] if root is not None else []
@@ -406,13 +410,16 @@ class _Linker:
         roots: list[Path],
         root: Path,
         gateways: dict[Path, frozenset[str]] | None = None,
+        certain: frozenset[Path] = frozenset(),
     ):
         self.modules = dict(discovered.modules)
         self.aliases = dict(discovered.aliases)
         self.external: set[str] = set()
         self._contested = discovered.contested
         self._roots, self._root = roots, root
-        self.assumed = {base: _Assumed(names, active=False) for base, names in (gateways or {}).items()}
+        self.assumed = {
+            base: _Assumed(names, active=False, certain=base in certain) for base, names in (gateways or {}).items()
+        }
         self._by_depth = sorted(roots, key=lambda directory: -len(directory.parts))
         self._by_path = {path: name for name, path in self.modules.items()}
         self._located: dict[str, list[str]] = {}
@@ -665,7 +672,12 @@ def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
     return parent_path is None or parent_path.endswith("__init__.py")
 
 
-def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str | Path | None = None) -> nx.DiGraph:
+def build_dep_tree(
+    package: str,
+    tests_package: str | None = None,
+    root_dir: str | Path | None = None,
+    pythonpath: str | Path | Iterable[str | Path] = (),
+) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
     Scans the package directory to find modules, reads their source files,
@@ -683,12 +695,16 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     importers, for :func:`link_changed_files`. An import found only under an assumed
     import root (``graph["assumed_roots"]``, see
     :func:`~pytest_impacted.traversal.split_import_roots`) is an edge flagged ``assumed_root``.
+    *pythonpath* holds pytest's ``pythonpath`` entries (absolute, or relative to the rootdir):
+    each inside the rootdir or above it is an import root too
+    (see :func:`~pytest_impacted.traversal.split_import_roots`).
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
+    pythonpath = pythonpath_roots(pythonpath, root)  # once: an iterator reads empty the second time
     discovered = _discover_project(package, tests_package, root)
     analysed = [name for name in (package, tests_package) if name]
-    roots, assumed_roots = split_import_roots(analysed, discovered.modules, discovered.aliases, root)
+    roots, assumed_roots = split_import_roots(analysed, discovered.modules, discovered.aliases, root, pythonpath)
     # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
     directories = [Path(os.path.realpath(root / package_name_to_path(name))) for name in analysed]
     # The names that lead from each assumed root to an analysed directory: ``app`` from ``src/``.
@@ -696,7 +712,8 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
         base: frozenset(d.relative_to(base).parts[0] for d in directories if d.is_relative_to(base) and d != base)
         for base in assumed_roots
     }
-    linker = _Linker(discovered, roots, root, gateways)
+    # One that is on pytest's pythonpath is so for certain: every name is looked up there, its edges still only reach.
+    linker = _Linker(discovered, roots, root, gateways, frozenset(pythonpath))
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
@@ -728,7 +745,9 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     digraph.graph["unresolved"] = {name: sorted(importers) for name, importers in unresolved.items()}
     digraph.graph["import_roots"] = [str(directory) for directory in (*roots, *linker.assumed)]
     digraph.graph["assumed_roots"] = {
-        str(base): {"gateways": sorted(how.gateways), "active": how.active} for base, how in linker.assumed.items()
+        # ``certain`` only when set: a graph without pythonpath entries reads as it always did.
+        str(base): {"gateways": sorted(how.gateways), "active": how.active} | ({"certain": True} if how.certain else {})
+        for base, how in linker.assumed.items()
     }
 
     # The dependency graph is the reverse of the import graph, so invert it before returning.

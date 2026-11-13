@@ -91,6 +91,7 @@ def test_every_setting_is_read(calls, tmp_path):
         "strategy": None,
         "use_merge_base": False,
         "file_map": [],
+        "pythonpath": [],
     }
     assert build.call_args.kwargs == {
         "watch_dep_files": False,

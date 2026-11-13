@@ -100,6 +100,7 @@ class TestImpactedTestsCLI:
             strategy=ANY,
             use_merge_base=True,
             file_map=[],
+            pythonpath=[],
         )
         call_kwargs = mock_get_impacted_tests.call_args[1]
         assert isinstance(call_kwargs["strategy"], CompositeImpactStrategy)
@@ -196,6 +197,7 @@ class TestImpactedTestsCLI:
             strategy=ANY,
             use_merge_base=True,
             file_map=[],
+            pythonpath=[],
         )
 
     @pytest.mark.usefixtures("in_tmp_dir")
@@ -376,6 +378,7 @@ class TestImpactedTestsCLI:
             strategy=ANY,  # CompositeImpactStrategy with extensions
             use_merge_base=True,
             file_map=[],
+            pythonpath=[],
         )
 
     @pytest.mark.usefixtures("in_tmp_dir")

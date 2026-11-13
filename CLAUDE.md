@@ -95,6 +95,19 @@ the analysed package too: an app module importing a walked test helper as `app.t
 lead placement through it, and a deleted `app.gone` is test code, so a conftest reaching it
 selects its directory — more tests, never fewer.
 
+pytest's `pythonpath` entries inside the rootdir or above it (`traversal.pythonpath_roots`,
+resolved once per build: an iterator reads empty the second time) are on `sys.path` for certain, so each is an
+*implied* root, placing as the rootdir does. One that is an assumed root anyway (`pythonpath = src`
+with `src/__init__.py` above `src/app`) stays assumed, its edges only reaching — implied, it turned
+`src/shared.py` into application code and its conftest rule opt-in, fewer tests than before the
+setting was read — but `certain` (`_Assumed.certain`): every name is looked up there, a
+standard-library one too, which the guess rules above never allow. As assumed roots with every
+module a gateway, entries went stale (a deleted or new module was no gateway) and bypassed the
+opt-in for a shared library reached through the app. Entries are spelled as given, as the rootdir
+and the walks are: respelling them alone in on-disk case (for a case-insensitive filesystem) made
+them disagree with a rootdir or `--impacted-module` typed in another case — fix case once for every
+path, or not at all.
+
 A file found on any root becomes an `external` node, parsed and followed in turn
 (`_parse_project` runs to a fixpoint, `pytest_plugins` entries included). Every candidate the
 *walks* do not define goes into `graph["unresolved"]` (`_may_name_a_module`, judged by the walks
@@ -325,8 +338,10 @@ file name and then by suffix (`_BY_NAME`, `_BY_SUFFIX`), one loader per pytest f
 gates for it in the tables — a rule threaded through name checks inside suffix loaders is how two
 were missed; the other gates sit in the function mirroring pytest's of the same job (the search,
 `_tool_pytest`, `_pytest_table`, `load_pytest_config`). The test job runs only the locked pytest;
-its 3.11 python job reruns `test_ini.py` and `test_cli_config.py` under older ones, so add a
-version there when a new gate needs one. An option takes its setting only when
+its 3.11 python job reruns `test_ini.py`, `test_cli_config.py` and `test_pythonpath_integration.py`
+under older ones, so add a version there when a new gate needs one. (Before pytest 8.4,
+`pythonpath` belongs to the blockable `python_path` plugin: `getini` raises without it, so the
+plugin reads it through `plugin._pythonpath`.) An option takes its setting only when
 `ctx.get_parameter_source` says the command line left it at its default (`cli._settings`).
 The root stays `--root-dir` (default `.`), as for `pytest --rootdir`, never the file's directory:
 moving it reinterprets an explicit `--module` (two review rounds oscillated on this).
