@@ -436,6 +436,10 @@ Plain helpers live in `tests/git_helpers.py` — never import from a conftest. I
 projects must not name their tests dir `tests` (it would clash with this repo's package in
 `sys.modules`); use `suite`.
 
+**Every test must pass inside a pytest-xdist worker**: CI's impacted job reruns the impacted
+tests under `-n auto`. A test project's conftest tells a worker by `config.workerinput`, never
+`PYTEST_XDIST_WORKER`, which a nested run inherits from the suite's own worker.
+
 **The suite scrubs git's repo-locating variables** (`GIT_DIR`, `GIT_INDEX_FILE`, … — read
 from `git rev-parse --local-env-vars`, with a fallback copy) in `pytest_configure`, and
 restores them in `pytest_unconfigure`. Git exports them to hooks, and the pre-commit hook

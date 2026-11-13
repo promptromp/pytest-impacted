@@ -24,6 +24,7 @@ from pytest_impacted.plugin import (
     pytest_collection_modifyitems,
     pytest_configure_node,
     pytest_deselect_unimpacted,
+    pytest_testnodedown,
 )
 
 from .git_helpers import edit_file as edit
@@ -43,6 +44,11 @@ NOT_IMPACTED = "pytest-impacted: 1 test not impacted by the changes, deselected"
 
 def run(project, *args):
     return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
+
+
+def run_subprocess(project, *args):
+    """``run``'s options, without ``-v``, in a pytest of its own, as under pytest-xdist."""
+    return project.runpytest_subprocess("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", *args)
 
 
 @pytest.fixture
@@ -235,9 +241,7 @@ def test_under_xdist(project, edited, outcomes, line):
     pytest.importorskip("xdist")
     edit(project, edited)
 
-    result = project.runpytest_subprocess(
-        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2"
-    )
+    result = run_subprocess(project, "-n", "2")
 
     assert result.ret == ExitCode.OK
     result.assert_outcomes(**outcomes)
@@ -246,27 +250,48 @@ def test_under_xdist(project, edited, outcomes, line):
 
 def test_under_xdist_the_controller_analyses_once_for_every_worker(make_git_project):
     """Workers analysing for themselves could disagree, and xdist aborts a run whose workers
-    collect different tests: here each writes a file the invalidation glob matches before it
-    collects. The controller's analysis, made before any worker starts, is every worker's.
-    Its notices reach the terminal too, which a worker's never do.
+    collect different tests: here a file the invalidation glob matches appears once the first
+    worker is configured, as one a starting worker writes may. The controller's analysis, made
+    once, is every worker's. Its notices reach the terminal too, which a worker's never do.
     """
     pytest.importorskip("xdist")
-    # By workerinput: PYTEST_XDIST_WORKER is inherited from this suite's own workers too.
+    # After pytest-impacted's own hook, so certainly between the first worker's handoff and the
+    # second's: a worker writing it as it starts passed with the handoff cache removed. Were it
+    # written before the first, every test would be impacted, and this test would fail.
     writes = (
-        "def pytest_configure(config):\n"
-        "    if hasattr(config, 'workerinput'):\n"
-        "        open('late.json', 'w').close()\n"
+        "import pytest\n\n"
+        "@pytest.hookimpl(trylast=True)\n"
+        "def pytest_configure_node(node):\n"
+        "    open('late.json', 'w').close()\n"
     )
     project = make_git_project({**FILES, "conftest.py": writes}, INI + "impacted_invalidate_all = *.json\n")
     edit(project, "app/a.py")
 
-    result = project.runpytest_subprocess(
-        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2"
-    )
+    result = run_subprocess(project, "-n", "2")
 
     assert result.ret == ExitCode.OK
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["*Impacted files in the repository: ['app/a.py'*", NOT_IMPACTED])
+
+
+def test_under_xdist_a_crashed_worker_is_replaced(make_git_project):
+    """A crashed worker goes down without the report a finished one sends (``workeroutput``),
+    and its replacement (``--max-worker-restart``) gets the controller's analysis, as it did:
+    xdist sends it the rest by their index in the first collection, only logging one that
+    differs, so a replacement collecting otherwise would run tests other than it reports. With
+    one worker, none other can run them instead.
+    """
+    pytest.importorskip("xdist")
+    after = "".join(f"def test_after_{i}():\n    assert a() == 1\n\n" for i in range(4))
+    crashes = "import os\nfrom app.a import a\n\ndef test_crash():\n    os._exit(1)\n\n" + after
+    project = make_git_project({**FILES, "suite/test_crash.py": crashes}, INI)
+    edit(project, "app/a.py")
+    result = run_subprocess(project, "-v", "-n", "1", "--max-worker-restart=1")
+
+    result.stdout.fnmatch_lines(["*replacing crashed worker*"])
+    result.assert_outcomes(passed=5, failed=1)
+    result.stdout.no_fnmatch_line("*test_b.py::test_b*")
+    result.stdout.fnmatch_lines([NOT_IMPACTED])
 
 
 @pytest.mark.parametrize(
@@ -317,9 +342,7 @@ def test_under_xdist_a_controller_failure_leaves_the_workers_to_analyse(make_git
     project = make_git_project({**FILES, "conftest.py": fails}, INI)
     edit(project, "app/a.py")
 
-    result = project.runpytest_subprocess(
-        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2", "--junitxml=out.xml"
-    )
+    result = run_subprocess(project, "-n", "2", "--junitxml=out.xml")
 
     # Skipped, not deselected: workers analysing for themselves could disagree, and xdist
     # stops a run whose workers collect different tests, but not one whose skips differ.
@@ -358,6 +381,18 @@ def test_each_collection_starts_afresh(project):
 
     assert (config.stash[_DESELECTION], config.stash[_UNIMPACTED_ITEMS]) == (0, set())
     assert config.workeroutput[_WORKER_OUTPUT_KEY] == 0
+
+
+def test_the_controller_keeps_the_most_any_worker_deselected():
+    """Workers deselect alike unless they collect differently (``--dist each`` allows it, and a
+    crashed worker's replacement may); the summary then names the most. A crashed one reports nothing."""
+    config = SimpleNamespace(stash=pytest.Stash())
+
+    for reported in (2, 5, 1):
+        pytest_testnodedown(SimpleNamespace(config=config, workeroutput={_WORKER_OUTPUT_KEY: reported}), None)
+    pytest_testnodedown(SimpleNamespace(config=config), "crashed")
+
+    assert config.stash[_DESELECTION] == 5
 
 
 def test_the_analysis_is_relative_to_a_rootdir_reached_through_a_symlink(project, tmp_path):
@@ -415,9 +450,7 @@ def test_under_xdist_with_an_extension_the_workers_skip(make_git_project):
     project = make_git_project({**FILES, "conftest.py": plugin}, INI)
     edit(project, "app/a.py")
 
-    result = project.runpytest_subprocess(
-        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-n", "2"
-    )
+    result = run_subprocess(project, "-n", "2")
 
     assert result.ret == ExitCode.OK
     result.assert_outcomes(passed=1, skipped=1)
