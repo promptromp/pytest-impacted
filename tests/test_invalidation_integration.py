@@ -6,6 +6,9 @@ import sys
 import textwrap
 
 import pytest
+from click.testing import CliRunner
+
+from pytest_impacted.cli import impacted_tests_cli
 
 from .git_helpers import edit_file, isolated_git_env
 
@@ -215,3 +218,64 @@ def test_branch_mode_without_a_fork_point_warns_on_the_terminal(git_project):
 
     result.stdout.fnmatch_lines(["*WARNING: No merge base*the histories are unrelated*"])
     result.assert_outcomes(passed=2)
+
+
+def test_an_empty_glob_is_a_usage_error(git_project):
+    """Not an INTERNALERROR from deep in the matcher, as it was."""
+    result = run(git_project, "--impacted-git-mode=unstaged", "--impacted-invalidate-all=")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*impacted-invalidate-all*empty*"])
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+
+def test_the_cli_calls_an_empty_glob_a_usage_error(git_project):
+    result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(git_project.path), "--invalidate-all", ""])
+
+    assert result.exit_code == 2, result.output
+    assert "empty" in result.output
+
+
+@pytest.mark.parametrize("glob", [".", "./"], ids=["dot", "dot_slash"])
+def test_a_glob_that_matches_no_path_is_a_usage_error(git_project, glob):
+    """``PurePath.match`` refuses it with "empty pattern" too: met mid-run, it was an INTERNALERROR."""
+    git_project.touch("config/settings.json")
+
+    result = run(git_project, "--impacted-git-mode=unstaged", f"--impacted-invalidate-all={glob}")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*no path can match it (empty pattern)*"])
+
+
+def test_a_glob_in_the_configuration_that_is_no_string_is_read_as_one(make_git_project):
+    """A TOML list may hold any value: read as the CLI reads it. On main, ``path.match(1)`` raised a TypeError once
+    a file changed, an INTERNALERROR."""
+    toml = (
+        "[tool.pytest.ini_options]\npythonpath = ['.']\nimpacted_module = 'pkg'\nimpacted_tests_dir = 'tests'\n"
+        "impacted_invalidate_all = [1]\n"
+    )
+    project = make_git_project({**FILES, "pyproject.toml": toml, "1": ""}, "")  # read before the empty tox.ini
+    edit_file(project, "1")
+
+    result = run(project, "--impacted-git-mode=unstaged")
+
+    result.assert_outcomes(passed=2)
+
+
+def test_a_bad_glob_in_the_configuration_is_named_by_the_setting_and_file(git_project):
+    git_project.makeini(INI + "impacted_invalidate_all = .\n")
+
+    result = run(git_project, "--impacted-git-mode=unstaged")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*Invalid glob '.' in impacted_invalidate_all in *tox.ini*"])
+
+
+def test_the_cli_names_the_setting_and_file_a_bad_glob_came_from(git_project):
+    git_project.makeini(INI + "impacted_invalidate_all = .\n")
+
+    result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(git_project.path)])
+
+    assert result.exit_code == 2, result.output
+    assert "Invalid glob '.' in impacted_invalidate_all in " in result.output
+    assert "--impacted-invalidate-all" not in result.output

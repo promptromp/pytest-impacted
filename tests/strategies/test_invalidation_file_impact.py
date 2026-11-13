@@ -12,6 +12,7 @@ from pytest_impacted.strategies import (
     InvalidationFileImpactStrategy,
     get_default_strategies,
     matches_any_glob,
+    parse_invalidation_patterns,
 )
 
 
@@ -190,3 +191,40 @@ class TestGetDefaultStrategiesWithInvalidation:
         strategies = get_default_strategies(watch_dep_files=False, invalidate_all_patterns=["*.json"])
         assert not any(isinstance(s, DependencyFileImpactStrategy) for s in strategies)
         assert isinstance(strategies[-1], InvalidationFileImpactStrategy)
+
+
+class TestParseInvalidationPatterns:
+    """The globs as given: stripped, with the platform's separator as git's ``/``, and none empty."""
+
+    def test_globs_are_stripped(self):
+        assert parse_invalidation_patterns([" *.json ", "config/**"]) == ("*.json", "config/**")
+
+    def test_the_platform_separator_is_git_s(self, monkeypatch):
+        """On Windows ``config\\**`` is what a user types for ``config/**``, which is how git spells the path."""
+        monkeypatch.setattr("pytest_impacted.strategies._SEP", "\\")
+
+        assert parse_invalidation_patterns(["config\\**\\*.yaml"]) == ("config/**/*.yaml",)
+
+    @pytest.mark.parametrize(
+        "glob", ["", "   ", ".", "./", " . "], ids=["empty", "blank", "dot", "dot_slash", "spaced"]
+    )
+    def test_a_glob_that_matches_no_path_is_an_error(self, glob):
+        """``PurePath.match`` refuses each with "empty pattern", which surfaced as an INTERNALERROR mid-run."""
+        with pytest.raises(ValueError, match=r"impacted-invalidate-all: no path can match it \(empty pattern\)"):
+            parse_invalidation_patterns(["*.json", glob])
+
+    def test_a_glob_that_is_no_string_is_read_as_one(self):
+        """A TOML list may hold any value: read as the ``impacted-tests`` CLI reads it, not an ``AttributeError``."""
+        assert parse_invalidation_patterns([1, "*.json"]) == ("1", "*.json")
+
+    def test_a_lone_string_is_one_glob(self):
+        assert parse_invalidation_patterns("Makefile") == ("Makefile",)
+
+    def test_the_error_names_where_the_glob_came_from(self):
+        with pytest.raises(ValueError, match=r"in impacted_invalidate_all in pyproject\.toml"):
+            parse_invalidation_patterns(["."], "impacted_invalidate_all in pyproject.toml")
+
+    def test_the_strategy_reads_its_globs_so(self, monkeypatch):
+        monkeypatch.setattr("pytest_impacted.strategies._SEP", "\\")
+
+        assert InvalidationFileImpactStrategy(["config\\x.json"]).patterns == ("config/x.json",)

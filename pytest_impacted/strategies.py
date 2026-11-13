@@ -760,6 +760,47 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         return _every_test(dep_tree, f"Dependency file changes detected: {dep_files}", session)
 
 
+#: The platform's path separator, which a user's glob may use for git's ``/``. A module name: a test patches it alone.
+_SEP = os.sep
+
+
+def normalise_glob(glob: str) -> str:
+    """A user's glob as matched: stripped, the platform's separator as git's ``/`` (``config\\**`` on Windows)."""
+    return glob.strip().replace(_SEP, "/")
+
+
+def glob_refusal(glob: str) -> str | None:
+    """Why :meth:`PurePosixPath.match` refuses *glob* (``empty pattern`` for ``""``, ``.``, ``./``), or ``None``.
+
+    Asked when the configuration is read: met while matching, it ended the run in an INTERNALERROR.
+    """
+    try:
+        PurePosixPath("x").match(glob)
+    except ValueError as err:
+        return str(err)
+    return None
+
+
+def parse_invalidation_patterns(
+    patterns: str | Iterable[object], option: str = "--impacted-invalidate-all"
+) -> tuple[str, ...]:
+    """The ``--impacted-invalidate-all`` globs as matched (:func:`normalise_glob`).
+
+    A lone string is one glob, not its characters. An entry that is no string (a TOML list may
+    hold any value) is read as one, as the ``impacted-tests`` CLI reads it (``ini.PytestConfig.args``).
+
+    Raises:
+        ValueError: :meth:`PurePosixPath.match` refuses a glob (``""``, ``.``, ``./``), naming it and
+            *option*, where it came from.
+    """
+    parsed = []
+    for raw in [patterns] if isinstance(patterns, str) else patterns:
+        if (refusal := glob_refusal(glob := normalise_glob(str(raw)))) is not None:
+            raise ValueError(f"Invalid glob {raw!r} in {option}: no path can match it ({refusal}).")
+        parsed.append(glob)
+    return tuple(parsed)
+
+
 class InvalidationFileImpactStrategy(ImpactStrategy):
     """Strategy driven by user-supplied glob patterns for non-Python files.
 
@@ -778,7 +819,7 @@ class InvalidationFileImpactStrategy(ImpactStrategy):
     """
 
     def __init__(self, patterns: Sequence[str] = ()):
-        self.patterns = tuple(patterns)
+        self.patterns = parse_invalidation_patterns(patterns)
 
     def find_impacted_tests(
         self,

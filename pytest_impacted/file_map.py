@@ -16,11 +16,11 @@ import os
 import posixpath
 from collections import deque
 from collections.abc import Iterable, Sequence
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from pytest_impacted.display import notify
 from pytest_impacted.git import files_git_knows
-from pytest_impacted.strategies import matches_any_glob
+from pytest_impacted.strategies import glob_refusal, matches_any_glob, normalise_glob
 from pytest_impacted.traversal import _spelled_exactly, forget_listings
 
 
@@ -35,13 +35,11 @@ def parse_file_map(entries: Iterable[str]) -> list[tuple[str, str]]:
     for entry in entries:
         if not isinstance(entry, str):
             raise ValueError(f"Invalid --impacted-map entry {entry!r}: expected a GLOB=PATH string.")  # noqa: TRY004 — a config error
-        glob, _, path = (part.strip().replace(os.sep, "/") for part in entry.partition("="))
+        glob, _, path = (normalise_glob(part) for part in entry.partition("="))
         if not glob or not path or "=" in path:
             raise ValueError(f"Invalid --impacted-map entry {entry!r}: expected GLOB=PATH, one '='.")
-        try:
-            PurePosixPath("x").match(glob)
-        except ValueError as err:  # "." and "/" leave no pattern
-            raise ValueError(f"Invalid --impacted-map entry {entry!r}: GLOB {glob!r} matches no path ({err}).") from err
+        if (refusal := glob_refusal(glob)) is not None:  # "." and "./" leave no pattern
+            raise ValueError(f"Invalid --impacted-map entry {entry!r}: GLOB {glob!r} matches no path ({refusal}).")
         posix = posixpath.normpath(path)
         if posixpath.isabs(posix) or os.path.isabs(posix) or posix == ".." or posix.startswith("../"):
             raise ValueError(f"Invalid --impacted-map entry {entry!r}: PATH must be relative, inside the rootdir.")

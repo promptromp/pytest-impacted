@@ -28,6 +28,7 @@ from pytest_impacted.git import (
     find_repo,
     rev_args,
 )
+from pytest_impacted.strategies import parse_invalidation_patterns
 from pytest_impacted.traversal import canonical_root
 
 
@@ -624,6 +625,10 @@ def validate_config(config: Config):
 
     try:
         parse_file_map(get_option("impacted_map") or [])
+        # Named where the globs came from: the option given, else the setting and its file.
+        given = config.getoption("impacted_invalidate_all", default=None)
+        source = "--impacted-invalidate-all" if given else f"impacted_invalidate_all in {config.inipath}"
+        parse_invalidation_patterns(get_option("impacted_invalidate_all") or [], source)
     except ValueError as err:
         raise UsageError(str(err)) from err
 
