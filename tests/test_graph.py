@@ -2,6 +2,7 @@
 
 import os
 import sys
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -2014,3 +2015,28 @@ def test_the_cached_graph_is_keyed_on_the_pythonpath(tmp_path):
 
     assert "tests.test_awake" not in without.successors("lib.awake")
     assert "tests.test_awake" in with_lib.successors("lib.awake")
+
+
+def test_a_namespace_package_in_a_pythonpath_entry_is_looked_up_there(tmp_path):
+    """``import sub.mod`` names a directory of ``lib/``, not a file. Without an ``__init__.py`` it has
+    no alias of its own (a regular package's ``sub.mod`` is one): only the entry leads to it."""
+    write_files(tmp_path, {"lib/sub/mod.py": "", "tests/test_mod.py": "import sub.mod\n"})
+
+    dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "lib"])
+
+    assert "tests.test_mod" in dep_tree.successors("lib.sub.mod")
+
+
+@pytest.mark.parametrize("entry", [".", "src"], ids=["the_rootdir", "the_src_prefix"])
+def test_a_pythonpath_entry_the_names_imply_is_unchanged(tmp_path, entry):
+    """``pythonpath = .`` (or ``src`` for src-layout) is a root the names imply already: it stays one."""
+    write_files(tmp_path, {"src/app/__init__.py": "", "src/app/a.py": "", "tests/test_a.py": "import app.a\n"})
+
+    build = partial(graph.build_dep_tree, "src/app", tests_package="tests", root_dir=tmp_path)
+
+    without, with_entry = build(), build(pythonpath=[tmp_path / entry])
+
+    assert (with_entry.graph["import_roots"], with_entry.graph["assumed_roots"]) == (
+        without.graph["import_roots"],
+        without.graph["assumed_roots"],
+    )

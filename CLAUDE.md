@@ -90,7 +90,12 @@ import spells it, since it may mean another file under another root. Being on `s
 a bare name may match by coincidence, so such an import is an edge flagged `assumed_root` that,
 like `runs_init`, only reaches: `_changes_by_role` ignores it (it looks when `graph["runs_init"]`
 or `graph["assumed_roots"]` is set), or a test helper the match leads to would become
-application code and its conftest rule opt-in — fewer tests. That holds inside
+application code and its conftest rule opt-in — fewer tests. pytest's `pythonpath` entries the
+names do not imply join the assumed roots in `build_dep_tree` (`_pythonpath_roots`), every module
+in one a gateway (looked up always, a standard-library name too). They are on `sys.path` for
+certain, but placing through them, as implied roots, made `src/shared.py` application code
+(`pythonpath = src` above `src/app`), and a conftest importing it opt-in: so they only reach as
+well. That holds inside
 the analysed package too: an app module importing a walked test helper as `app.tests.h` must not
 lead placement through it, and a deleted `app.gone` is test code, so a conftest reaching it
 selects its directory — more tests, never fewer.
