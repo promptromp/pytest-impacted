@@ -152,8 +152,8 @@ def cached_build_dep_tree(
         key would.
     """
     root = canonical_root(root_dir)
-    # Resolved before the lookup, as the root is, and only those the graph reads: two spellings of one
-    # entry, or an entry outside the root, change nothing, so they share an entry.
+    # Resolved before the lookup, as the root is, and only those the graph may read (inside the root or
+    # above it, once each): two spellings of one entry, or one elsewhere, change nothing, so they share one.
     entries = tuple(str(entry) for entry in pythonpath_roots(pythonpath, root))
     return _cached_build_dep_tree(ns_module, tests_package, root, entries)
 

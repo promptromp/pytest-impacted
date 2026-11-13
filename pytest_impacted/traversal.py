@@ -587,14 +587,38 @@ def import_roots(
 
 
 def pythonpath_roots(pythonpath: str | Path | Iterable[str | Path], root: Path) -> list[Path]:
-    """pytest's ``pythonpath`` entries inside *root*, resolved as the files found under them are, once each.
+    """pytest's ``pythonpath`` entries inside *root* or above it, resolved as the files found under them are.
 
     An entry is absolute or relative to *root*; a lone string or path is one entry, not its characters.
+    One above the root (a monorepo's ``pythonpath = .`` read for a service) imports files in it under
+    longer names; any other outside it holds none. Each appears once, spelled as on disk below the root.
     """
     entries = [pythonpath] if isinstance(pythonpath, str | Path) else pythonpath
     # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
     resolved = (Path(os.path.realpath(root / entry)) for entry in entries)
-    return list(dict.fromkeys(entry for entry in resolved if entry.is_relative_to(root)))
+    return list(
+        dict.fromkeys(
+            _spelled_on_disk(entry, root) if entry.is_relative_to(root) else entry
+            for entry in resolved
+            if entry.is_relative_to(root) or root.is_relative_to(entry)
+        )
+    )
+
+
+def _spelled_on_disk(path: Path, root: Path) -> Path:
+    """*path*, inside *root*, with each part below it as its directory lists it.
+
+    A case-insensitive filesystem (macOS, Windows) finds ``lib/`` as ``Lib``, and keeps that
+    spelling through ``realpath``: a file found under it would then be a second node beside the
+    one the walk named ``lib.x``. A part no listing holds, in any case, is left as given.
+    """
+    spelled = root
+    for part in path.relative_to(root).parts:
+        listed = top_level_entries(spelled)
+        if part not in listed:
+            part = next((entry for entry in sorted(listed) if entry.casefold() == part.casefold()), part)
+        spelled = spelled / part
+    return spelled
 
 
 def split_import_roots(
@@ -619,6 +643,7 @@ def split_import_roots(
     the walk names it ``lib.awake``. One that is (``src/`` with an ``__init__.py`` above
     ``src/app``) stays assumed: placing through it would turn a library the app imports into
     application code, and the conftest importing it opt-in — fewer tests than before it was read.
+    It is *certain* though (``graph.build_dep_tree``): every name is looked up there.
 
     **Assumed.** Every other directory above an analysed directory (:func:`_directories_above`):
     one no name is rooted at, being a regular package or inside one. ``src/`` with an
@@ -632,8 +657,8 @@ def split_import_roots(
     standard library for the whole project.
 
     Never a root: a regular package inside the analysed package, which would invent names
-    like ``types`` for ``pkg/types.py``; and the directory of a rootless test module, which
-    pytest inserts itself.
+    like ``types`` for ``pkg/types.py`` (unless pytest's *pythonpath* names it, which puts it
+    on ``sys.path``); and the directory of a rootless test module, which pytest inserts itself.
     """
     root = canonical_root(root_dir)
     packages = list(packages)

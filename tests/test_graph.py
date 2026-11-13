@@ -2058,3 +2058,48 @@ def test_entries_the_graph_does_not_read_share_its_cache_entry(tmp_path):
     build = partial(cached_build_dep_tree, "lib", tests_package="tests", root_dir=tmp_path)
 
     assert build(pythonpath=["lib", "../elsewhere", str(tmp_path / "lib")]) is build(pythonpath=["lib"])
+
+
+def test_a_pythonpath_entry_above_the_rootdir_is_an_import_root(tmp_path):
+    """A monorepo's ``pythonpath = .`` read for one service: its files import under longer names from there."""
+    root = tmp_path / "services/api"
+    write_files(root, {"app/__init__.py": "", "app/x.py": "", "tests/test_x.py": "import services.api.app.x\n"})
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=root, pythonpath=[tmp_path])
+
+    assert "tests.test_x" in dep_tree.successors("app.x")
+
+
+def test_a_guessed_root_on_the_pythonpath_looks_up_every_name_and_still_only_reaches(tmp_path):
+    """``src/`` with an ``__init__.py`` above ``src/app`` is guessed at, but on the pythonpath it is there for
+    certain: ``import shared`` and ``import queue`` (shadowing the standard library) are looked up though no
+    import spells the package from it — and, as from any assumed root, the edges only reach."""
+    write_files(
+        tmp_path,
+        {
+            **SRC_IS_A_PACKAGE,
+            "src/shared.py": "",
+            "src/queue.py": "",
+            "tests/test_x.py": "import src.app.core\nimport shared\nimport queue\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "src"])
+
+    by_path = {Path(path).name: node for node, path in nx.get_node_attributes(dep_tree, "path").items()}
+    for name in ("shared.py", "queue.py"):
+        assert dep_tree.edges[by_path[name], "tests.test_x"].get("assumed_root") is True
+    assert dep_tree.graph["assumed_roots"][str((tmp_path / "src").resolve())]["certain"] is True
+
+
+CASE_INSENSITIVE = os.path.exists(Path(__file__).parent.joinpath("CONFTEST.PY"))
+
+
+@pytest.mark.skipif(not CASE_INSENSITIVE, reason="only a case-insensitive filesystem finds lib/ as Lib")
+def test_a_pythonpath_entry_spelled_in_another_case_is_one_node_per_file(tmp_path):
+    write_files(tmp_path, FLAT_LIB)
+
+    dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "Lib"])
+
+    assert "tests.test_awake" in dep_tree.successors("lib.awake")
+    assert not [path for path in nx.get_node_attributes(dep_tree, "path").values() if "/Lib/" in path]
