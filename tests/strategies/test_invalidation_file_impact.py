@@ -52,7 +52,10 @@ class TestMatchesAnyGlob:
             pytest.param("/abs/x/y/z.json", "/abs/**/*.json", True, id="absolute_double_star_recurses"),
             pytest.param("/other/abs/z.json", "/abs/**", False, id="absolute_double_star_anchored_at_root"),
             pytest.param("abs/x/z.json", "/abs/**", False, id="absolute_glob_never_matches_a_relative_path"),
+            pytest.param("q/abs/x.json", "/abs/**", False, id="absolute_glob_never_matches_a_relative_tail"),
             pytest.param("/outside/repo/data/a/b.csv", "data/**", True, id="relative_double_star_on_absolute_path"),
+            pytest.param("/x/y", "*/x/**/y", False, id="the_root_is_no_directory"),
+            pytest.param("Docs/a/b.md", "docs/**", False, id="double_star_glob_case_sensitive"),
         ],
     )
     def test_patterns(self, file_path, glob_pattern, expected):
