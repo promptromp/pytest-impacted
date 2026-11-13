@@ -86,6 +86,7 @@ jobs:
       if: matrix.backend == 'fast'
       run: uv sync --all-extras --dev
     - name: Run impacted tests
+      id: impacted
       run: >
         uv run pytest
         --impacted
@@ -94,7 +95,9 @@ jobs:
         --impacted-base-branch origin/${{ github.base_ref }}
         --impacted-tests-dir tests
     # Again under pytest-xdist, as many run it: there the controller analyses and the workers filter.
+    # Also when the serial run failed, so a failure shows on both paths or on one.
     - name: Run impacted tests under pytest-xdist
+      if: ${{ !cancelled() && (steps.impacted.outcome == 'success' || steps.impacted.outcome == 'failure') }}
       run: >
         uv run pytest
         --impacted
