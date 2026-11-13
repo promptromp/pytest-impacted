@@ -96,15 +96,17 @@ lead placement through it, and a deleted `app.gone` is test code, so a conftest 
 selects its directory — more tests, never fewer.
 
 pytest's `pythonpath` entries inside the rootdir or above it (`traversal.pythonpath_roots`,
-resolved once per build: an iterator reads empty the second time; spelled as listed where a
-case-insensitive filesystem finds them otherwise) are on `sys.path` for certain, so each is an
+resolved once per build: an iterator reads empty the second time) are on `sys.path` for certain, so each is an
 *implied* root, placing as the rootdir does. One that is an assumed root anyway (`pythonpath = src`
 with `src/__init__.py` above `src/app`) stays assumed, its edges only reaching — implied, it turned
 `src/shared.py` into application code and its conftest rule opt-in, fewer tests than before the
 setting was read — but `certain` (`_Assumed.certain`): every name is looked up there, a
 standard-library one too, which the guess rules above never allow. As assumed roots with every
 module a gateway, entries went stale (a deleted or new module was no gateway) and bypassed the
-opt-in for a shared library reached through the app.
+opt-in for a shared library reached through the app. Entries are spelled as given, as the rootdir
+and the walks are: respelling them alone in on-disk case (for a case-insensitive filesystem) made
+them disagree with a rootdir or `--impacted-module` typed in another case — fix case once for every
+path, or not at all.
 
 A file found on any root becomes an `external` node, parsed and followed in turn
 (`_parse_project` runs to a fixpoint, `pytest_plugins` entries included). Every candidate the

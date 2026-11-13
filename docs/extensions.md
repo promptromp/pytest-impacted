@@ -36,7 +36,7 @@ impacted = get_impacted_tests(
 )
 ```
 
-Like `ns_module` and `tests_dir`, pytest's `pythonpath` is never read from the configuration here: pass `pythonpath=config.getini("pythonpath")` (or `pytest_impacted.ini.find_pytest_config(root).paths("pythonpath")` outside pytest; since 0.38), or bare imports of the modules in those directories (`import awake` for `lib/awake.py`) match nothing.
+Like `ns_module` and `tests_dir`, pytest's `pythonpath` is never read from the configuration here: pass `pythonpath=config.getini("pythonpath")` (or `pytest_impacted.ini.find_pytest_config(root).paths("pythonpath")` outside pytest; since 0.38) — before pytest 8.4, `getini` raises `ValueError` there when `-p no:python_path` blocks the plugin declaring the setting, so read that as no entries, as the plugin does, or bare imports of the modules in those directories (`import awake` for `lib/awake.py`) match nothing.
 
 `get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run".
 

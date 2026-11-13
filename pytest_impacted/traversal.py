@@ -586,34 +586,19 @@ def import_roots(
     return [*implied, *assumed]
 
 
-def pythonpath_roots(pythonpath: str | Path | Iterable[str | Path], root: Path) -> list[Path]:
+def pythonpath_roots(pythonpath: str | os.PathLike | Iterable[str | os.PathLike], root: Path) -> list[Path]:
     """pytest's ``pythonpath`` entries inside *root* or above it, resolved as the files found under them are.
 
-    An entry is absolute or relative to *root*; a lone string or path is one entry, not its characters.
+    An entry is absolute or relative to *root*; a lone string or path is one entry, not its parts.
     One above the root (a monorepo's ``pythonpath = .`` read for a service) imports files in it under
-    longer names; any other outside it holds none. Each appears once, spelled as on disk below the root.
+    longer names; any other outside it holds none. Each appears once, spelled as given, as the rootdir
+    and the walks are: respelled in on-disk case alone, it disagreed with a rootdir or a module typed
+    in another case on a case-insensitive filesystem.
     """
-    entries = [pythonpath] if isinstance(pythonpath, str | Path) else pythonpath
+    entries = [pythonpath] if isinstance(pythonpath, str | os.PathLike) else pythonpath
     # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
-    resolved = (_spelled_on_disk(Path(os.path.realpath(root / entry))) for entry in entries)
+    resolved = (Path(os.path.realpath(root / entry)) for entry in entries)
     return list(dict.fromkeys(entry for entry in resolved if entry.is_relative_to(root) or root.is_relative_to(entry)))
-
-
-def _spelled_on_disk(path: Path) -> Path:
-    """The absolute *path* with each part as its directory lists it, where the filesystem finds it otherwise spelled.
-
-    A case-insensitive filesystem (macOS, Windows) finds ``lib/`` as ``Lib``, and keeps that
-    spelling through ``realpath``: a file found under it would be a second node beside the one
-    the walk named ``lib.x``, and an entry above the root would not contain it. Only where the
-    filesystem finds the part: on a case-sensitive one, ``Lib`` beside ``lib/`` is no directory,
-    and stays the entry pytest adds, which holds nothing.
-    """
-    spelled = Path(path.anchor)
-    for part in path.parts[1:]:
-        if part not in (listed := _entries(str(spelled))) and os.path.isdir(spelled / part):
-            part = next((entry for entry in sorted(listed) if entry.casefold() == part.casefold()), part)
-        spelled = spelled / part
-    return spelled
 
 
 def split_import_roots(

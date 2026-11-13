@@ -62,20 +62,25 @@ def test_the_cli_reads_the_pythonpath_setting(project):
 
 
 @pytest.mark.parametrize(
-    ("deleted", "importer"),
+    ("entries", "shadow", "importer"),
     [
-        pytest.param("plugins/myplug.py", "def f():\n    import myplug\n", id="in_an_entry_outside_the_package"),
-        pytest.param("lib/secrets.py", "def f():\n    import secrets\n", id="named_like_the_standard_library"),
+        pytest.param("lib plugins", "plugins/myplug.py", "import myplug", id="in_an_entry_outside_the_package"),
+        # colorsys: a standard-library module neither pytest nor its plugins import, so none is shadowed by mistake.
+        pytest.param("lib", "lib/colorsys.py", "import colorsys", id="named_like_the_standard_library"),
     ],
 )
-def test_a_module_deleted_from_the_pythonpath_selects_the_tests_of_its_importers(make_git_project, deleted, importer):
+def test_a_module_deleted_from_the_pythonpath_selects_the_tests_of_its_importers(
+    make_git_project, entries, shadow, importer
+):
     """Imported in a function, so the importer still collects: the deletion must bring its tests."""
-    lazy = {"lib/lazy.py": importer, "suite/test_lazy.py": "import lazy\n\ndef test_lazy():\n    assert lazy.f\n"}
+    lazy = {
+        "lib/lazy.py": f"def f():\n    {importer}\n",
+        "suite/test_lazy.py": "import lazy\n\ndef test_lazy():\n    assert lazy.f\n",
+    }
     project = make_git_project(
-        {**FILES, **lazy, "plugins/myplug.py": "", "lib/secrets.py": ""},
-        INI.replace("pythonpath = lib", "pythonpath = lib plugins"),
+        {**FILES, **lazy, shadow: ""}, INI.replace("pythonpath = lib", f"pythonpath = {entries}")
     )
-    (project.path / deleted).unlink()
+    (project.path / shadow).unlink()
 
     result = run(project)
 

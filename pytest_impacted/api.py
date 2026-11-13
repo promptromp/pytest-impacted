@@ -180,7 +180,8 @@ def get_impacted_tests(
     to its path too, for every strategy. ``pythonpath`` holds pytest's ``pythonpath`` entries
     (absolute, or relative to ``root_dir``): each inside the root or above it is an import root, as
     pytest puts it on ``sys.path``. Like ``ns_module`` and ``tests_dir``, it is never read from
-    the pytest configuration here: pass ``config.getini("pythonpath")``, or
+    the pytest configuration here: pass ``config.getini("pythonpath")`` (before pytest 8.4 it raises
+    ``ValueError`` under ``-p no:python_path``: no entries then), or
     ``find_pytest_config(root).paths("pythonpath")`` from :mod:`pytest_impacted.ini`, or bare
     imports of the modules in those directories match nothing.
 
