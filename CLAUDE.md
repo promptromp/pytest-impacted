@@ -410,7 +410,9 @@ directory. A directory stands for every file git knows in it, not only its Pytho
 the report header on every run (it is written by the controller, so xdist shows it too).
 
 **All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored,
-`*` never spans `/`, and `**` is *not* recursive — it behaves like a single `*`), and every
+`*` never spans `/`; a `**` segment is recursive, as in 3.13's `full_match`, which 3.11 lacks:
+`_matches_recursively`, tried after `match` only for a glob with one, so it only ever widens,
+and a glob without one matches as `match` does on each Python, version quirks included), and every
 "this directory and below" match — the conftest rule's `find_test_modules_under`, a changed
 package's members — goes through `graph.nodes_under`. Do not add a second matcher or a second
 directory walk.

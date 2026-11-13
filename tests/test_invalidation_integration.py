@@ -61,6 +61,13 @@ def test_invalidate_all_runs_every_test(git_project):
     result.stdout.fnmatch_lines(["*Invalidation file changes detected*config/settings.json*"])
 
 
+def test_a_double_star_glob_watches_a_whole_tree(make_git_project):
+    project = make_git_project({**FILES, "config/env/prod/db.yaml": "db: 1\n"}, INI)
+    edit_file(project, "config/env/prod/db.yaml")
+
+    run(project, "--impacted-invalidate-all=config/**").assert_outcomes(passed=2)
+
+
 def test_invalidate_all_dir_scoped_glob_does_not_match_elsewhere(git_project):
     git_project.touch("config/settings.json")
     run(git_project, "--impacted-invalidate-all=other/*.json").assert_outcomes(deselected=2)

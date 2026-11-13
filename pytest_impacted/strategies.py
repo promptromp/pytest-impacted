@@ -6,6 +6,7 @@ import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
+from fnmatch import fnmatchcase
 from functools import cache, lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -55,7 +56,7 @@ DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
 )
 
 # Glob-style patterns (see matches_any_glob: right-anchored, so a bare-name glob matches
-# at any depth, while ``**`` is *not* recursive) for files named by convention.
+# at any depth, and a ``**`` segment stands for any number of directories) for files named by convention.
 DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
     "*requirements*.txt",  # requirements.txt, requirements-dev.txt, test-requirements.txt, ...
     "*requirements*.in",  # pip-tools inputs
@@ -75,11 +76,57 @@ def matches_any_glob(file_path: str, glob_patterns: Iterable[str]) -> bool:
     Matching is right-anchored (:meth:`PurePosixPath.match`): ``*.json``
     matches a JSON file at any depth, ``config/*.json`` matches JSON files
     directly under any ``config`` directory, and a bare filename matches
-    that basename anywhere. This is the single matching convention for both
-    built-in and user-supplied file patterns.
+    that basename anywhere. ``*`` never spans a ``/``. A ``**`` segment
+    stands for any number of directories (:func:`_matches_recursively`):
+    ``config/**/*.json`` matches a JSON file anywhere below a ``config``
+    directory, ``docs/**`` every file in a ``docs`` tree. This is the single
+    matching convention for both built-in and user-supplied file patterns.
     """
     path = PurePosixPath(file_path)
-    return any(path.match(glob_pat) for glob_pat in glob_patterns)
+    return any(path.match(glob_pat) or _matches_recursively(path, glob_pat) for glob_pat in glob_patterns)
+
+
+def _matches_recursively(path: PurePosixPath, glob_pat: str) -> bool:
+    """Whether *path* matches *glob_pat* with its ``**`` segments recursive, as ``PurePath.full_match`` has them.
+
+    Between segments a ``**`` stands for any number of directories, none included
+    (``a/**/b`` matches ``a/b``); at the end, for everything inside the directory
+    (``docs/**`` matches ``docs/a/b.md``, not ``docs``). Inside a segment it is a
+    plain ``*`` (``a**b``), as in ``.gitignore``. Only ever more than
+    :meth:`PurePosixPath.match`, which treats ``**`` as ``*`` (Python 3.13's
+    ``full_match`` has it recursive, but the package supports 3.11).
+    """
+    if (pattern := _double_star_pattern(glob_pat)) is None:
+        return False
+    anchor, segments = pattern
+    if anchor:  # anchored at the root as well
+        return path.anchor == anchor and _segments_match(path.parts[1:], segments)
+    parts = path.parts[1:] if path.anchor else path.parts
+    return any(_segments_match(parts[start:], segments) for start in range(len(parts)))
+
+
+@lru_cache(maxsize=256)
+def _double_star_pattern(glob_pat: str) -> tuple[str, tuple[str, ...]] | None:
+    """*glob_pat*'s anchor and segments, normalised as :class:`PurePosixPath` does; ``None`` without a ``**`` one."""
+    pattern = PurePosixPath(glob_pat)
+    segments = pattern.parts[1:] if pattern.anchor else pattern.parts
+    return (pattern.anchor, segments) if "**" in segments else None
+
+
+def _segments_match(parts: tuple[str, ...], segments: tuple[str, ...]) -> bool:
+    """Whether *parts*, all of them, match *segments* one by one, each ``**`` as :func:`_matches_recursively` has it."""
+
+    @cache
+    def match(part: int, segment: int) -> bool:
+        if segment == len(segments):
+            return part == len(parts)
+        if segments[segment] == "**":
+            if segment == len(segments) - 1:  # everything inside: at least one part
+                return part < len(parts)
+            return any(match(end, segment + 1) for end in range(part, len(parts) + 1))
+        return part < len(parts) and fnmatchcase(parts[part], segments[segment]) and match(part + 1, segment + 1)
+
+    return match(0, 0)
 
 
 def matches_dependency_file(

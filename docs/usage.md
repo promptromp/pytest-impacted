@@ -212,7 +212,7 @@ Patterns are matched against each changed file's path as reported to the strateg
 - `config/*.json` matches JSON files directly inside any directory named `config`
 - `schema.graphql` matches that filename anywhere
 - `*` never spans a `/`, so `fixtures/*.sql` does not match `fixtures/sub/x.sql`
-- `**` is **not** recursive here — it behaves like a single `*`. To watch a directory tree, list a pattern per depth: `config/*`, `config/*/*`, …
+- `**` as a whole path segment is recursive (since 0.38; before, it behaved like a single `*`): between segments it stands for any number of directories, none included, so `fixtures/**/*.sql` matches `fixtures/x.sql` and `fixtures/a/b/x.sql`; at the end, for everything inside a directory, so `config/**` matches every file in a `config` tree at any depth, though not a file named `config`. Inside a segment it is a plain `*`: `a**b` never spans a `/`. These are Python 3.13's `PurePath.full_match` rules, anchored at the end as above, on every supported Python
 
 !!! note
     This is independent of `--no-impacted-dep-files`, which only switches off the built-in dependency-file list. Custom invalidation patterns stay active either way.

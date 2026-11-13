@@ -29,6 +29,8 @@ class TestMatchesDependencyFile:
             pytest.param("setup.cfg", True, id="setup_cfg"),
             pytest.param("requirements/prod.txt", True, id="nested_requirements"),
             pytest.param("requirements/sub/dev.txt", True, id="deeply_nested_requirements"),
+            pytest.param("requirements/env/ci/dev.txt", True, id="requirements_at_any_depth"),
+            pytest.param("requirements/env/ci/dev.in", True, id="pip_tools_in_at_any_depth"),
             # Test-runner configuration: addopts, markers, filterwarnings apply to every test
             pytest.param("pytest.ini", True, id="pytest_ini"),
             pytest.param("tox.ini", True, id="tox_ini"),
