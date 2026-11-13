@@ -782,20 +782,21 @@ def glob_refusal(glob: str) -> str | None:
 
 
 def parse_invalidation_patterns(
-    patterns: Iterable[object], option: str = "--impacted-invalidate-all"
+    patterns: str | Iterable[object], option: str = "--impacted-invalidate-all"
 ) -> tuple[str, ...]:
-    """The ``--impacted-invalidate-all`` globs as matched (:func:`normalise_glob`), each one a string that matches.
+    """The ``--impacted-invalidate-all`` globs as matched (:func:`normalise_glob`).
+
+    A lone string is one glob, not its characters. An entry that is no string (a TOML list may
+    hold any value) is read as one, as the ``impacted-tests`` CLI reads it (``ini.PytestConfig.args``).
 
     Raises:
-        ValueError: An entry is no string (a TOML list may hold any value), or a glob matches no
-            path, naming it and *option*, where it came from.
+        ValueError: :meth:`PurePosixPath.match` refuses a glob (``""``, ``.``, ``./``), naming it and
+            *option*, where it came from.
     """
     parsed = []
-    for raw in patterns:
-        if not isinstance(raw, str):
-            raise ValueError(f"Invalid glob {raw!r} in {option}: expected a string.")  # noqa: TRY004 — a config error
-        if (refusal := glob_refusal(glob := normalise_glob(raw))) is not None:
-            raise ValueError(f"Invalid glob {raw!r} in {option}: it matches no path ({refusal}).")
+    for raw in [patterns] if isinstance(patterns, str) else patterns:
+        if (refusal := glob_refusal(glob := normalise_glob(str(raw)))) is not None:
+            raise ValueError(f"Invalid glob {raw!r} in {option}: no path can match it ({refusal}).")
         parsed.append(glob)
     return tuple(parsed)
 

@@ -210,14 +210,15 @@ class TestParseInvalidationPatterns:
     )
     def test_a_glob_that_matches_no_path_is_an_error(self, glob):
         """``PurePath.match`` refuses each with "empty pattern", which surfaced as an INTERNALERROR mid-run."""
-        with pytest.raises(ValueError, match=r"impacted-invalidate-all: it matches no path \(empty pattern\)"):
+        with pytest.raises(ValueError, match=r"impacted-invalidate-all: no path can match it \(empty pattern\)"):
             parse_invalidation_patterns(["*.json", glob])
 
-    @pytest.mark.parametrize("glob", [1, None, ["*.json"]], ids=["int", "none", "list"])
-    def test_a_glob_that_is_no_string_is_an_error(self, glob):
-        """A TOML list may hold any value: a ``ValueError``, read as a usage error, not an ``AttributeError``."""
-        with pytest.raises(ValueError, match="expected a string"):
-            parse_invalidation_patterns([glob])
+    def test_a_glob_that_is_no_string_is_read_as_one(self):
+        """A TOML list may hold any value: read as the ``impacted-tests`` CLI reads it, not an ``AttributeError``."""
+        assert parse_invalidation_patterns([1, "*.json"]) == ("1", "*.json")
+
+    def test_a_lone_string_is_one_glob(self):
+        assert parse_invalidation_patterns("Makefile") == ("Makefile",)
 
     def test_the_error_names_where_the_glob_came_from(self):
         with pytest.raises(ValueError, match=r"in impacted_invalidate_all in pyproject\.toml"):

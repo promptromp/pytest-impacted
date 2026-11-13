@@ -38,7 +38,7 @@ def parse_file_map(entries: Iterable[str]) -> list[tuple[str, str]]:
         glob, _, path = (normalise_glob(part) for part in entry.partition("="))
         if not glob or not path or "=" in path:
             raise ValueError(f"Invalid --impacted-map entry {entry!r}: expected GLOB=PATH, one '='.")
-        if (refusal := glob_refusal(glob)) is not None:  # "." and "/" leave no pattern
+        if (refusal := glob_refusal(glob)) is not None:  # "." and "./" leave no pattern
             raise ValueError(f"Invalid --impacted-map entry {entry!r}: GLOB {glob!r} matches no path ({refusal}).")
         posix = posixpath.normpath(path)
         if posixpath.isabs(posix) or os.path.isabs(posix) or posix == ".." or posix.startswith("../"):

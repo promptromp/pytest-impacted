@@ -38,6 +38,8 @@ impacted = get_impacted_tests(
 
 Like `ns_module` and `tests_dir`, pytest's `pythonpath` is never read from the configuration here: pass `pythonpath=config.getini("pythonpath")` (or `pytest_impacted.ini.find_pytest_config(root).paths("pythonpath")` outside pytest; since 0.38) — before pytest 8.4, `getini` raises `ValueError` there when `-p no:python_path` blocks the plugin declaring the setting, so read that as no entries, as the plugin does, or bare imports of the modules in those directories (`import alpha` for `lib/alpha.py`) match nothing.
 
+Since 0.38.1, `invalidate_all_patterns` (and `InvalidationFileImpactStrategy`) raise a `ValueError` for a glob Python cannot match (empty, `.`, `./`) when the strategy is built, rather than mid-run. If your extension matches globs of its own with `pytest_impacted.strategies.matches_any_glob`, check them first with `glob_refusal(glob)` (the reason, or `None`) and spell them with `normalise_glob(glob)`, as the built-in options do.
+
 `get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run".
 
 The strategy you pass **replaces** the default pipeline — the AST, conftest and dependency-file strategies included, and `watch_dep_files` / `invalidate_all_patterns` / `conftest_imports` then have no effect (`file_map` still does: its paths join `changed_files`, which every strategy receives). To add to the defaults instead, pass `CompositeImpactStrategy([*get_default_strategies(), MyCustomStrategy()])` (both from `pytest_impacted.strategies`).
