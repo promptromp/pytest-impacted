@@ -23,7 +23,12 @@ from pytest_impacted.graph import (
     resolve_impacted_tests,
 )
 from pytest_impacted.parsing import is_conftest_module, normalize_path
-from pytest_impacted.traversal import canonical_root, clear_discovery_cache, discover_application_files
+from pytest_impacted.traversal import (
+    canonical_root,
+    clear_discovery_cache,
+    discover_application_files,
+    pythonpath_roots,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -125,7 +130,7 @@ def cached_build_dep_tree(
     ns_module: str,
     tests_package: str | None = None,
     root_dir: str | Path | None = None,
-    pythonpath: Iterable[str | Path] = (),
+    pythonpath: str | Path | Iterable[str | Path] = (),
 ) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
@@ -147,8 +152,9 @@ def cached_build_dep_tree(
         key would.
     """
     root = canonical_root(root_dir)
-    # Resolved before the lookup, as the root is: two spellings of one entry are one graph.
-    entries = tuple(os.path.realpath(root / entry) for entry in pythonpath)
+    # Resolved before the lookup, as the root is, and only those the graph reads: two spellings of one
+    # entry, or an entry outside the root, change nothing, so they share an entry.
+    entries = tuple(str(entry) for entry in pythonpath_roots(pythonpath, root))
     return _cached_build_dep_tree(ns_module, tests_package, root, entries)
 
 

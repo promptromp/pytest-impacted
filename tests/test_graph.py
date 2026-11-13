@@ -2040,3 +2040,21 @@ def test_a_pythonpath_entry_the_names_imply_is_unchanged(tmp_path, entry):
         without.graph["import_roots"],
         without.graph["assumed_roots"],
     )
+
+
+def test_a_lone_string_is_one_pythonpath_entry(tmp_path):
+    write_files(tmp_path, FLAT_LIB)
+
+    dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath="lib")
+
+    assert "tests.test_awake" in dep_tree.successors("lib.awake")
+
+
+def test_entries_the_graph_does_not_read_share_its_cache_entry(tmp_path):
+    """Outside the root, or repeated: the same graph, built once."""
+    write_files(tmp_path, FLAT_LIB)
+    clear_dep_tree_cache()
+
+    build = partial(cached_build_dep_tree, "lib", tests_package="tests", root_dir=tmp_path)
+
+    assert build(pythonpath=["lib", "../elsewhere", str(tmp_path / "lib")]) is build(pythonpath=["lib"])

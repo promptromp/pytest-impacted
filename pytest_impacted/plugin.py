@@ -403,7 +403,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             strategy=strategy,
             use_merge_base=not get_option("impacted_no_merge_base"),
             file_map=parse_file_map(get_option("impacted_map") or []),
-            pythonpath=config.getini("pythonpath"),
+            pythonpath=_pythonpath(config),
         )
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not
@@ -416,6 +416,18 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
     # The analysis names files under the canonical root; an extension may use the one it was given.
     roots = [canonical_root(root_dir), root_dir]
     return [_relative_to(roots, test) for test in impacted_tests or []]
+
+
+def _pythonpath(config: Config) -> list[Path]:
+    """pytest's ``pythonpath`` entries; none when no plugin declares the setting.
+
+    Before pytest 8.4 the setting belongs to the ``python_path`` plugin, which ``-p no:python_path``
+    blocks, and ``getini`` then raises. Its entries are then on no ``sys.path`` either.
+    """
+    try:
+        return config.getini("pythonpath")
+    except ValueError:
+        return []
 
 
 def _relative_to(roots: list[Path], test: str) -> str:

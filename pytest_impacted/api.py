@@ -168,7 +168,7 @@ def get_impacted_tests(
     use_merge_base: bool = True,
     conftest_imports: bool = False,
     file_map: Sequence[tuple[str, str]] = (),
-    pythonpath: Sequence[str | Path] = (),
+    pythonpath: str | Path | Sequence[str | Path] = (),
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
@@ -179,7 +179,10 @@ def get_impacted_tests(
     :mod:`pytest_impacted.file_map`): a changed file a glob matches counts as a change
     to its path too, for every strategy. ``pythonpath`` holds pytest's ``pythonpath`` entries
     (absolute, or relative to ``root_dir``): each inside the root is an import root, as
-    pytest puts it on ``sys.path``.
+    pytest puts it on ``sys.path``. Like ``ns_module`` and ``tests_dir``, it is never read from
+    the pytest configuration here: pass ``config.getini("pythonpath")``, or
+    ``find_pytest_config(root).paths("pythonpath")`` from :mod:`pytest_impacted.ini`, or bare
+    imports of the modules in those directories match nothing.
 
     Returns ``None`` when nothing is impacted, and raises
     :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known

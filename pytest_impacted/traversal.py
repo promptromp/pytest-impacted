@@ -576,13 +576,25 @@ def import_roots(
     modules: Mapping[str, str],
     aliases: Mapping[str, str],
     root_dir: str | Path | None = None,
+    pythonpath: str | Path | Iterable[str | Path] = (),
 ) -> list[Path]:
     """The directories an import of a module no walk names is looked up from, the rootdir first.
 
     Those the names imply, then those only assumed (see :func:`split_import_roots`).
     """
-    implied, assumed = split_import_roots(packages, modules, aliases, root_dir)
+    implied, assumed = split_import_roots(packages, modules, aliases, root_dir, pythonpath)
     return [*implied, *assumed]
+
+
+def pythonpath_roots(pythonpath: str | Path | Iterable[str | Path], root: Path) -> list[Path]:
+    """pytest's ``pythonpath`` entries inside *root*, resolved as the files found under them are, once each.
+
+    An entry is absolute or relative to *root*; a lone string or path is one entry, not its characters.
+    """
+    entries = [pythonpath] if isinstance(pythonpath, str | Path) else pythonpath
+    # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
+    resolved = (Path(os.path.realpath(root / entry)) for entry in entries)
+    return list(dict.fromkeys(entry for entry in resolved if entry.is_relative_to(root)))
 
 
 def split_import_roots(
@@ -590,6 +602,7 @@ def split_import_roots(
     modules: Mapping[str, str],
     aliases: Mapping[str, str],
     root_dir: str | Path | None = None,
+    pythonpath: str | Path | Iterable[str | Path] = (),
 ) -> tuple[list[Path], list[Path]]:
     """:func:`import_roots` in two parts: the roots the project's names imply, and those only assumed.
 
@@ -600,7 +613,12 @@ def split_import_roots(
     ``src/app/x.py`` is rooted at ``src/``, ``tests.x`` for ``app/tests/x.py`` at ``app/``
     (package or not — the walk names it so). Each analysed directory's non-package prefix is
     another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and so is any
-    directory between the rootdir and one of these that is no regular package.
+    directory between the rootdir and one of these that is no regular package. So is each of
+    pytest's *pythonpath* entries inside the rootdir that is not an assumed root anyway: pytest
+    puts it on ``sys.path``, so ``import awake`` means ``lib/awake.py`` with ``lib`` there, though
+    the walk names it ``lib.awake``. One that is (``src/`` with an ``__init__.py`` above
+    ``src/app``) stays assumed: placing through it would turn a library the app imports into
+    application code, and the conftest importing it opt-in — fewer tests than before it was read.
 
     **Assumed.** Every other directory above an analysed directory (:func:`_directories_above`):
     one no name is rooted at, being a regular package or inside one. ``src/`` with an
@@ -645,6 +663,7 @@ def split_import_roots(
             between.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
     implied = dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))])
     assumed = dict.fromkeys(d for d in _directories_above(packages, root) if d not in implied)
+    implied.update(dict.fromkeys(d for d in pythonpath_roots(pythonpath, root) if d not in assumed))
     return list(implied), list(assumed)
 
 
