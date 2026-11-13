@@ -201,17 +201,29 @@ class TestParseInvalidationPatterns:
 
     def test_the_platform_separator_is_git_s(self, monkeypatch):
         """On Windows ``config\\**`` is what a user types for ``config/**``, which is how git spells the path."""
-        monkeypatch.setattr("pytest_impacted.strategies.os.sep", "\\")
+        monkeypatch.setattr("pytest_impacted.strategies._SEP", "\\")
 
         assert parse_invalidation_patterns(["config\\**\\*.yaml"]) == ("config/**/*.yaml",)
 
-    @pytest.mark.parametrize("glob", ["", "   "], ids=["empty", "blank"])
-    def test_an_empty_glob_is_an_error(self, glob):
-        """``PurePath.match`` refuses one with "empty pattern", which surfaced as an INTERNALERROR."""
-        with pytest.raises(ValueError, match="impacted-invalidate-all"):
+    @pytest.mark.parametrize(
+        "glob", ["", "   ", ".", "./", " . "], ids=["empty", "blank", "dot", "dot_slash", "spaced"]
+    )
+    def test_a_glob_that_matches_no_path_is_an_error(self, glob):
+        """``PurePath.match`` refuses each with "empty pattern", which surfaced as an INTERNALERROR mid-run."""
+        with pytest.raises(ValueError, match=r"impacted-invalidate-all: it matches no path \(empty pattern\)"):
             parse_invalidation_patterns(["*.json", glob])
 
+    @pytest.mark.parametrize("glob", [1, None, ["*.json"]], ids=["int", "none", "list"])
+    def test_a_glob_that_is_no_string_is_an_error(self, glob):
+        """A TOML list may hold any value: a ``ValueError``, read as a usage error, not an ``AttributeError``."""
+        with pytest.raises(ValueError, match="expected a string"):
+            parse_invalidation_patterns([glob])
+
+    def test_the_error_names_where_the_glob_came_from(self):
+        with pytest.raises(ValueError, match=r"in impacted_invalidate_all in pyproject\.toml"):
+            parse_invalidation_patterns(["."], "impacted_invalidate_all in pyproject.toml")
+
     def test_the_strategy_reads_its_globs_so(self, monkeypatch):
-        monkeypatch.setattr("pytest_impacted.strategies.os.sep", "\\")
+        monkeypatch.setattr("pytest_impacted.strategies._SEP", "\\")
 
         assert InvalidationFileImpactStrategy(["config\\x.json"]).patterns == ("config/x.json",)

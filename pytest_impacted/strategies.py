@@ -760,18 +760,44 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         return _every_test(dep_tree, f"Dependency file changes detected: {dep_files}", session)
 
 
-def parse_invalidation_patterns(patterns: Iterable[str]) -> tuple[str, ...]:
-    """The ``--impacted-invalidate-all`` globs as matched: stripped, the platform's separator as ``/``.
+#: The platform's path separator, which a user's glob may use for git's ``/``. A module name: a test patches it alone.
+_SEP = os.sep
 
-    git spells every path with ``/``, so ``config\\**`` typed on Windows means ``config/**``, as
-    for ``--impacted-map``. An empty glob is a ``ValueError``: ``PurePath.match`` refuses it, which
-    surfaced as an INTERNALERROR mid-run.
+
+def normalise_glob(glob: str) -> str:
+    """A user's glob as matched: stripped, the platform's separator as git's ``/`` (``config\\**`` on Windows)."""
+    return glob.strip().replace(_SEP, "/")
+
+
+def glob_refusal(glob: str) -> str | None:
+    """Why :meth:`PurePosixPath.match` refuses *glob* (``empty pattern`` for ``""``, ``.``, ``./``), or ``None``.
+
+    Asked when the configuration is read: met while matching, it ended the run in an INTERNALERROR.
     """
-    given = tuple(patterns)
-    parsed = tuple(pattern.strip().replace(os.sep, "/") for pattern in given)
-    if "" in parsed:
-        raise ValueError(f"Invalid --impacted-invalidate-all glob {given[parsed.index('')]!r}: it is empty.")
-    return parsed
+    try:
+        PurePosixPath("x").match(glob)
+    except ValueError as err:
+        return str(err)
+    return None
+
+
+def parse_invalidation_patterns(
+    patterns: Iterable[object], option: str = "--impacted-invalidate-all"
+) -> tuple[str, ...]:
+    """The ``--impacted-invalidate-all`` globs as matched (:func:`normalise_glob`), each one a string that matches.
+
+    Raises:
+        ValueError: An entry is no string (a TOML list may hold any value), or a glob matches no
+            path, naming it and *option*, where it came from.
+    """
+    parsed = []
+    for raw in patterns:
+        if not isinstance(raw, str):
+            raise ValueError(f"Invalid glob {raw!r} in {option}: expected a string.")  # noqa: TRY004 — a config error
+        if (refusal := glob_refusal(glob := normalise_glob(raw))) is not None:
+            raise ValueError(f"Invalid glob {raw!r} in {option}: it matches no path ({refusal}).")
+        parsed.append(glob)
+    return tuple(parsed)
 
 
 class InvalidationFileImpactStrategy(ImpactStrategy):

@@ -625,7 +625,7 @@ def validate_config(config: Config):
 
     try:
         parse_file_map(get_option("impacted_map") or [])
-        parse_invalidation_patterns(get_option("impacted_invalidate_all") or [])
+        parse_invalidation_patterns(get_option("impacted_invalidate_all") or [], "--impacted-invalidate-all")
     except ValueError as err:
         raise UsageError(str(err)) from err
 

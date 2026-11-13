@@ -20,6 +20,7 @@ from pytest_impacted.extensions import (
 from pytest_impacted.file_map import parse_file_map
 from pytest_impacted.git import GitMode, GitUnavailableError
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
+from pytest_impacted.strategies import parse_invalidation_patterns
 
 
 # The pytest setting each option defaults to; an extension's option is named as its setting.
@@ -265,6 +266,10 @@ def _run(
         mappings = parse_file_map(file_map)
     except ValueError as err:
         raise click.BadParameter(str(err), param_hint="--map") from err
+    try:  # named as the CLI knows it: its own option, or the setting and the file it came from
+        parse_invalidation_patterns(invalidate_all, sources.get("invalidate_all", "--invalidate-all"))
+    except ValueError as err:
+        raise click.UsageError(str(err)) from err
 
     try:
         strategy = build_strategy_with_extensions(

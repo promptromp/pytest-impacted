@@ -216,7 +216,8 @@ Patterns are matched against each changed file's path as reported to the strateg
 - `config/*.json` matches JSON files directly inside any directory named `config`
 - `schema.graphql` matches that filename anywhere
 - `*` never spans a `/`, so `fixtures/*.sql` does not match `fixtures/sub/x.sql`
-- On Windows a glob may use `\` as the separator (`config\*.json`), as for `--impacted-map` (since 0.38.1); an empty glob is a usage error
+- On Windows a glob may use `\` as the separator (`config\*.json`; in TOML, a literal string `'config\*.json'`), as for `--impacted-map` (since 0.38.1)
+- A glob that matches no path — empty, `.` or `./` — or that is no string is a usage error, as for `--impacted-map` (since 0.38.1; before, it ended the run with an INTERNALERROR once a file changed)
 - `**` as a whole path segment stands for any number of path segments, none included (since 0.38; before, it behaved like a single `*`):
     - `fixtures/**/*.sql` matches `fixtures/x.sql` and `fixtures/a/b/x.sql`
     - `config/**` matches every file in a `config` tree, at any depth — any directory named `config`, as above, so also `services/a/config/x.yaml` — and a path `config` itself: a submodule or a symlinked directory there, as git reports a change to it, but also a file of that name

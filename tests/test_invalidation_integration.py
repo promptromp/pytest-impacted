@@ -234,3 +234,38 @@ def test_the_cli_calls_an_empty_glob_a_usage_error(git_project):
 
     assert result.exit_code == 2, result.output
     assert "empty" in result.output
+
+
+@pytest.mark.parametrize("glob", [".", "./"], ids=["dot", "dot_slash"])
+def test_a_glob_that_matches_no_path_is_a_usage_error(git_project, glob):
+    """``PurePath.match`` refuses it with "empty pattern" too: met mid-run, it was an INTERNALERROR."""
+    git_project.touch("config/settings.json")
+
+    result = run(git_project, "--impacted-git-mode=unstaged", f"--impacted-invalidate-all={glob}")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*matches no path (empty pattern)*"])
+
+
+def test_a_glob_in_the_configuration_that_is_no_string_is_a_usage_error(make_git_project):
+    """A TOML list may hold any value; ``.strip()`` on it was an INTERNALERROR on every run."""
+    toml = (
+        "[tool.pytest.ini_options]\npythonpath = ['.']\nimpacted_module = 'pkg'\nimpacted_tests_dir = 'tests'\n"
+        "impacted_invalidate_all = [1]\n"
+    )
+    project = make_git_project({**FILES, "pyproject.toml": toml}, "")  # read before the empty tox.ini
+
+    result = run(project, "--impacted-git-mode=unstaged")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*Invalid glob 1*expected a string*"])
+
+
+def test_the_cli_names_the_setting_and_file_a_bad_glob_came_from(git_project):
+    git_project.makeini(INI + "impacted_invalidate_all = .\n")
+
+    result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(git_project.path)])
+
+    assert result.exit_code == 2, result.output
+    assert "Invalid glob '.' in impacted_invalidate_all in " in result.output
+    assert "--impacted-invalidate-all" not in result.output
