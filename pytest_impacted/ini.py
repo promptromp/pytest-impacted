@@ -72,6 +72,12 @@ class PytestConfig:
             return value
         return shlex.split(str(value))
 
+    def paths(self, name: str) -> list[Path]:
+        """A ``paths`` setting, such as ``pythonpath``: read as ``args``, relative to the file's directory."""
+        if self.path is None:
+            return []
+        return [self.path.parent / item for item in self.args(name) or []]
+
     def _get(self, name: str, native_type: type) -> object:
         value = self.values.get(name)
         if value is not None and self.native and not isinstance(value, native_type):

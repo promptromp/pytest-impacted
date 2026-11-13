@@ -21,12 +21,14 @@ before_pytest_9_2 = pytest.mark.skipif(PYTEST_9_2, reason="pytest 9.2 changed ho
 # What pytest's getini raises for a value of the wrong type: a usage error since pytest 9.2.
 PYTEST_REJECTS = pytest.UsageError if PYTEST_9_2 else TypeError
 
-# The same three settings, one per type the plugin declares: a string, a bool and "args".
+# One setting per type the plugin declares (a string, a bool, "args"), and pytest's own "paths" pythonpath.
 INI_LINES = (
     "impacted_module = app\nimpacted_conftest_imports = true\nimpacted_invalidate_all = *.json 'my dir/*.yaml'\n"
+    "pythonpath = lib 'my lib'\n"
 )
 TOML_INI_MODE = (
     'impacted_module = "app"\nimpacted_conftest_imports = true\nimpacted_invalidate_all = ["*.json", "my dir/*.yaml"]\n'
+    'pythonpath = ["lib", "my lib"]\n'
 )
 TOML_NATIVE = TOML_INI_MODE
 FORMATS = [
@@ -43,6 +45,7 @@ SETTINGS = [
     ("impacted_module", PytestConfig.string),
     ("impacted_conftest_imports", PytestConfig.flag),
     ("impacted_invalidate_all", PytestConfig.args),
+    ("pythonpath", PytestConfig.paths),
 ]
 
 
@@ -386,3 +389,21 @@ def test_a_listable_but_unsearchable_directory_holds_no_configuration(tmp_path):
         assert find_pytest_config(locked).path is None
     finally:
         locked.chmod(0o755)
+
+
+def test_pythonpath_unset_is_empty_as_in_pytest(pytester):
+    write(pytester.path, {"pytest.ini": "[pytest]\n"})
+
+    assert find_pytest_config(pytester.path).paths("pythonpath") == pytester.parseconfig(pytester.path).getini(
+        "pythonpath"
+    )
+
+
+@needs_pytest_9
+def test_a_native_pythonpath_that_is_no_list_is_an_error_as_in_pytest(pytester):
+    write(pytester.path, {"pytest.toml": '[pytest]\npythonpath = "lib"\n'})
+
+    with pytest.raises(PYTEST_REJECTS):
+        pytester.parseconfig(pytester.path).getini("pythonpath")
+    with pytest.raises(ValueError, match="pythonpath"):
+        find_pytest_config(pytester.path).paths("pythonpath")

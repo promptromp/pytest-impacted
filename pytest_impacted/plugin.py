@@ -403,6 +403,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             strategy=strategy,
             use_merge_base=not get_option("impacted_no_merge_base"),
             file_map=parse_file_map(get_option("impacted_map") or []),
+            pythonpath=config.getini("pythonpath"),
         )
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not

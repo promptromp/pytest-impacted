@@ -168,6 +168,7 @@ def get_impacted_tests(
     use_merge_base: bool = True,
     conftest_imports: bool = False,
     file_map: Sequence[tuple[str, str]] = (),
+    pythonpath: Sequence[str | Path] = (),
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
@@ -176,7 +177,9 @@ def get_impacted_tests(
     ``use_merge_base`` makes branch mode diff from the fork point (the default)
     rather than the base branch's tip. ``file_map`` holds ``(glob, path)`` pairs (see
     :mod:`pytest_impacted.file_map`): a changed file a glob matches counts as a change
-    to its path too, for every strategy.
+    to its path too, for every strategy. ``pythonpath`` holds pytest's ``pythonpath`` entries
+    (absolute, or relative to ``root_dir``): each inside the root is an import root, as
+    pytest puts it on ``sys.path``.
 
     Returns ``None`` when nothing is impacted, and raises
     :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known
@@ -229,7 +232,9 @@ def get_impacted_tests(
     # The result is LRU-cached and must not be mutated, so we hand each run a
     # copy. Strategies that implement enrich_dep_tree() mutate the copy,
     # leaving the cached base graph pristine for subsequent runs.
-    cached = cached_build_dep_tree(ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir))
+    cached = cached_build_dep_tree(
+        ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir), pythonpath=pythonpath
+    )
     dep_tree = run_copy(cached)
 
     # A changed file the graph lacks — deleted, or no walk reaches it — joins the run's copy,

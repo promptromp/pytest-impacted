@@ -30,6 +30,7 @@ from pytest_impacted.traversal import (
     modules_for_files,
     package_name_to_path,
     split_import_roots,
+    top_level_entries,
 )
 
 
@@ -665,7 +666,29 @@ def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
     return parent_path is None or parent_path.endswith("__init__.py")
 
 
-def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str | Path | None = None) -> nx.DiGraph:
+def _pythonpath_roots(pythonpath: Iterable[str | Path], root: Path) -> list[Path]:
+    """pytest's ``pythonpath`` entries inside the rootdir, resolved as the files found under them are."""
+    # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
+    entries = (Path(os.path.realpath(root / entry)) for entry in pythonpath)
+    return list(dict.fromkeys(entry for entry in entries if entry.is_relative_to(root)))
+
+
+def _module_names_in(directory: Path) -> frozenset[str]:
+    """The top-level modules an import may name in *directory*: its ``.py`` files and directories."""
+    return frozenset(
+        stem
+        for entry in top_level_entries(directory)
+        if (stem := entry.removesuffix(".py")).isidentifier()
+        and (entry.endswith(".py") or os.path.isdir(directory / entry))
+    )
+
+
+def build_dep_tree(
+    package: str,
+    tests_package: str | None = None,
+    root_dir: str | Path | None = None,
+    pythonpath: Iterable[str | Path] = (),
+) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
     Scans the package directory to find modules, reads their source files,
@@ -683,6 +706,9 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
     importers, for :func:`link_changed_files`. An import found only under an assumed
     import root (``graph["assumed_roots"]``, see
     :func:`~pytest_impacted.traversal.split_import_roots`) is an edge flagged ``assumed_root``.
+    *pythonpath* holds pytest's ``pythonpath`` entries (absolute, or relative to the rootdir):
+    each inside the rootdir is an import root too, whose every module is looked up there, and
+    an import found under it alone is such an edge as well — it reaches, never places.
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
@@ -696,6 +722,13 @@ def build_dep_tree(package: str, tests_package: str | None = None, root_dir: str
         base: frozenset(d.relative_to(base).parts[0] for d in directories if d.is_relative_to(base) and d != base)
         for base in assumed_roots
     }
+    # pytest puts each pythonpath entry on sys.path for certain, yet what is found under one only
+    # reaches its importers: placed by it, a library the app imports would turn application code,
+    # and the conftest importing it opt-in — fewer tests than without the entry. So each entry the
+    # names do not imply joins the assumed roots, every module in it a name that always leads there.
+    for base in _pythonpath_roots(pythonpath, root):
+        if base not in roots:
+            gateways[base] = gateways.get(base, frozenset()) | _module_names_in(base)
     linker = _Linker(discovered, roots, root, gateways)
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))

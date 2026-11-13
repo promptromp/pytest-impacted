@@ -108,19 +108,24 @@ def has_dependency_file_changes(
 
 
 @lru_cache(maxsize=8)
-def _cached_build_dep_tree(ns_module: str, tests_package: str | None, root: Path) -> nx.DiGraph:
-    """Cached graph construction, keyed on the canonical *root*.
+def _cached_build_dep_tree(
+    ns_module: str, tests_package: str | None, root: Path, pythonpath: tuple[str, ...] = ()
+) -> nx.DiGraph:
+    """Cached graph construction, keyed on the canonical *root* and the resolved *pythonpath*.
 
     Note:
         maxsize=8 keeps recent dependency trees without unbounded growth. The
         common case is the same ns_module/tests_package/root used repeatedly
         across runs in one process (in-process ``pytest.main``, pytester).
     """
-    return build_dep_tree(ns_module, tests_package=tests_package, root_dir=root)
+    return build_dep_tree(ns_module, tests_package=tests_package, root_dir=root, pythonpath=pythonpath)
 
 
 def cached_build_dep_tree(
-    ns_module: str, tests_package: str | None = None, root_dir: str | Path | None = None
+    ns_module: str,
+    tests_package: str | None = None,
+    root_dir: str | Path | None = None,
+    pythonpath: Iterable[str | Path] = (),
 ) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
@@ -129,6 +134,8 @@ def cached_build_dep_tree(
         tests_package: Optional tests package name
         root_dir: Project root the package paths are relative to; defaults to
             the current directory.
+        pythonpath: pytest's ``pythonpath`` entries, absolute or relative to the root:
+            each inside it is an import root (see :func:`~pytest_impacted.graph.build_dep_tree`).
 
     Returns:
         NetworkX dependency graph. Do not mutate it — it is shared between
@@ -139,7 +146,10 @@ def cached_build_dep_tree(
         never collapses two projects onto one entry the way a bare ``None``
         key would.
     """
-    return _cached_build_dep_tree(ns_module, tests_package, canonical_root(root_dir))
+    root = canonical_root(root_dir)
+    # Resolved before the lookup, as the root is: two spellings of one entry are one graph.
+    entries = tuple(os.path.realpath(root / entry) for entry in pythonpath)
+    return _cached_build_dep_tree(ns_module, tests_package, root, entries)
 
 
 def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:

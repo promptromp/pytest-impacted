@@ -1965,3 +1965,52 @@ def test_resolve_impacted_tests_judges_each_node_once_however_many_modules_chang
 
     assert result == ["tests.test_last"]
     assert len(judged) <= 2 * len(dep_tree)
+
+
+FLAT_LIB = {
+    "lib/awake.py": "def up():\n    return True\n",
+    "lib/ledger.py": "import awake\n",
+    "tests/test_awake.py": "import awake\n",
+    "tests/test_ledger.py": "import ledger\n",
+}
+
+
+@pytest.mark.parametrize(
+    ("pythonpath", "importers"),
+    [
+        pytest.param(["project/lib"], {"lib.ledger", "tests.test_awake"}, id="on_the_pythonpath"),
+        pytest.param(["link/lib"], {"lib.ledger", "tests.test_awake"}, id="through_a_symlink_to_the_rootdir"),
+        pytest.param([], set(), id="not"),
+        pytest.param(["elsewhere"], set(), id="outside_the_rootdir"),
+    ],
+)
+def test_a_pythonpath_entry_is_an_import_root(tmp_path, pythonpath, importers):
+    """pytest puts each ``pythonpath`` entry on ``sys.path``: ``import awake`` means ``lib/awake.py``,
+    which the walk names ``lib.awake``. One outside the rootdir holds no file of the project."""
+    root = tmp_path / "project"
+    write_files(root, FLAT_LIB)
+    write_files(tmp_path, {"elsewhere/awake.py": ""})
+    (tmp_path / "link").symlink_to(root)
+
+    dep_tree = graph.build_dep_tree(
+        "lib", tests_package="tests", root_dir=root, pythonpath=[tmp_path / entry for entry in pythonpath]
+    )
+
+    assert set(dep_tree.successors("lib.awake")) == importers
+    roots = dep_tree.graph["import_roots"]
+    assert (str((root / "lib").resolve()) in roots, str((tmp_path / "elsewhere").resolve()) in roots) == (
+        bool(importers),
+        False,
+    )
+    assert all(Path(path).is_relative_to(root.resolve()) for path in nx.get_node_attributes(dep_tree, "path").values())
+
+
+def test_the_cached_graph_is_keyed_on_the_pythonpath(tmp_path):
+    write_files(tmp_path, FLAT_LIB)
+    clear_dep_tree_cache()
+
+    without = cached_build_dep_tree("lib", tests_package="tests", root_dir=tmp_path)
+    with_lib = cached_build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "lib"])
+
+    assert "tests.test_awake" not in without.successors("lib.awake")
+    assert "tests.test_awake" in with_lib.successors("lib.awake")

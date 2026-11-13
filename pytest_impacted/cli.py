@@ -241,6 +241,12 @@ def _run(
         click.secho("  map: {}".format(", ".join(file_map)), fg="blue", bold=True, err=True)
     if conftest_imports:
         click.secho("  conftest-imports: True", fg="blue", bold=True, err=True)
+    try:
+        pythonpath = config.paths("pythonpath")
+    except ValueError as err:  # it names the setting and the file
+        raise click.UsageError(str(err)) from err
+    if pythonpath:
+        click.secho("  pythonpath: {}".format(", ".join(map(str, pythonpath))), fg="blue", bold=True, err=True)
     if disable_ext:
         click.secho("  disable-ext: {}".format(", ".join(disable_ext)), fg="blue", bold=True, err=True)
 
@@ -282,6 +288,7 @@ def _run(
             strategy=strategy,
             use_merge_base=not no_merge_base,
             file_map=mappings,
+            pythonpath=pythonpath,
         )
     except GitUnavailableError as err:
         # Printing nothing would read as "no tests impacted" to a script piping
