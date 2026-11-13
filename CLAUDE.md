@@ -436,8 +436,9 @@ Plain helpers live in `tests/git_helpers.py` — never import from a conftest. I
 projects must not name their tests dir `tests` (it would clash with this repo's package in
 `sys.modules`); use `suite`.
 
-**CI's impacted job runs the suite under pytest-xdist (`-n auto`)**, so every test must pass in
-a worker. A test project's conftest tells a worker by `config.workerinput`, never
+**CI's impacted job runs the impacted tests twice, the second time under pytest-xdist
+(`-n auto`)**, so every test must pass in a worker: a test a PR adds or changes is impacted, and
+runs there. A test project's conftest tells a worker by `config.workerinput`, never
 `PYTEST_XDIST_WORKER`, which a nested run inherits from the suite's own worker. A test of the
 xdist path must make the race it guards against certain: a controller hook writing between two
 workers' handoffs, not a worker writing as it starts (that one passed with the handoff cache

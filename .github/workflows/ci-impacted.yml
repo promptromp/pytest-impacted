@@ -85,8 +85,16 @@ jobs:
     - name: Install the project (fast/Rust backend)
       if: matrix.backend == 'fast'
       run: uv sync --all-extras --dev
-    # Under pytest-xdist, as many run it: ci.yml runs the whole suite without it.
     - name: Run impacted tests
+      run: >
+        uv run pytest
+        --impacted
+        --impacted-module pytest_impacted
+        --impacted-git-mode branch
+        --impacted-base-branch origin/${{ github.base_ref }}
+        --impacted-tests-dir tests
+    # Again under pytest-xdist, as many run it: there the controller analyses and the workers filter.
+    - name: Run impacted tests under pytest-xdist
       run: >
         uv run pytest
         --impacted

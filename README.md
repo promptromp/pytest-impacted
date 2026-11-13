@@ -23,7 +23,7 @@ pytest --impacted --impacted-module=my_package \
 | :zap: | **Fast feedback** | Only runs tests affected by your changes — skip the rest |
 | :deciduous_tree: | **Dependency-aware** | Follows import chains transitively, not just direct file changes |
 | :gear: | **No imports at analysis time** | Filesystem discovery + AST parsing — no module-level side effects |
-| :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options, and under pytest-xdist (`-n auto`): the analysis runs once, on the controller |
+| :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options, including under pytest-xdist (`-n auto`) |
 | :wrench: | **conftest.py aware** | A `conftest.py` that changes, or imports changed fixture code, impacts every test beneath it (one importing changed *application* code too, with `--impacted-conftest-imports`); a change reaching a `pytest_plugins` / `-p` plugin impacts all tests |
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements*.txt`, `pyproject.toml`, `pytest.ini` etc. trigger all tests |
 | :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `config/*.yaml`, …) that trigger all tests |

@@ -515,7 +515,8 @@ def pytest_testnodedown(node, error) -> None:
     """pytest-xdist hook, on the controller: keep the most any finished worker deselected.
 
     Workers usually collect and deselect the same tests; the most is what the summary
-    names when they do not (``--dist each`` across Python versions).
+    names when they do not, which only ``--dist each`` allows (a conftest collecting
+    differently on each worker).
     """
     reported = getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY)
     if isinstance(reported, int):

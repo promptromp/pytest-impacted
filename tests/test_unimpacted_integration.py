@@ -272,18 +272,19 @@ def test_under_xdist_the_controller_analyses_once_for_every_worker(make_git_proj
 
 
 def test_under_xdist_a_crashed_worker_is_replaced(make_git_project):
-    """A crashed worker goes down without the report a finished one sends (``workeroutput``);
-    its replacement (``--max-worker-restart``) gets the controller's analysis, as the first did.
+    """A crashed worker goes down without the report a finished one sends (``workeroutput``),
+    and its replacement (``--max-worker-restart``) gets the controller's analysis, as it did:
+    xdist hands the replacement the rest only if it collects what the crashed worker had. With
+    one worker, no other can run them instead; a timeout, in case none does.
     """
     pytest.importorskip("xdist")
     after = "".join(f"def test_after_{i}():\n    assert a() == 1\n\n" for i in range(4))
     crashes = "import os\nfrom app.a import a\n\ndef test_crash():\n    os._exit(1)\n\n" + after
     project = make_git_project({**FILES, "suite/test_crash.py": crashes}, INI)
     edit(project, "app/a.py")
+    args = ["--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v"]
 
-    result = project.runpytest_subprocess(
-        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", "-n=2", "--max-worker-restart=1"
-    )
+    result = project.runpytest_subprocess(*args, "-n", "1", "--max-worker-restart=1", timeout=60)
 
     result.stdout.fnmatch_lines(["*replacing crashed worker*"])
     result.assert_outcomes(passed=5, failed=1)
@@ -382,10 +383,10 @@ def test_each_collection_starts_afresh(project):
     assert config.workeroutput[_WORKER_OUTPUT_KEY] == 0
 
 
-def test_the_controller_keeps_the_most_any_worker_deselected(project):
-    """Workers deselect alike unless they collect differently (``--dist each`` across Python
-    versions); the summary then names the most. A crashed worker reports nothing."""
-    config = project.parseconfig("--impacted")
+def test_the_controller_keeps_the_most_any_worker_deselected():
+    """Workers deselect alike unless they collect differently, which only ``--dist each``
+    allows; the summary then names the most. A crashed worker reports nothing."""
+    config = SimpleNamespace(stash=pytest.Stash())
 
     for reported in (2, 5, 1):
         pytest_testnodedown(SimpleNamespace(config=config, workeroutput={_WORKER_OUTPUT_KEY: reported}), None)
