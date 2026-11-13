@@ -56,16 +56,14 @@ DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
 )
 
 # Glob-style patterns (see matches_any_glob: right-anchored, so a bare-name glob matches
-# at any depth, and a ``**`` segment stands for any number of directories) for files named by convention.
+# at any depth, and a ``**`` segment any number of segments) for files named by convention.
 DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
     "*requirements*.txt",  # requirements.txt, requirements-dev.txt, test-requirements.txt, ...
     "*requirements*.in",  # pip-tools inputs
     "requirements*.lock",  # rye
     "*constraints*.txt",  # constraints.txt, test-constraints.txt, ...
     "pylock*.toml",  # PEP 751
-    "requirements/*.txt",
-    "requirements/**/*.txt",
-    "requirements/*.in",
+    "requirements/**/*.txt",  # at any depth below a requirements/ directory
     "requirements/**/*.in",
 )
 
@@ -77,56 +75,62 @@ def matches_any_glob(file_path: str, glob_patterns: Iterable[str]) -> bool:
     matches a JSON file at any depth, ``config/*.json`` matches JSON files
     directly under any ``config`` directory, and a bare filename matches
     that basename anywhere. ``*`` never spans a ``/``. A ``**`` segment
-    stands for any number of directories (:func:`_matches_recursively`):
+    stands for any number of segments (:func:`_matches_recursively`):
     ``config/**/*.json`` matches a JSON file anywhere below a ``config``
-    directory, ``docs/**`` every file in a ``docs`` tree. This is the single
-    matching convention for both built-in and user-supplied file patterns.
+    directory, ``docs/**`` every file in a ``docs`` tree. Tried after
+    :meth:`PurePosixPath.match`, so a glob matches every file it did when ``**``
+    was a plain ``*``, and one without a ``**`` segment matches as it always
+    did, on each Python. This is the single matching convention for both
+    built-in and user-supplied file patterns.
     """
     path = PurePosixPath(file_path)
     return any(path.match(glob_pat) or _matches_recursively(path, glob_pat) for glob_pat in glob_patterns)
 
 
 def _matches_recursively(path: PurePosixPath, glob_pat: str) -> bool:
-    """Whether *path* matches *glob_pat* with its ``**`` segments recursive, as ``PurePath.full_match`` has them.
+    """Whether *path* matches *glob_pat*, each ``**`` segment standing for any number of segments, none included.
 
-    Between segments a ``**`` stands for any number of directories, none included
-    (``a/**/b`` matches ``a/b``); at the end, for everything inside the directory
-    (``docs/**`` matches ``docs/a/b.md``, not ``docs``). Inside a segment it is a
-    plain ``*`` (``a**b``), as in ``.gitignore``. Only ever more than
-    :meth:`PurePosixPath.match`, which treats ``**`` as ``*`` (Python 3.13's
-    ``full_match`` has it recursive, but the package supports 3.11).
+    So ``a/**/b`` matches ``a/b`` and ``a/x/y/b``, and ``docs/**`` everything in a
+    ``docs`` tree and ``docs`` itself, which git reports for a submodule or a symlink
+    to a directory. Python 3.13's ``PurePath.full_match`` has the same ``**``, except
+    that at the end it asks for a segment; the package supports 3.11, which lacks it.
+    Inside a segment ``**`` is a plain ``*`` (``a**b``), as in ``.gitignore``.
+    ``False`` for a glob without a ``**`` segment: :func:`matches_any_glob` asks
+    :meth:`PurePosixPath.match` first, whose quirks this does not share (3.11 lets
+    ``*`` match the root, 3.12 a negated class span a ``/``).
     """
     if (pattern := _double_star_pattern(glob_pat)) is None:
         return False
     anchor, segments = pattern
-    if anchor:  # anchored at the root as well
-        return path.anchor == anchor and _segments_match(path.parts[1:], segments)
-    parts = path.parts[1:] if path.anchor else path.parts
-    return any(_segments_match(parts[start:], segments) for start in range(len(parts)))
+    if anchor and anchor != path.anchor:  # an absolute glob is anchored at the root too
+        return False
+    return _segments_match(path.parts[1:] if path.anchor else path.parts, segments)
 
 
 @lru_cache(maxsize=256)
 def _double_star_pattern(glob_pat: str) -> tuple[str, tuple[str, ...]] | None:
-    """*glob_pat*'s anchor and segments, normalised as :class:`PurePosixPath` does; ``None`` without a ``**`` one."""
+    """*glob_pat*'s anchor and segments, normalised as :class:`PurePosixPath` does; ``None`` without a ``**`` one.
+
+    A relative glob is anchored at the end only, so it gets a leading ``**``.
+    """
     pattern = PurePosixPath(glob_pat)
     segments = pattern.parts[1:] if pattern.anchor else pattern.parts
-    return (pattern.anchor, segments) if "**" in segments else None
+    if "**" not in segments:
+        return None
+    return pattern.anchor, segments if pattern.anchor else ("**", *segments)
 
 
 def _segments_match(parts: tuple[str, ...], segments: tuple[str, ...]) -> bool:
-    """Whether *parts*, all of them, match *segments* one by one, each ``**`` as :func:`_matches_recursively` has it."""
-
-    @cache
-    def match(part: int, segment: int) -> bool:
-        if segment == len(segments):
-            return part == len(parts)
-        if segments[segment] == "**":
-            if segment == len(segments) - 1:  # everything inside: at least one part
-                return part < len(parts)
-            return any(match(end, segment + 1) for end in range(part, len(parts) + 1))
-        return part < len(parts) and fnmatchcase(parts[part], segments[segment]) and match(part + 1, segment + 1)
-
-    return match(0, 0)
+    """Whether all of *parts* match *segments* one by one, a ``**`` segment matching any number of them."""
+    # matched[i]: the segments so far match parts[:i].
+    matched = [True] + [False] * len(parts)
+    for segment in segments:
+        if segment == "**":
+            first = next((i for i, prefix in enumerate(matched) if prefix), len(parts) + 1)
+            matched = [i >= first for i in range(len(parts) + 1)]
+        else:
+            matched = [False, *(matched[i] and fnmatchcase(part, segment) for i, part in enumerate(parts))]
+    return matched[-1]
 
 
 def matches_dependency_file(

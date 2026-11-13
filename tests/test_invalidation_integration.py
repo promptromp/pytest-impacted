@@ -62,10 +62,18 @@ def test_invalidate_all_runs_every_test(git_project):
 
 
 def test_a_double_star_glob_watches_a_whole_tree(make_git_project):
-    project = make_git_project({**FILES, "config/env/prod/db.yaml": "db: 1\n"}, INI)
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/core.py": FILES["pkg/core.py"],
+        "suite/test_core.py": FILES["tests/unit/test_core.py"],
+        "config/env/prod/db.yaml": "db: 1\n",
+    }
+    # In-process: a tests dir named "tests" would clash with this repository's own package.
+    project = make_git_project(files, INI.replace("impacted_tests_dir = tests", "impacted_tests_dir = suite"))
     edit_file(project, "config/env/prod/db.yaml")
 
-    run(project, "--impacted-invalidate-all=config/**").assert_outcomes(passed=2)
+    run(project).assert_outcomes(deselected=1)
+    run(project, "--impacted-invalidate-all=config/**").assert_outcomes(passed=1)
 
 
 def test_invalidate_all_dir_scoped_glob_does_not_match_elsewhere(git_project):

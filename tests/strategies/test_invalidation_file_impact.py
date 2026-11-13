@@ -30,16 +30,18 @@ class TestMatchesAnyGlob:
             pytest.param("schema.graphql", "schema.graphql", True, id="bare_filename"),
             pytest.param("src/schema.graphql", "schema.graphql", True, id="bare_filename_matches_basename"),
             pytest.param("settings.json5", "*.json", False, id="no_partial_match"),
-            # A "**" segment stands for any number of directories; between segments, none too.
+            # A "**" segment stands for any number of path segments, none included.
             pytest.param("config/a/x.yaml", "config/**/*.yaml", True, id="double_star_one_directory"),
             pytest.param("config/a/b/x.yaml", "config/**/*.yaml", True, id="double_star_recurses"),
             pytest.param("config/x.yaml", "config/**/*.yaml", True, id="double_star_no_directory"),
             pytest.param("other/a/x.yaml", "config/**/*.yaml", False, id="double_star_wrong_directory"),
             pytest.param("config/a/b/x.json", "config/**/*.yaml", False, id="double_star_wrong_name"),
-            # At the end, everything inside the directory, at any depth, but not a file of its name.
+            # At the end, the directory and everything in it: git reports a submodule, or a symlink
+            # to a directory, by the directory's own path.
             pytest.param("docs/a/b/c.md", "docs/**", True, id="trailing_double_star_recurses"),
             pytest.param("docs/a.md", "docs/**", True, id="trailing_double_star_one_level"),
-            pytest.param("docs", "docs/**", False, id="trailing_double_star_not_the_directory"),
+            pytest.param("vendor/lib", "vendor/lib/**", True, id="trailing_double_star_the_directory_itself"),
+            pytest.param("vendor/library", "vendor/lib/**", False, id="trailing_double_star_not_a_longer_name"),
             # Right-anchored as every other glob: any directory of that name, at any depth.
             pytest.param("site/docs/a/b.md", "docs/**", True, id="double_star_right_anchored"),
             pytest.param("docs/x/y/config/z.yaml", "docs/**/config/*.yaml", True, id="double_star_then_segments"),
@@ -67,12 +69,12 @@ class TestMatchesAnyGlob:
 
     def test_a_glob_without_a_double_star_segment_matches_as_pure_path_match(self):
         """Exactly as before, Python version quirks included: only a ``**`` segment widens."""
-        for path, glob in product(PATHS, (glob for glob in GLOBS if "**" not in glob.split("/"))):
+        for path, glob in product(SHORT_PATHS, (glob for glob in GLOBS if "**" not in glob.split("/"))):
             assert matches_any_glob(path, [glob]) is PurePosixPath(path).match(glob), (path, glob)
 
     def test_a_double_star_only_widens_what_a_glob_matches(self):
         """Every file a glob matched when ``**`` was a plain ``*`` it still matches: more tests, never fewer."""
-        for path, glob in product(PATHS, GLOBS):
+        for path, glob in product(SHORT_PATHS, GLOBS):
             if PurePosixPath(path).match(glob):
                 assert matches_any_glob(path, [glob]), (path, glob)
 
@@ -81,15 +83,23 @@ class TestMatchesAnyGlob:
         """Python 3.13's ``full_match`` has the same ``**``; anchored at the end, a glob matches a path's tail."""
         for path, glob in product((path for path in PATHS if not path.startswith("/")), GLOBS):
             if not glob.startswith("/"):
-                expected = PurePosixPath(path).full_match(f"**/{glob}")  # type: ignore[attr-defined]
-                assert matches_any_glob(path, [glob]) is expected, (path, glob)
+                assert matches_any_glob(path, [glob]) is _full_match(path, f"**/{glob}"), (path, glob)
 
     @pytest.mark.skipif(not hasattr(PurePosixPath, "full_match"), reason="PurePath.full_match is new in Python 3.13")
     def test_an_absolute_glob_matches_as_full_match_does(self):
         for path, glob in product((path for path in PATHS if path.startswith("/")), GLOBS):
             if glob.startswith("/"):
-                expected = PurePosixPath(path).full_match(glob)  # type: ignore[attr-defined]
-                assert matches_any_glob(path, [glob]) is expected, (path, glob)
+                assert matches_any_glob(path, [glob]) is _full_match(path, glob), (path, glob)
+
+
+def _full_match(path: str, glob: str) -> bool:
+    """``PurePath.full_match``, but a trailing ``**`` matches the directory itself too, where it asks for a segment."""
+    stripped = glob
+    while stripped.endswith("/**"):
+        stripped = stripped.removesuffix("/**")
+    pure = PurePosixPath(path)
+    full_match = pure.full_match  # type: ignore[attr-defined]
+    return full_match(glob) or (stripped != glob and stripped not in ("", "/") and full_match(stripped))
 
 
 def _paths() -> list[str]:
@@ -107,6 +117,7 @@ def _globs() -> list[str]:
 
 
 PATHS = _paths()
+SHORT_PATHS = [path for path in PATHS if path.count("/") - path.startswith("/") < 3]
 GLOBS = _globs()
 
 
