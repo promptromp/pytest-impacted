@@ -595,27 +595,22 @@ def pythonpath_roots(pythonpath: str | Path | Iterable[str | Path], root: Path) 
     """
     entries = [pythonpath] if isinstance(pythonpath, str | Path) else pythonpath
     # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
-    resolved = (Path(os.path.realpath(root / entry)) for entry in entries)
-    return list(
-        dict.fromkeys(
-            _spelled_on_disk(entry, root) if entry.is_relative_to(root) else entry
-            for entry in resolved
-            if entry.is_relative_to(root) or root.is_relative_to(entry)
-        )
-    )
+    resolved = (_spelled_on_disk(Path(os.path.realpath(root / entry))) for entry in entries)
+    return list(dict.fromkeys(entry for entry in resolved if entry.is_relative_to(root) or root.is_relative_to(entry)))
 
 
-def _spelled_on_disk(path: Path, root: Path) -> Path:
-    """*path*, inside *root*, with each part below it as its directory lists it.
+def _spelled_on_disk(path: Path) -> Path:
+    """The absolute *path* with each part as its directory lists it, where the filesystem finds it otherwise spelled.
 
     A case-insensitive filesystem (macOS, Windows) finds ``lib/`` as ``Lib``, and keeps that
-    spelling through ``realpath``: a file found under it would then be a second node beside the
-    one the walk named ``lib.x``. A part no listing holds, in any case, is left as given.
+    spelling through ``realpath``: a file found under it would be a second node beside the one
+    the walk named ``lib.x``, and an entry above the root would not contain it. Only where the
+    filesystem finds the part: on a case-sensitive one, ``Lib`` beside ``lib/`` is no directory,
+    and stays the entry pytest adds, which holds nothing.
     """
-    spelled = root
-    for part in path.relative_to(root).parts:
-        listed = top_level_entries(spelled)
-        if part not in listed:
+    spelled = Path(path.anchor)
+    for part in path.parts[1:]:
+        if part not in (listed := _entries(str(spelled))) and os.path.isdir(spelled / part):
             part = next((entry for entry in sorted(listed) if entry.casefold() == part.casefold()), part)
         spelled = spelled / part
     return spelled
@@ -638,7 +633,7 @@ def split_import_roots(
     (package or not — the walk names it so). Each analysed directory's non-package prefix is
     another (``src/`` for ``src/app``, even through a symlinked ``src/app``), and so is any
     directory between the rootdir and one of these that is no regular package. So is each of
-    pytest's *pythonpath* entries inside the rootdir that is not an assumed root anyway: pytest
+    pytest's *pythonpath* entries inside the rootdir or above it that is not an assumed root anyway: pytest
     puts it on ``sys.path``, so ``import awake`` means ``lib/awake.py`` with ``lib`` there, though
     the walk names it ``lib.awake``. One that is (``src/`` with an ``__init__.py`` above
     ``src/app``) stays assumed: placing through it would turn a library the app imports into

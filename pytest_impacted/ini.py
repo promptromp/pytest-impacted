@@ -73,9 +73,15 @@ class PytestConfig:
         return shlex.split(str(value))
 
     def paths(self, name: str) -> list[Path]:
-        """A ``paths`` setting, such as ``pythonpath``: read as ``args``, relative to the file's directory."""
+        """A ``paths`` setting, such as ``pythonpath``: read as ``args``, relative to the file's directory.
+
+        Unlike ``args``, a list item that is no string is an error, as in pytest, which joins each to the directory.
+        """
         if self.path is None:
             return []
+        value = self._get(name, list)
+        if isinstance(value, list) and not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{name} in {self.path}: expected a list of strings, got {value!r}")
         return [self.path.parent / item for item in self.args(name) or []]
 
     def _get(self, name: str, native_type: type) -> object:

@@ -95,7 +95,7 @@ The same holds when a directory above the package is a package itself — a `src
 
 ### A flat directory of modules on `pythonpath`
 
-Some projects keep top-level modules in a plain directory that pytest puts on `sys.path` with its `pythonpath` setting: `pythonpath = lib`, and `lib/awake.py` imported as `import awake`. Pass that directory as the module, `--impacted-module=lib`. Since 0.38 each `pythonpath` directory inside the rootdir is also where imports are looked up, so `import awake` matches `lib/awake.py` (analysed as `lib.awake`), as does any other module there, a sub-directory included (`import tools.check`). Before, an edit there selected no test that imported it by its bare name. The `impacted-tests` CLI reads `pythonpath` from the configuration too.
+Some projects keep top-level modules in a plain directory that pytest puts on `sys.path` with its `pythonpath` setting: `pythonpath = lib`, and `lib/awake.py` imported as `import awake`. Pass that directory as the module, `--impacted-module=lib`. Since 0.38 each `pythonpath` directory inside the rootdir (or above it) is also where imports are looked up, so `import awake` matches `lib/awake.py` (analysed as `lib.awake`), as does any other module there, a sub-directory included (`import tools.check`). Before, an edit there selected no test that imported it by its bare name. The `impacted-tests` CLI reads `pythonpath` from the configuration too.
 
 !!! tip
     If you accidentally pass just `--impacted-module=my_package` in a src-layout project, the plugin will detect that `src/my_package` exists and suggest the correct flag.

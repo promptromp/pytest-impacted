@@ -178,7 +178,7 @@ def get_impacted_tests(
     rather than the base branch's tip. ``file_map`` holds ``(glob, path)`` pairs (see
     :mod:`pytest_impacted.file_map`): a changed file a glob matches counts as a change
     to its path too, for every strategy. ``pythonpath`` holds pytest's ``pythonpath`` entries
-    (absolute, or relative to ``root_dir``): each inside the root is an import root, as
+    (absolute, or relative to ``root_dir``): each inside the root or above it is an import root, as
     pytest puts it on ``sys.path``. Like ``ns_module`` and ``tests_dir``, it is never read from
     the pytest configuration here: pass ``config.getini("pythonpath")``, or
     ``find_pytest_config(root).paths("pythonpath")`` from :mod:`pytest_impacted.ini`, or bare

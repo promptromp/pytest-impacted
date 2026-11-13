@@ -11,7 +11,7 @@ import pytest
 
 from pytest_impacted import graph
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
-from pytest_impacted.traversal import _Discovered, path_to_package_name, resolve_files_to_modules
+from pytest_impacted.traversal import _Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
 
 from .git_helpers import write_files
 
@@ -2103,3 +2103,30 @@ def test_a_pythonpath_entry_spelled_in_another_case_is_one_node_per_file(tmp_pat
 
     assert "tests.test_awake" in dep_tree.successors("lib.awake")
     assert not [path for path in nx.get_node_attributes(dep_tree, "path").values() if "/Lib/" in path]
+
+
+def test_pythonpath_entries_given_as_an_iterator_are_read_once(tmp_path):
+    """Read twice, an iterator reads empty the second time: the guessed root lost ``certain``."""
+    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "src/shared.py": "", "tests/test_x.py": "import shared\n"})
+
+    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path, pythonpath=iter(["src"]))
+
+    assert dep_tree.graph["assumed_roots"][str((tmp_path / "src").resolve())].get("certain") is True
+
+
+def test_an_entry_the_filesystem_does_not_find_in_its_case_is_left_as_given(tmp_path, monkeypatch):
+    """On a case-sensitive filesystem ``Lib`` beside ``lib/`` is no directory: pytest's entry holds nothing,
+    and must not become ``lib/``, a root Python never imports from."""
+    (tmp_path / "lib").mkdir()
+    root = tmp_path.resolve()
+    monkeypatch.setattr("pytest_impacted.traversal.os.path.isdir", lambda path: False)
+
+    assert pythonpath_roots(["Lib"], root) == [root / "Lib"]
+
+
+@pytest.mark.skipif(not CASE_INSENSITIVE, reason="only a case-insensitive filesystem finds Mono/ as mono")
+def test_an_entry_above_the_rootdir_spelled_in_another_case_is_kept(tmp_path):
+    root = (tmp_path / "Mono/svc").resolve()
+    root.mkdir(parents=True)
+
+    assert pythonpath_roots([tmp_path / "mono"], root) == [root.parent]

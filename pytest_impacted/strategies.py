@@ -140,7 +140,7 @@ def cached_build_dep_tree(
         root_dir: Project root the package paths are relative to; defaults to
             the current directory.
         pythonpath: pytest's ``pythonpath`` entries, absolute or relative to the root:
-            each inside it is an import root (see :func:`~pytest_impacted.graph.build_dep_tree`).
+            each inside it or above it is an import root (see :func:`~pytest_impacted.graph.build_dep_tree`).
 
     Returns:
         NetworkX dependency graph. Do not mutate it — it is shared between

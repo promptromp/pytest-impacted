@@ -90,16 +90,21 @@ import spells it, since it may mean another file under another root. Being on `s
 a bare name may match by coincidence, so such an import is an edge flagged `assumed_root` that,
 like `runs_init`, only reaches: `_changes_by_role` ignores it (it looks when `graph["runs_init"]`
 or `graph["assumed_roots"]` is set), or a test helper the match leads to would become
-application code and its conftest rule opt-in — fewer tests. pytest's `pythonpath` entries
-(`traversal.pythonpath_roots`) are certain, so each is an *implied* root, placing as the rootdir
-does — except one that is an assumed root anyway (`pythonpath = src` with `src/__init__.py` above
-`src/app`): implied, it turned `src/shared.py` into application code and its conftest rule opt-in,
-fewer tests than before the setting was read. As assumed roots with every module a gateway,
-they went stale (a deleted or new module was no gateway) and bypassed the opt-in for a shared
-library reached through the app. That holds inside
+application code and its conftest rule opt-in — fewer tests. That holds inside
 the analysed package too: an app module importing a walked test helper as `app.tests.h` must not
 lead placement through it, and a deleted `app.gone` is test code, so a conftest reaching it
 selects its directory — more tests, never fewer.
+
+pytest's `pythonpath` entries inside the rootdir or above it (`traversal.pythonpath_roots`,
+resolved once per build: an iterator reads empty the second time; spelled as listed where a
+case-insensitive filesystem finds them otherwise) are on `sys.path` for certain, so each is an
+*implied* root, placing as the rootdir does. One that is an assumed root anyway (`pythonpath = src`
+with `src/__init__.py` above `src/app`) stays assumed, its edges only reaching — implied, it turned
+`src/shared.py` into application code and its conftest rule opt-in, fewer tests than before the
+setting was read — but `certain` (`_Assumed.certain`): every name is looked up there, a
+standard-library one too, which the guess rules above never allow. As assumed roots with every
+module a gateway, entries went stale (a deleted or new module was no gateway) and bypassed the
+opt-in for a shared library reached through the app.
 
 A file found on any root becomes an `external` node, parsed and followed in turn
 (`_parse_project` runs to a fixpoint, `pytest_plugins` entries included). Every candidate the

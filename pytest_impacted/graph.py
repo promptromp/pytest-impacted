@@ -696,10 +696,12 @@ def build_dep_tree(
     import root (``graph["assumed_roots"]``, see
     :func:`~pytest_impacted.traversal.split_import_roots`) is an edge flagged ``assumed_root``.
     *pythonpath* holds pytest's ``pythonpath`` entries (absolute, or relative to the rootdir):
-    each inside the rootdir is an import root too (see :func:`~pytest_impacted.traversal.split_import_roots`).
+    each inside the rootdir or above it is an import root too
+    (see :func:`~pytest_impacted.traversal.split_import_roots`).
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
+    pythonpath = pythonpath_roots(pythonpath, root)  # once: an iterator reads empty the second time
     discovered = _discover_project(package, tests_package, root)
     analysed = [name for name in (package, tests_package) if name]
     roots, assumed_roots = split_import_roots(analysed, discovered.modules, discovered.aliases, root, pythonpath)
@@ -711,7 +713,7 @@ def build_dep_tree(
         for base in assumed_roots
     }
     # One that is on pytest's pythonpath is so for certain: every name is looked up there, its edges still only reach.
-    linker = _Linker(discovered, roots, root, gateways, frozenset(pythonpath_roots(pythonpath, root)))
+    linker = _Linker(discovered, roots, root, gateways, frozenset(pythonpath))
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 

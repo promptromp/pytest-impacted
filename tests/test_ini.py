@@ -407,3 +407,12 @@ def test_a_native_pythonpath_that_is_no_list_is_an_error_as_in_pytest(pytester):
         pytester.parseconfig(pytester.path).getini("pythonpath")
     with pytest.raises(ValueError, match="pythonpath"):
         find_pytest_config(pytester.path).paths("pythonpath")
+
+
+def test_a_pythonpath_item_that_is_no_string_is_an_error_as_in_pytest(pytester):
+    write(pytester.path, {"pyproject.toml": '[tool.pytest.ini_options]\npythonpath = ["lib", 1]\n'})
+
+    with pytest.raises((TypeError, ValueError, pytest.UsageError)):
+        pytester.parseconfig(pytester.path).getini("pythonpath")
+    with pytest.raises(ValueError, match="pythonpath"):
+        find_pytest_config(pytester.path).paths("pythonpath")
