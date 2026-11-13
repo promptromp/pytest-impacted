@@ -98,7 +98,7 @@ def _matches_recursively(path: PurePosixPath, glob_pat: str) -> bool:
     So ``a/**/b`` matches ``a/b`` and ``a/x/y/b``, and ``docs/**`` everything in a
     ``docs`` tree and ``docs`` itself, which git reports for a submodule or a symlink
     to a directory. Python 3.13's ``PurePath.full_match`` has the same ``**``, except
-    that at the end it asks for a segment; the package supports 3.11, which lacks it.
+    that at the end it asks for a segment; the package supports 3.11 and 3.12, which lack it.
     Inside a segment ``**`` is a plain ``*`` (``a**b``), as in ``.gitignore``.
     ``False`` for a glob without a ``**`` segment: :func:`matches_any_glob` asks
     :meth:`PurePosixPath.match` first, whose quirks this does not share (3.11 lets
