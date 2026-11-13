@@ -760,6 +760,20 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         return _every_test(dep_tree, f"Dependency file changes detected: {dep_files}", session)
 
 
+def parse_invalidation_patterns(patterns: Iterable[str]) -> tuple[str, ...]:
+    """The ``--impacted-invalidate-all`` globs as matched: stripped, the platform's separator as ``/``.
+
+    git spells every path with ``/``, so ``config\\**`` typed on Windows means ``config/**``, as
+    for ``--impacted-map``. An empty glob is a ``ValueError``: ``PurePath.match`` refuses it, which
+    surfaced as an INTERNALERROR mid-run.
+    """
+    given = tuple(patterns)
+    parsed = tuple(pattern.strip().replace(os.sep, "/") for pattern in given)
+    if "" in parsed:
+        raise ValueError(f"Invalid --impacted-invalidate-all glob {given[parsed.index('')]!r}: it is empty.")
+    return parsed
+
+
 class InvalidationFileImpactStrategy(ImpactStrategy):
     """Strategy driven by user-supplied glob patterns for non-Python files.
 
@@ -778,7 +792,7 @@ class InvalidationFileImpactStrategy(ImpactStrategy):
     """
 
     def __init__(self, patterns: Sequence[str] = ()):
-        self.patterns = tuple(patterns)
+        self.patterns = parse_invalidation_patterns(patterns)
 
     def find_impacted_tests(
         self,

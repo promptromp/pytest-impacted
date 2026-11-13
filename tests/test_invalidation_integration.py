@@ -6,6 +6,9 @@ import sys
 import textwrap
 
 import pytest
+from click.testing import CliRunner
+
+from pytest_impacted.cli import impacted_tests_cli
 
 from .git_helpers import edit_file, isolated_git_env
 
@@ -215,3 +218,19 @@ def test_branch_mode_without_a_fork_point_warns_on_the_terminal(git_project):
 
     result.stdout.fnmatch_lines(["*WARNING: No merge base*the histories are unrelated*"])
     result.assert_outcomes(passed=2)
+
+
+def test_an_empty_glob_is_a_usage_error(git_project):
+    """Not an INTERNALERROR from deep in the matcher, as it was."""
+    result = run(git_project, "--impacted-git-mode=unstaged", "--impacted-invalidate-all=")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*impacted-invalidate-all*empty*"])
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+
+def test_the_cli_calls_an_empty_glob_a_usage_error(git_project):
+    result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(git_project.path), "--invalidate-all", ""])
+
+    assert result.exit_code == 2, result.output
+    assert "empty" in result.output

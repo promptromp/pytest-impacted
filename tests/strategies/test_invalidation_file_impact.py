@@ -12,6 +12,7 @@ from pytest_impacted.strategies import (
     InvalidationFileImpactStrategy,
     get_default_strategies,
     matches_any_glob,
+    parse_invalidation_patterns,
 )
 
 
@@ -190,3 +191,27 @@ class TestGetDefaultStrategiesWithInvalidation:
         strategies = get_default_strategies(watch_dep_files=False, invalidate_all_patterns=["*.json"])
         assert not any(isinstance(s, DependencyFileImpactStrategy) for s in strategies)
         assert isinstance(strategies[-1], InvalidationFileImpactStrategy)
+
+
+class TestParseInvalidationPatterns:
+    """The globs as given: stripped, with the platform's separator as git's ``/``, and none empty."""
+
+    def test_globs_are_stripped(self):
+        assert parse_invalidation_patterns([" *.json ", "config/**"]) == ("*.json", "config/**")
+
+    def test_the_platform_separator_is_git_s(self, monkeypatch):
+        """On Windows ``config\\**`` is what a user types for ``config/**``, which is how git spells the path."""
+        monkeypatch.setattr("pytest_impacted.strategies.os.sep", "\\")
+
+        assert parse_invalidation_patterns(["config\\**\\*.yaml"]) == ("config/**/*.yaml",)
+
+    @pytest.mark.parametrize("glob", ["", "   "], ids=["empty", "blank"])
+    def test_an_empty_glob_is_an_error(self, glob):
+        """``PurePath.match`` refuses one with "empty pattern", which surfaced as an INTERNALERROR."""
+        with pytest.raises(ValueError, match="impacted-invalidate-all"):
+            parse_invalidation_patterns(["*.json", glob])
+
+    def test_the_strategy_reads_its_globs_so(self, monkeypatch):
+        monkeypatch.setattr("pytest_impacted.strategies.os.sep", "\\")
+
+        assert InvalidationFileImpactStrategy(["config\\x.json"]).patterns == ("config/x.json",)

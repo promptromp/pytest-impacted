@@ -28,6 +28,7 @@ from pytest_impacted.git import (
     find_repo,
     rev_args,
 )
+from pytest_impacted.strategies import parse_invalidation_patterns
 from pytest_impacted.traversal import canonical_root
 
 
@@ -624,6 +625,7 @@ def validate_config(config: Config):
 
     try:
         parse_file_map(get_option("impacted_map") or [])
+        parse_invalidation_patterns(get_option("impacted_invalidate_all") or [])
     except ValueError as err:
         raise UsageError(str(err)) from err
 

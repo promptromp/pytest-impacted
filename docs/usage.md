@@ -216,9 +216,10 @@ Patterns are matched against each changed file's path as reported to the strateg
 - `config/*.json` matches JSON files directly inside any directory named `config`
 - `schema.graphql` matches that filename anywhere
 - `*` never spans a `/`, so `fixtures/*.sql` does not match `fixtures/sub/x.sql`
+- On Windows a glob may use `\` as the separator (`config\*.json`), as for `--impacted-map` (since 0.38.1); an empty glob is a usage error
 - `**` as a whole path segment stands for any number of path segments, none included (since 0.38; before, it behaved like a single `*`):
     - `fixtures/**/*.sql` matches `fixtures/x.sql` and `fixtures/a/b/x.sql`
-    - `config/**` matches every file in a `config` tree, at any depth, and a path `config` itself: a submodule or a symlinked directory there, as git reports a change to it, but also a file of that name
+    - `config/**` matches every file in a `config` tree, at any depth — any directory named `config`, as above, so also `services/a/config/x.yaml` — and a path `config` itself: a submodule or a symlinked directory there, as git reports a change to it, but also a file of that name
     - inside a segment, `**` is a plain `*`: `a**b` never spans a `/`
 
     These are Python 3.13's `PurePath.full_match` rules for `**`, except that `full_match` does not match `config` itself. A glob still matches every file it matched before 0.38, so `**` only ever selects more tests; since that includes what `PurePath.match` matches, its rare differences between Python versions remain. A file outside the rootdir is matched by its absolute path, which names the directories above the repository too, so a relative `**` glob can match one of those as well (`src/**` in a checkout under `/usr/src`): more tests, never fewer.
