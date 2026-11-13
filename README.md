@@ -26,7 +26,7 @@ pytest --impacted --impacted-module=my_package \
 | :test_tube: | **pytest-native** | Works as a standard pytest plugin with familiar CLI options, including under pytest-xdist (`-n auto`) |
 | :wrench: | **conftest.py aware** | A `conftest.py` that changes, or imports changed fixture code, impacts every test beneath it (one importing changed *application* code too, with `--impacted-conftest-imports`); a change reaching a `pytest_plugins` / `-p` plugin impacts all tests |
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements*.txt`, `pyproject.toml`, `pytest.ini` etc. trigger all tests |
-| :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `config/*.yaml`, `fixtures/**`, …) that trigger all tests |
+| :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `config/*.yaml`, `schemas/**/*.sql`, …) that trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
 | :rocket: | **Rust-accelerated** | Optional Rust extension for up to 37-65x faster import parsing on large codebases |
 | :electric_plug: | **Extensible** | Third-party strategies installable as plugins via Python entry points |

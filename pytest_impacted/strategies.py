@@ -112,20 +112,25 @@ def _matches_recursively(path: PurePosixPath, glob_pat: str) -> bool:
     # Anchored at the end: the last segment, unless a ** one, matches the file's name, or nothing does.
     if segments[-1] != "**" and not fnmatchcase(path.name, segments[-1]):
         return False
-    return _segments_match(path.parts[1:] if path.anchor else path.parts, segments)
+    return _segments_match(_below_anchor(path), segments)
 
 
-@cache  # the globs are the configuration's: a few
+@lru_cache(maxsize=1024)  # the configuration's globs: a few
 def _double_star_pattern(glob_pat: str) -> tuple[str, tuple[str, ...]] | None:
     """*glob_pat*'s anchor and segments, normalised as :class:`PurePosixPath` does; ``None`` without a ``**`` one.
 
     A relative glob is anchored at the end only, so it gets a leading ``**``.
     """
     pattern = PurePosixPath(glob_pat)
-    segments = pattern.parts[1:] if pattern.anchor else pattern.parts
+    segments = _below_anchor(pattern)
     if "**" not in segments:
         return None
     return pattern.anchor, segments if pattern.anchor else ("**", *segments)
+
+
+def _below_anchor(path: PurePosixPath) -> tuple[str, ...]:
+    """*path*'s parts, without the root of an absolute one, which no glob segment matches."""
+    return path.parts[1:] if path.anchor else path.parts
 
 
 def _segments_match(parts: tuple[str, ...], segments: tuple[str, ...]) -> bool:
