@@ -66,6 +66,13 @@ def test_a_changed_file_counts_as_a_change_to_its_target(project, target, passed
     outcomes(run(project, f"--impacted-map=reports/*.json={target}"), passed)
 
 
+def test_a_double_star_glob_maps_a_whole_tree(make_git_project):
+    project = make_git_project({**FILES, "reports/2026/nov/run.json": "{}\n"}, INI)
+    edit(project, "reports/2026/nov/run.json")
+
+    outcomes(run(project, "--impacted-map=reports/**/*.json=suite/test_bench.py"), ["test_bench.py"])
+
+
 def test_a_file_no_glob_matches_selects_nothing_more(project):
     edit(project, "reports/run.json")
 

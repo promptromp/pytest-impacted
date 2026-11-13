@@ -1,6 +1,8 @@
 """Unit-tests for the user-configurable file invalidation strategy."""
 
 import logging
+from itertools import product
+from pathlib import PurePosixPath
 
 import networkx as nx
 import pytest
@@ -28,10 +30,35 @@ class TestMatchesAnyGlob:
             pytest.param("schema.graphql", "schema.graphql", True, id="bare_filename"),
             pytest.param("src/schema.graphql", "schema.graphql", True, id="bare_filename_matches_basename"),
             pytest.param("settings.json5", "*.json", False, id="no_partial_match"),
-            # PurePath.match treats "**" as a plain "*" — it is NOT recursive. Documented
-            # in docs/usage.md; pinned here so a matcher change cannot silently break it.
-            pytest.param("config/a/x.yaml", "config/**/*.yaml", True, id="double_star_is_one_segment"),
-            pytest.param("config/a/b/x.yaml", "config/**/*.yaml", False, id="double_star_does_not_recurse"),
+            # A "**" segment stands for any number of path segments, none included.
+            pytest.param("config/a/x.yaml", "config/**/*.yaml", True, id="double_star_one_directory"),
+            pytest.param("config/a/b/x.yaml", "config/**/*.yaml", True, id="double_star_recurses"),
+            pytest.param("config/x.yaml", "config/**/*.yaml", True, id="double_star_no_directory"),
+            pytest.param("other/a/x.yaml", "config/**/*.yaml", False, id="double_star_wrong_directory"),
+            pytest.param("config/a/b/x.json", "config/**/*.yaml", False, id="double_star_wrong_name"),
+            # At the end, the directory and everything in it: git reports a submodule, or a symlink
+            # to a directory, by the directory's own path.
+            pytest.param("docs/a/b/c.md", "docs/**", True, id="trailing_double_star_recurses"),
+            pytest.param("docs/a.md", "docs/**", True, id="trailing_double_star_one_level"),
+            pytest.param("vendor/lib", "vendor/lib/**", True, id="trailing_double_star_the_directory_itself"),
+            pytest.param("vendor/library", "vendor/lib/**", False, id="trailing_double_star_not_a_longer_name"),
+            # Right-anchored as every other glob: any directory of that name, at any depth.
+            pytest.param("site/docs/a/b.md", "docs/**", True, id="double_star_right_anchored"),
+            pytest.param("docs/x/y/config/z.yaml", "docs/**/config/*.yaml", True, id="double_star_then_segments"),
+            pytest.param("docs/x/config/a/z.yaml", "docs/**/config/*.yaml", False, id="then_star_one_segment"),
+            # Inside a segment, "**" is a plain "*" (as in .gitignore): it never spans a "/".
+            pytest.param("aXYb/c", "a**b/c", True, id="double_star_in_a_segment_is_a_star"),
+            pytest.param("aX/Yb/c", "a**b/c", False, id="double_star_in_a_segment_stays_in_it"),
+            pytest.param("aX/Yb/c", "a**b/**", False, id="double_star_in_a_segment_beside_a_recursive_one"),
+            pytest.param("a/b/x.json", "**.json", True, id="double_star_prefix_is_a_star"),
+            # An absolute glob is anchored at the root too; a file outside the rootdir arrives absolute.
+            pytest.param("/abs/x/y/z.json", "/abs/**/*.json", True, id="absolute_double_star_recurses"),
+            pytest.param("/other/abs/z.json", "/abs/**", False, id="absolute_double_star_anchored_at_root"),
+            pytest.param("abs/x/z.json", "/abs/**", False, id="absolute_glob_never_matches_a_relative_path"),
+            pytest.param("q/abs/x.json", "/abs/**", False, id="absolute_glob_never_matches_a_relative_tail"),
+            pytest.param("/outside/repo/data/a/b.csv", "data/**", True, id="relative_double_star_on_absolute_path"),
+            pytest.param("/x/y", "*/x/**/y", False, id="the_root_is_no_directory"),
+            pytest.param("Docs/a/b.md", "docs/**", False, id="double_star_glob_case_sensitive"),
         ],
     )
     def test_patterns(self, file_path, glob_pattern, expected):
@@ -39,6 +66,66 @@ class TestMatchesAnyGlob:
 
     def test_empty_patterns_never_match(self):
         assert matches_any_glob("anything.json", ()) is False
+
+    def test_a_glob_without_a_double_star_segment_matches_as_pure_path_match(self):
+        """Exactly as before, Python version quirks included: only a ``**`` segment widens."""
+        for path, glob in product(SHORT_PATHS, (glob for glob in GLOBS if "**" not in glob.split("/"))):
+            assert matches_any_glob(path, [glob]) is PurePosixPath(path).match(glob), (path, glob)
+
+    def test_a_double_star_only_widens_what_a_glob_matches(self):
+        """Every file a glob matched when ``**`` was a plain ``*`` it still matches: more tests, never fewer."""
+        for path, glob in product(SHORT_PATHS, GLOBS):
+            if PurePosixPath(path).match(glob):
+                assert matches_any_glob(path, [glob]), (path, glob)
+
+    @pytest.mark.skipif(not hasattr(PurePosixPath, "full_match"), reason="PurePath.full_match is new in Python 3.13")
+    def test_a_relative_glob_matches_as_full_match_does_any_tail_of_the_path(self):
+        """Python 3.13's ``full_match`` has the same ``**``; anchored at the end, a glob matches a path's tail."""
+        for path, glob in product((path for path in PATHS if not path.startswith("/")), GLOBS):
+            if not glob.startswith("/"):
+                assert matches_any_glob(path, [glob]) is _full_match(path, f"**/{glob}"), (path, glob)
+
+    @pytest.mark.skipif(not hasattr(PurePosixPath, "full_match"), reason="PurePath.full_match is new in Python 3.13")
+    def test_a_relative_glob_matches_an_absolute_path_as_its_relative_spelling(self):
+        """A file outside the rootdir arrives absolute: its root is no directory a glob can match."""
+        for path, glob in product((path for path in PATHS if not path.startswith("/")), GLOBS):
+            if not glob.startswith("/"):
+                assert matches_any_glob(f"/{path}", [glob]) is _full_match(path, f"**/{glob}"), (path, glob)
+
+    @pytest.mark.skipif(not hasattr(PurePosixPath, "full_match"), reason="PurePath.full_match is new in Python 3.13")
+    def test_an_absolute_glob_matches_as_full_match_does(self):
+        for path, glob in product((path for path in PATHS if path.startswith("/")), GLOBS):
+            if glob.startswith("/"):
+                assert matches_any_glob(path, [glob]) is _full_match(path, glob), (path, glob)
+
+
+def _full_match(path: str, glob: str) -> bool:
+    """``PurePath.full_match``, but a trailing ``**`` matches the directory itself too, where it asks for a segment."""
+    stripped = glob
+    while stripped.endswith("/**"):
+        stripped = stripped.removesuffix("/**")
+    pure = PurePosixPath(path)
+    full_match = pure.full_match  # type: ignore[attr-defined]
+    return full_match(glob) or (stripped != glob and stripped not in ("", "/") and full_match(stripped))
+
+
+def _paths() -> list[str]:
+    """Relative and absolute paths of one to four segments, hidden ones included."""
+    parts = ("a", "b", ".h")
+    relative = ["/".join(chosen) for depth in range(1, 5) for chosen in product(parts, repeat=depth)]
+    return [*relative, *(f"/{path}" for path in relative)]
+
+
+def _globs() -> list[str]:
+    """Globs of one to three segments mixing names, wildcards and ``**``, relative and absolute."""
+    segments = ("a", "*", "**", "?", "[ab]", ".*", "a**")
+    relative = ["/".join(chosen) for depth in range(1, 4) for chosen in product(segments, repeat=depth)]
+    return [*relative, *(f"/{glob}" for glob in relative)]
+
+
+PATHS = _paths()
+SHORT_PATHS = [path for path in PATHS if path.count("/") - path.startswith("/") < 3]
+GLOBS = _globs()
 
 
 @pytest.fixture

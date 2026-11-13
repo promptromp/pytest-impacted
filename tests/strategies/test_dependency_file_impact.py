@@ -6,6 +6,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted.strategies import (
+    DEFAULT_DEPENDENCY_GLOB_PATTERNS,
     DependencyFileImpactStrategy,
     has_dependency_file_changes,
     matches_dependency_file,
@@ -65,6 +66,10 @@ class TestMatchesDependencyFile:
     def test_custom_patterns(self):
         assert matches_dependency_file("custom.lock", patterns=("custom.lock",), glob_patterns=()) is True
         assert matches_dependency_file("uv.lock", patterns=("custom.lock",), glob_patterns=()) is False
+
+    def test_the_built_in_globs_have_no_double_star(self):
+        """A recursive ``**`` would widen the built-in set, and plain ``PurePath.match`` would read it otherwise."""
+        assert not [glob for glob in DEFAULT_DEPENDENCY_GLOB_PATTERNS if "**" in glob.split("/")]
 
 
 class TestHasDependencyFileChanges:

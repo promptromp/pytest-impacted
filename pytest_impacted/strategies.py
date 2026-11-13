@@ -6,7 +6,10 @@ import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
+from fnmatch import fnmatchcase
 from functools import cache, lru_cache
+from itertools import accumulate
+from operator import or_
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -60,7 +63,8 @@ DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
 )
 
 # Glob-style patterns (see matches_any_glob: right-anchored, so a bare-name glob matches
-# at any depth, while ``**`` is *not* recursive) for files named by convention.
+# at any depth) for files named by convention. No ``**`` segment: it would match at any depth
+# below any directory of that name, and plain ``PurePath.match`` would read it as a ``*``.
 DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
     "*requirements*.txt",  # requirements.txt, requirements-dev.txt, test-requirements.txt, ...
     "*requirements*.in",  # pip-tools inputs
@@ -68,9 +72,9 @@ DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
     "*constraints*.txt",  # constraints.txt, test-constraints.txt, ...
     "pylock*.toml",  # PEP 751
     "requirements/*.txt",
-    "requirements/**/*.txt",
+    "requirements/*/*.txt",
     "requirements/*.in",
-    "requirements/**/*.in",
+    "requirements/*/*.in",
 )
 
 
@@ -80,11 +84,70 @@ def matches_any_glob(file_path: str, glob_patterns: Iterable[str]) -> bool:
     Matching is right-anchored (:meth:`PurePosixPath.match`): ``*.json``
     matches a JSON file at any depth, ``config/*.json`` matches JSON files
     directly under any ``config`` directory, and a bare filename matches
-    that basename anywhere. This is the single matching convention for both
+    that basename anywhere. ``*`` never spans a ``/``. A ``**`` segment
+    stands for any number of segments (:func:`_matches_recursively`):
+    ``config/**/*.json`` matches a JSON file anywhere below a ``config``
+    directory, ``docs/**`` every file in a ``docs`` tree. Tried after
+    :meth:`PurePosixPath.match`, so a glob matches every file it did when ``**``
+    was a plain ``*``, and one without a ``**`` segment matches as it always
+    did, on each Python. This is the single matching convention for both
     built-in and user-supplied file patterns.
     """
     path = PurePosixPath(file_path)
-    return any(path.match(glob_pat) for glob_pat in glob_patterns)
+    return any(path.match(glob_pat) or _matches_recursively(path, glob_pat) for glob_pat in glob_patterns)
+
+
+def _matches_recursively(path: PurePosixPath, glob_pat: str) -> bool:
+    """Whether *path* matches *glob_pat*, each ``**`` segment standing for any number of segments, none included.
+
+    So ``a/**/b`` matches ``a/b`` and ``a/x/y/b``, and ``docs/**`` everything in a
+    ``docs`` tree and ``docs`` itself, which git reports for a submodule or a symlink
+    to a directory. Python 3.13's ``PurePath.full_match`` has the same ``**``, except
+    that at the end it asks for a segment; the package supports 3.11 and 3.12, which lack it.
+    Inside a segment ``**`` is a plain ``*`` (``a**b``), as in ``.gitignore``.
+    ``False`` for a glob without a ``**`` segment: :func:`matches_any_glob` asks
+    :meth:`PurePosixPath.match` first, whose quirks this does not share (3.11 lets
+    ``*`` match the root, 3.12 a negated class span a ``/``).
+    """
+    if (pattern := _double_star_pattern(glob_pat)) is None:
+        return False
+    anchor, segments = pattern
+    if anchor and anchor != path.anchor:  # an absolute glob is anchored at the root too
+        return False
+    # Anchored at the end: the last segment, unless a ** one, matches the file's name, or nothing does.
+    if segments[-1] != "**" and not fnmatchcase(path.name, segments[-1]):
+        return False
+    return _segments_match(_below_anchor(path), segments)
+
+
+@lru_cache(maxsize=1024)  # the configuration's globs: a few
+def _double_star_pattern(glob_pat: str) -> tuple[str, tuple[str, ...]] | None:
+    """*glob_pat*'s anchor and segments, normalised as :class:`PurePosixPath` does; ``None`` without a ``**`` one.
+
+    A relative glob is anchored at the end only, so it gets a leading ``**``.
+    """
+    pattern = PurePosixPath(glob_pat)
+    segments = _below_anchor(pattern)
+    if "**" not in segments:
+        return None
+    return pattern.anchor, segments if pattern.anchor else ("**", *segments)
+
+
+def _below_anchor(path: PurePosixPath) -> tuple[str, ...]:
+    """*path*'s parts, without the root of an absolute one, which no glob segment matches."""
+    return path.parts[1:] if path.anchor else path.parts
+
+
+def _segments_match(parts: tuple[str, ...], segments: tuple[str, ...]) -> bool:
+    """Whether all of *parts* match *segments* one by one, a ``**`` segment matching any number of them."""
+    # matched[i]: the segments so far match parts[:i].
+    matched = [True] + [False] * len(parts)
+    for segment in segments:
+        if segment == "**":
+            matched = list(accumulate(matched, or_))  # any number of parts more
+        else:
+            matched = [False, *(matched[i] and fnmatchcase(part, segment) for i, part in enumerate(parts))]
+    return matched[-1]
 
 
 def matches_dependency_file(
