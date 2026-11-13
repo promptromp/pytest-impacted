@@ -1969,35 +1969,35 @@ def test_resolve_impacted_tests_judges_each_node_once_however_many_modules_chang
 
 
 FLAT_LIB = {
-    "lib/awake.py": "def up():\n    return True\n",
-    "lib/ledger.py": "import awake\n",
-    "tests/test_awake.py": "import awake\n",
-    "tests/test_ledger.py": "import ledger\n",
+    "lib/alpha.py": "def up():\n    return True\n",
+    "lib/beta.py": "import alpha\n",
+    "tests/test_awake.py": "import alpha\n",
+    "tests/test_ledger.py": "import beta\n",
 }
 
 
 @pytest.mark.parametrize(
     ("pythonpath", "importers"),
     [
-        pytest.param(["project/lib"], {"lib.ledger", "tests.test_awake"}, id="on_the_pythonpath"),
-        pytest.param(["link/lib"], {"lib.ledger", "tests.test_awake"}, id="through_a_symlink_to_the_rootdir"),
+        pytest.param(["project/lib"], {"lib.beta", "tests.test_awake"}, id="on_the_pythonpath"),
+        pytest.param(["link/lib"], {"lib.beta", "tests.test_awake"}, id="through_a_symlink_to_the_rootdir"),
         pytest.param([], set(), id="not"),
         pytest.param(["elsewhere"], set(), id="outside_the_rootdir"),
     ],
 )
 def test_a_pythonpath_entry_is_an_import_root(tmp_path, pythonpath, importers):
-    """pytest puts each ``pythonpath`` entry on ``sys.path``: ``import awake`` means ``lib/awake.py``,
-    which the walk names ``lib.awake``. One outside the rootdir holds no file of the project."""
+    """pytest puts each ``pythonpath`` entry on ``sys.path``: ``import alpha`` means ``lib/alpha.py``,
+    which the walk names ``lib.alpha``. One outside the rootdir holds no file of the project."""
     root = tmp_path / "project"
     write_files(root, FLAT_LIB)
-    write_files(tmp_path, {"elsewhere/awake.py": ""})
+    write_files(tmp_path, {"elsewhere/alpha.py": ""})
     (tmp_path / "link").symlink_to(root)
 
     dep_tree = graph.build_dep_tree(
         "lib", tests_package="tests", root_dir=root, pythonpath=[tmp_path / entry for entry in pythonpath]
     )
 
-    assert set(dep_tree.successors("lib.awake")) == importers
+    assert set(dep_tree.successors("lib.alpha")) == importers
     roots = dep_tree.graph["import_roots"]
     assert (str((root / "lib").resolve()) in roots, str((tmp_path / "elsewhere").resolve()) in roots) == (
         bool(importers),
@@ -2013,8 +2013,8 @@ def test_the_cached_graph_is_keyed_on_the_pythonpath(tmp_path):
     without = cached_build_dep_tree("lib", tests_package="tests", root_dir=tmp_path)
     with_lib = cached_build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "lib"])
 
-    assert "tests.test_awake" not in without.successors("lib.awake")
-    assert "tests.test_awake" in with_lib.successors("lib.awake")
+    assert "tests.test_awake" not in without.successors("lib.alpha")
+    assert "tests.test_awake" in with_lib.successors("lib.alpha")
 
 
 def test_a_namespace_package_in_a_pythonpath_entry_is_looked_up_there(tmp_path):
@@ -2047,7 +2047,7 @@ def test_a_lone_string_is_one_pythonpath_entry(tmp_path):
 
     dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath="lib")
 
-    assert "tests.test_awake" in dep_tree.successors("lib.awake")
+    assert "tests.test_awake" in dep_tree.successors("lib.alpha")
 
 
 def test_entries_the_graph_does_not_read_share_its_cache_entry(tmp_path):
@@ -2105,3 +2105,415 @@ def test_a_lone_path_of_any_kind_is_one_pythonpath_entry(tmp_path):
     root = tmp_path.resolve()
 
     assert pythonpath_roots(PurePosixPath("lib"), root) == [root / "lib"]
+
+
+ROOTLESS = {
+    "app/__init__.py": "",
+    "app/a.py": "",
+    "tests/unit/shapes.py": "def square():\n    return 1\n",
+    "tests/unit/test_shapes.py": "import shapes\n",
+    "tests/unit/test_orders.py": "class Order:\n    pass\n",
+    "tests/unit/test_orders_totals.py": "from test_orders import Order\n",
+}
+
+
+def test_a_test_module_s_directory_outside_any_package_is_where_its_imports_are_looked_up(tmp_path):
+    """pytest's default import mode puts the directory of a test module outside any package on
+    ``sys.path`` before importing it: ``import shapes`` beside it means ``tests/unit/shapes.py``."""
+    write_files(tmp_path, ROOTLESS)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests/unit", root_dir=tmp_path)
+
+    assert "unit.test_shapes" in dep_tree.successors("unit.shapes")
+    assert "unit.test_orders_totals" in dep_tree.successors("unit.test_orders")
+
+
+def test_a_test_module_s_directory_inside_a_package_is_not_where_its_imports_are_looked_up(tmp_path):
+    """With ``tests/unit/__init__.py`` pytest puts ``tests/`` on ``sys.path``, not ``tests/unit/``."""
+    write_files(tmp_path, {**ROOTLESS, "tests/unit/__init__.py": ""})
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests/unit", root_dir=tmp_path)
+
+    assert "unit.test_shapes" not in dep_tree.successors("unit.shapes")
+
+
+def test_a_helper_name_in_two_test_directories_reaches_both(tmp_path):
+    """pytest keeps every basedir it inserts on ``sys.path``, and ``sys.modules`` the first ``helpers`` it
+    imports for every later ``import helpers``: which file a test gets depends on the collection order, so
+    every one it may get is linked. Through an index, one lookup per name: no import root is added."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "services/svc_a/tests/helpers.py": "",
+            "services/svc_a/tests/test_a.py": "import helpers\n",
+            "services/svc_b/tests/helpers.py": "",
+            "services/svc_b/tests/test_b.py": "import helpers\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="services", root_dir=tmp_path)
+
+    both = {"services.svc_a.tests.test_a", "services.svc_b.tests.test_b"}
+    for helpers in ("services.svc_a.tests.helpers", "services.svc_b.tests.helpers"):
+        assert set(dep_tree.successors(helpers)) == both
+    assert dep_tree.graph["import_roots"] == [str(tmp_path.resolve())]
+
+
+def test_a_helper_deleted_from_a_test_directory_reaches_every_importer_of_its_name(tmp_path):
+    """Linked as it was while there: ``import helpers`` anywhere may have meant it, as ``sys.path`` keeps every
+    test basedir — the root conftest's too, which may import it in a fixture, run with them all there."""
+    write_files(
+        tmp_path,
+        {
+            "conftest.py": "import helpers\n",
+            "app/__init__.py": "",
+            "app/x.py": "import helpers\n",
+            "services/svc_a/tests/test_a.py": "import helpers\n",
+            "services/svc_b/tests/helpers.py": "",
+            "services/svc_b/tests/test_b.py": "import helpers\n",
+        },
+    )
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="services", root_dir=tmp_path))
+    (tmp_path / "services/svc_b/tests/helpers.py").unlink()
+    dep_tree.remove_node("services.svc_b.tests.helpers")
+
+    (node,) = graph.link_changed_files(["services/svc_b/tests/helpers.py"], dep_tree, root_dir=tmp_path)
+
+    importers = {"conftest", "app.x", "services.svc_a.tests.test_a", "services.svc_b.tests.test_b"}
+    assert set(dep_tree.successors(node)) == importers
+
+
+def test_a_conftest_s_directory_outside_any_package_is_where_it_imports_its_neighbours_from(tmp_path):
+    """pytest puts ``suite/`` on ``sys.path`` for ``suite/conftest.py`` too, though no test module is beside it."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "suite/conftest.py": "import fixtures\n",
+            "suite/fixtures.py": "",
+            "suite/sub/test_a.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+
+    assert "suite.conftest" in dep_tree.successors("suite.fixtures")
+
+
+def _node_at(dep_tree, suffix):
+    (node,) = [node for node, path in dep_tree.nodes(data="path") if path and path.endswith(suffix)]
+    return node
+
+
+def test_a_helper_in_a_conftest_s_directory_above_is_found_from_below(tmp_path):
+    """pytest imports ``tests/conftest.py``, putting ``tests/`` on ``sys.path``, before the tests below it."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "tests/conftest.py": "",
+            "tests/helpers.py": "",
+            "tests/unit/test_x.py": "import helpers\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert _node_at(dep_tree, "tests/unit/test_x.py") in dep_tree.successors(_node_at(dep_tree, "tests/helpers.py"))
+
+
+def test_the_basedir_above_a_tests_package_is_where_its_imports_are_looked_up(tmp_path):
+    """With ``tests/unit/__init__.py`` and none in ``tests/``, pytest puts ``tests/`` on ``sys.path``."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "tests/shared.py": "",
+            "tests/unit/__init__.py": "",
+            "tests/unit/helpers.py": "",
+            "tests/unit/test_x.py": "from unit.helpers import h\nimport shared\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    test = _node_at(dep_tree, "tests/unit/test_x.py")
+    for imported in ("tests/unit/helpers.py", "tests/shared.py"):
+        assert test in dep_tree.successors(_node_at(dep_tree, imported))
+
+
+def test_a_pytest_plugins_entry_beside_its_declarer_is_a_plugin(tmp_path):
+    """pytest imports ``pytest_plugins = ["myfx"]`` by its name, from ``sys.path``, ``suite/`` included."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "suite/conftest.py": 'pytest_plugins = ["myfx"]\n',
+            "suite/myfx.py": "",
+            "suite/test_a.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+
+    assert "suite.conftest" in dep_tree.successors("suite.myfx")
+    assert dep_tree.nodes["suite.myfx"].get("pytest_plugin") is True
+
+
+def test_a_directory_of_test_modules_by_the_project_s_reckoning_counts(tmp_path):
+    """``qa/tests/integration.py`` is no ``test_*.py``, but a test module all the same (a ``python_files``
+    of the project's own): its directory is where its imports are looked up."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "qa/tests/integration.py": "import helpers\n", "qa/tests/helpers.py": ""},
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="qa", root_dir=tmp_path)
+
+    assert "qa.tests.integration" in dep_tree.successors("qa.tests.helpers")
+
+
+def test_a_neighbour_no_walk_names_joins_the_graph(tmp_path):
+    """``a/b/c/conftest.py`` is above the package, in no package of its own: pytest puts ``a/b/c/`` on
+    ``sys.path`` for it, so its ``import helpers`` means ``a/b/c/helpers.py``, which no walk names."""
+    write_files(
+        tmp_path,
+        {
+            "a/b/__init__.py": "",
+            "a/b/c/conftest.py": "import helpers\n",
+            "a/b/c/helpers.py": "",
+            "a/b/c/app/__init__.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("a/b/c/app", root_dir=tmp_path)
+
+    assert _node_at(dep_tree, "a/b/c/conftest.py") in dep_tree.successors(_node_at(dep_tree, "a/b/c/helpers.py"))
+
+
+def test_a_pytest_plugins_entry_found_through_a_basedir_leaves_other_imports_of_its_name_reach_only(tmp_path):
+    """The declaration's lookup must not leak into the import roots' answer for ``myfx``: ``app/x.py``'s
+    ``import myfx`` is still one through a test basedir only, an edge that only reaches."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/x.py": "import myfx\n",
+            "suite/conftest.py": 'pytest_plugins = ["myfx"]\n',
+            "suite/myfx.py": "",
+            "suite/test_a.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+
+    assert dep_tree.edges["suite.myfx", "app.x"].get("basedir") is True
+    assert not dep_tree.edges["suite.myfx", "suite.conftest"].get("basedir")
+
+
+def test_a_root_conftest_s_plugin_is_its_own_basedir_s_alone(tmp_path):
+    """pytest imports a root conftest's ``pytest_plugins`` before any other basedir is on ``sys.path``: each
+    service's ``tests/fixtures.py`` is no plugin, or an edit to any would run every test."""
+    write_files(
+        tmp_path,
+        {
+            "conftest.py": 'pytest_plugins = ["fixtures"]\n',
+            "fixtures.py": "",
+            "app/__init__.py": "",
+            "services/svc_a/tests/fixtures.py": "",
+            "services/svc_a/tests/test_a.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="services", root_dir=tmp_path)
+
+    plugins = {node for node, flag in dep_tree.nodes(data="pytest_plugin") if flag}
+    assert plugins == {"fixtures"}
+
+
+def test_a_neighbour_named_by_its_path_hides_no_other_file_of_its_name(tmp_path):
+    """``a/b/c/helpers.py``, found for the conftest beside it, is named ``b.c.helpers`` by its path; an
+    import spelling ``b.c.helpers`` still reaches ``b/c/helpers.py`` too."""
+    write_files(
+        tmp_path,
+        {
+            "a/b/__init__.py": "",
+            "a/b/c/conftest.py": "import helpers\n",
+            "a/b/c/helpers.py": "",
+            "a/b/c/app/__init__.py": "",
+            "a/b/c/app/x.py": "import b.c.helpers\n",
+            "b/__init__.py": "",
+            "b/c/__init__.py": "",
+            "b/c/helpers.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("a/b/c/app", root_dir=tmp_path)
+
+    importer = _node_at(dep_tree, "a/b/c/app/x.py")
+    by_path = {path: node for node, path in dep_tree.nodes(data="path")}
+    for helpers in ("a/b/c/helpers.py", "b/c/helpers.py"):
+        assert importer in dep_tree.successors(by_path[str((tmp_path / helpers).resolve())]), helpers
+
+
+def test_a_package_directory_not_named_as_an_identifier_ends_the_package(tmp_path):
+    """As pytest's ``resolve_package_path``: ``integration-tests/`` with an ``__init__.py`` is put on ``sys.path``."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "tests/integration-tests/__init__.py": "",
+            "tests/integration-tests/helpers.py": "",
+            "tests/integration-tests/test_x.py": "import helpers\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    test = _node_at(dep_tree, "integration-tests/test_x.py")
+    assert test in dep_tree.successors(_node_at(dep_tree, "integration-tests/helpers.py"))
+
+
+def test_a_changed_init_beneath_a_basedir_reaches_importers_of_a_missing_name_in_it(tmp_path):
+    """``try: import hp.fast`` beneath ``suite/`` runs ``suite/hp/__init__.py`` before failing."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "suite/hp/__init__.py": "",
+            "suite/test_a.py": "try:\n    import hp.fast\nexcept ImportError:\n    pass\n",
+        },
+    )
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path))
+
+    graph.link_changed_files(["suite/hp/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert "suite.test_a" in dep_tree.successors(_node_at(dep_tree, "suite/hp/__init__.py"))
+
+
+def test_a_module_in_a_plain_sub_directory_of_a_basedir_looks_up_through_it(tmp_path):
+    """``suite/support/`` holds no test module: ``db.py`` there still runs with ``suite/`` on ``sys.path``."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "suite/conftest.py": "",
+            "suite/factories.py": "",
+            "suite/support/db.py": "import factories\n",
+            "suite/test_a.py": "from support.db import make\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+
+    assert "suite.support.db" in dep_tree.successors("suite.factories")
+
+
+def test_a_pytest_plugins_entry_beside_a_conftest_above_its_declarer_is_a_plugin(tmp_path):
+    """``suite/conftest.py`` is imported first, putting ``suite/`` on ``sys.path`` for ``suite/unit/test_x.py``."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "suite/conftest.py": "",
+            "suite/fx.py": "",
+            "suite/unit/test_x.py": 'pytest_plugins = ["fx"]\n',
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+
+    assert dep_tree.nodes["suite.fx"].get("pytest_plugin") is True
+
+
+@pytest.mark.parametrize("root_conftest", [False, True], ids=["without_a_root_conftest", "with_one"])
+def test_an_app_module_s_bare_name_reaches_through_test_basedirs_either_way(tmp_path, root_conftest):
+    """``suite/`` is on ``sys.path`` at test time whether or not a root conftest makes the rootdir a basedir."""
+    files = {"app/__init__.py": "", "app/x.py": "import helpers\n", "suite/helpers.py": "", "suite/test_a.py": ""}
+    write_files(tmp_path, {**files, **({"conftest.py": ""} if root_conftest else {})})
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+
+    assert dep_tree.edges["suite.helpers", "app.x"].get("basedir") is True
+
+
+def test_a_helper_deleted_with_its_whole_test_directory_still_reaches_its_importers(tmp_path):
+    """Deleted with the test module that made its directory a basedir, it is in the run's graph's basedirs no more."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "services/svc_a/tests/test_a.py": "def f():\n    import helpers\n",
+        },
+    )
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="services", root_dir=tmp_path))
+
+    (node,) = graph.link_changed_files(["services/svc_c/tests/helpers.py"], dep_tree, root_dir=tmp_path)
+
+    assert "services.svc_a.tests.test_a" in dep_tree.successors(node)
+
+
+def test_the_root_conftest_s_bare_import_reaches_a_service_s_helper_too(tmp_path):
+    """An import in a root conftest's fixture runs with every test basedir on ``sys.path``: which ``helpers`` it
+    means cannot be told from the source, so the service's is reached too (reach-only), as well as the root's."""
+    write_files(
+        tmp_path,
+        {
+            "conftest.py": "import helpers\n",
+            "helpers.py": "",
+            "app/__init__.py": "",
+            "services/svc_a/tests/helpers.py": "",
+            "services/svc_a/tests/test_a.py": "",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="services", root_dir=tmp_path)
+
+    assert dep_tree.edges["services.svc_a.tests.helpers", "conftest"].get("basedir") is True
+    assert not dep_tree.edges["helpers", "conftest"].get("basedir")
+
+
+def test_a_test_module_s_pytest_plugins_entry_is_looked_up_beneath_every_basedir(tmp_path):
+    """Unlike the root conftest's, a test module's entry is imported when the module is, with the basedirs
+    collected before it on ``sys.path``: ``shared_fx`` may be ``suite_a/shared_fx.py``."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "suites/suite_a/shared_fx.py": "",
+            "suites/suite_a/test_a.py": "",
+            "suites/suite_b/test_b.py": 'pytest_plugins = ["shared_fx"]\n',
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suites", root_dir=tmp_path)
+
+    assert dep_tree.nodes["suites.suite_a.shared_fx"].get("pytest_plugin") is True
+
+
+def test_a_deleted_file_beside_no_test_reaches_no_bare_importer(tmp_path):
+    """``scripts/`` holds no test: pytest never puts it on ``sys.path``, so ``import utils`` never meant it."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "app/x.py": "def f():\n    import utils\n", "tests/test_x.py": "import app.x\n"},
+    )
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path))
+
+    assert graph.link_changed_files(["scripts/utils.py"], dep_tree, root_dir=tmp_path) == []
+
+
+def test_a_package_deleted_with_its_whole_test_directory_reaches_importers_of_a_missing_name_in_it(tmp_path):
+    """``try: import hp.fast`` ran the deleted ``hp/__init__.py``, named ``hp`` from the deleted basedir above it."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "services/svc_a/tests/test_a.py": "try:\n    import hp.fast\nexcept ImportError:\n    pass\n",
+        },
+    )
+    dep_tree = run_copy(graph.build_dep_tree("app", tests_package="services", root_dir=tmp_path))
+
+    (node,) = graph.link_changed_files(["services/svc_c/tests/hp/__init__.py"], dep_tree, root_dir=tmp_path)
+
+    assert "services.svc_a.tests.test_a" in dep_tree.successors(node)
