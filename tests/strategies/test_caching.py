@@ -28,7 +28,9 @@ class TestCaching:
         result2 = cached_build_dep_tree("mypackage", "tests")
 
         # build_dep_tree should only be called once due to caching
-        mock_build_tree.assert_called_once_with("mypackage", tests_package="tests", root_dir=canonical_root(None))
+        mock_build_tree.assert_called_once_with(
+            "mypackage", tests_package="tests", root_dir=canonical_root(None), pythonpath=()
+        )
 
         # Both results should be the same
         assert result1 is result2
@@ -47,8 +49,12 @@ class TestCaching:
 
         # build_dep_tree should be called twice with different parameters
         assert mock_build_tree.call_count == 2
-        mock_build_tree.assert_any_call("mypackage", tests_package="tests", root_dir=canonical_root(None))
-        mock_build_tree.assert_any_call("mypackage", tests_package="other_tests", root_dir=canonical_root(None))
+        mock_build_tree.assert_any_call(
+            "mypackage", tests_package="tests", root_dir=canonical_root(None), pythonpath=()
+        )
+        mock_build_tree.assert_any_call(
+            "mypackage", tests_package="other_tests", root_dir=canonical_root(None), pythonpath=()
+        )
 
         # Results should be different
         assert result1 is mock_dep_tree1
@@ -85,7 +91,9 @@ class TestCaching:
         result2 = cached_build_dep_tree("mypackage", None)
 
         # Should only call build_dep_tree once
-        mock_build_tree.assert_called_once_with("mypackage", tests_package=None, root_dir=canonical_root(None))
+        mock_build_tree.assert_called_once_with(
+            "mypackage", tests_package=None, root_dir=canonical_root(None), pythonpath=()
+        )
         assert result1 is result2
 
     def test_clear_dep_tree_cache_also_clears_discover_submodules(self):
