@@ -47,6 +47,7 @@ class TestMatchesAnyGlob:
             # Inside a segment, "**" is a plain "*" (as in .gitignore): it never spans a "/".
             pytest.param("aXYb/c", "a**b/c", True, id="double_star_in_a_segment_is_a_star"),
             pytest.param("aX/Yb/c", "a**b/c", False, id="double_star_in_a_segment_stays_in_it"),
+            pytest.param("aX/Yb/c", "a**b/**", False, id="double_star_in_a_segment_beside_a_recursive_one"),
             pytest.param("a/b/x.json", "**.json", True, id="double_star_prefix_is_a_star"),
             # An absolute glob is anchored at the root too; a file outside the rootdir arrives absolute.
             pytest.param("/abs/x/y/z.json", "/abs/**/*.json", True, id="absolute_double_star_recurses"),
