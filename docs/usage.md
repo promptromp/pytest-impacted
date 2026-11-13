@@ -173,7 +173,7 @@ Monitored files — each matched by file name, in any directory:
 - pytest configuration: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini` — settings such as `addopts`, `markers` and `filterwarnings` apply to every test
 - Requirements: any `*requirements*.txt` or `*requirements*.in` (`requirements-dev.txt`, `test-requirements.txt`, pip-tools inputs, …) and `*constraints*.txt`
 
-Plus files inside a `requirements/` directory at any depth, `requirements/**/*.txt` and the same for `.in` (since 0.38; before, only one or two levels deep). Like every glob here it is anchored at the end only, so a `.txt` file anywhere below a directory named `requirements` counts. And whichever config file the running pytest actually loaded — including one passed with `-c` under any name (pytest plugin only: the `impacted-tests` CLI has no pytest session).
+Plus files inside a `requirements/` directory, one or two levels deep: `requirements/*.txt`, `requirements/*/*.txt`, and the same for `.in`. And whichever config file the running pytest actually loaded — including one passed with `-c` under any name (pytest plugin only: the `impacted-tests` CLI has no pytest session).
 
 This strategy is enabled by default. To disable it, use:
 
@@ -212,7 +212,7 @@ Patterns are matched against each changed file's path as reported to the strateg
 - `config/*.json` matches JSON files directly inside any directory named `config`
 - `schema.graphql` matches that filename anywhere
 - `*` never spans a `/`, so `fixtures/*.sql` does not match `fixtures/sub/x.sql`
-- `**` as a whole path segment stands for any number of path segments, none included (since 0.38; before, it behaved like a single `*`): `fixtures/**/*.sql` matches `fixtures/x.sql` and `fixtures/a/b/x.sql`, and `config/**` every file in a `config` tree at any depth, and `config` itself, which is how git reports a change to a submodule or a symlinked directory there. Inside a segment it is a plain `*`: `a**b` never spans a `/`. A glob matches every file it matched before 0.38, so this only ever selects more tests. Those are Python 3.13's `PurePath.full_match` rules for `**` (except that `full_match` does not match `config` itself), on every supported Python; elsewhere, the rare differences between Python versions' `PurePath.match` remain
+- `**` as a whole path segment stands for any number of path segments, none included (since 0.38; before, it behaved like a single `*`): `fixtures/**/*.sql` matches `fixtures/x.sql` and `fixtures/a/b/x.sql`, and `config/**` every file in a `config` tree at any depth, and a path `config` itself: a submodule or a symlinked directory there, as git reports a change to it, but also a file of that name. Inside a segment it is a plain `*`: `a**b` never spans a `/`. These are Python 3.13's `PurePath.full_match` rules for `**`, but for that last case. A glob still matches every file it matched before 0.38, so this only ever selects more tests, and since that includes what `PurePath.match` matches, its rare differences between Python versions remain. The absolute path of a file outside the rootdir names the directories above the repository too, which a relative `**` glob can match: anchor it with the directories it is meant for
 
 !!! note
     This is independent of `--no-impacted-dep-files`, which only switches off the built-in dependency-file list. Custom invalidation patterns stay active either way.

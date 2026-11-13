@@ -86,6 +86,13 @@ class TestMatchesAnyGlob:
                 assert matches_any_glob(path, [glob]) is _full_match(path, f"**/{glob}"), (path, glob)
 
     @pytest.mark.skipif(not hasattr(PurePosixPath, "full_match"), reason="PurePath.full_match is new in Python 3.13")
+    def test_a_relative_glob_matches_an_absolute_path_as_its_relative_spelling(self):
+        """A file outside the rootdir arrives absolute: its root is no directory a glob can match."""
+        for path, glob in product((path for path in PATHS if not path.startswith("/")), GLOBS):
+            if not glob.startswith("/"):
+                assert matches_any_glob(f"/{path}", [glob]) is _full_match(path, f"**/{glob}"), (path, glob)
+
+    @pytest.mark.skipif(not hasattr(PurePosixPath, "full_match"), reason="PurePath.full_match is new in Python 3.13")
     def test_an_absolute_glob_matches_as_full_match_does(self):
         for path, glob in product((path for path in PATHS if path.startswith("/")), GLOBS):
             if glob.startswith("/"):

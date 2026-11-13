@@ -8,6 +8,8 @@ from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from fnmatch import fnmatchcase
 from functools import cache, lru_cache
+from itertools import accumulate
+from operator import or_
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -56,15 +58,18 @@ DEFAULT_DEPENDENCY_FILE_PATTERNS: tuple[str, ...] = (
 )
 
 # Glob-style patterns (see matches_any_glob: right-anchored, so a bare-name glob matches
-# at any depth, and a ``**`` segment any number of segments) for files named by convention.
+# at any depth) for files named by convention. No ``**`` segment: it would match at any depth
+# below any directory of that name, and plain ``PurePath.match`` would read it as a ``*``.
 DEFAULT_DEPENDENCY_GLOB_PATTERNS: tuple[str, ...] = (
     "*requirements*.txt",  # requirements.txt, requirements-dev.txt, test-requirements.txt, ...
     "*requirements*.in",  # pip-tools inputs
     "requirements*.lock",  # rye
     "*constraints*.txt",  # constraints.txt, test-constraints.txt, ...
     "pylock*.toml",  # PEP 751
-    "requirements/**/*.txt",  # at any depth below a requirements/ directory
-    "requirements/**/*.in",
+    "requirements/*.txt",
+    "requirements/*/*.txt",
+    "requirements/*.in",
+    "requirements/*/*.in",
 )
 
 
@@ -104,10 +109,13 @@ def _matches_recursively(path: PurePosixPath, glob_pat: str) -> bool:
     anchor, segments = pattern
     if anchor and anchor != path.anchor:  # an absolute glob is anchored at the root too
         return False
+    # Anchored at the end: the last segment, unless a ** one, matches the file's name, or nothing does.
+    if segments[-1] != "**" and not fnmatchcase(path.name, segments[-1]):
+        return False
     return _segments_match(path.parts[1:] if path.anchor else path.parts, segments)
 
 
-@lru_cache(maxsize=256)
+@cache  # the globs are the configuration's: a few
 def _double_star_pattern(glob_pat: str) -> tuple[str, tuple[str, ...]] | None:
     """*glob_pat*'s anchor and segments, normalised as :class:`PurePosixPath` does; ``None`` without a ``**`` one.
 
@@ -126,8 +134,7 @@ def _segments_match(parts: tuple[str, ...], segments: tuple[str, ...]) -> bool:
     matched = [True] + [False] * len(parts)
     for segment in segments:
         if segment == "**":
-            first = next((i for i, prefix in enumerate(matched) if prefix), len(parts) + 1)
-            matched = [i >= first for i in range(len(parts) + 1)]
+            matched = list(accumulate(matched, or_))  # any number of parts more
         else:
             matched = [False, *(matched[i] and fnmatchcase(part, segment) for i, part in enumerate(parts))]
     return matched[-1]

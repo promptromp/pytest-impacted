@@ -69,7 +69,7 @@ def test_a_double_star_glob_watches_a_whole_tree(make_git_project):
         "config/env/prod/db.yaml": "db: 1\n",
     }
     # In-process: a tests dir named "tests" would clash with this repository's own package.
-    project = make_git_project(files, INI.replace("impacted_tests_dir = tests", "impacted_tests_dir = suite"))
+    project = make_git_project(files, "[pytest]\npythonpath = .\nimpacted_module = pkg\nimpacted_tests_dir = suite\n")
     edit_file(project, "config/env/prod/db.yaml")
 
     run(project).assert_outcomes(deselected=1)

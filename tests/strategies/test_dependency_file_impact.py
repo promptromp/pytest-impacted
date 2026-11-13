@@ -6,6 +6,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted.strategies import (
+    DEFAULT_DEPENDENCY_GLOB_PATTERNS,
     DependencyFileImpactStrategy,
     has_dependency_file_changes,
     matches_dependency_file,
@@ -29,8 +30,6 @@ class TestMatchesDependencyFile:
             pytest.param("setup.cfg", True, id="setup_cfg"),
             pytest.param("requirements/prod.txt", True, id="nested_requirements"),
             pytest.param("requirements/sub/dev.txt", True, id="deeply_nested_requirements"),
-            pytest.param("requirements/env/ci/dev.txt", True, id="requirements_at_any_depth"),
-            pytest.param("requirements/env/ci/dev.in", True, id="pip_tools_in_at_any_depth"),
             # Test-runner configuration: addopts, markers, filterwarnings apply to every test
             pytest.param("pytest.ini", True, id="pytest_ini"),
             pytest.param("tox.ini", True, id="tox_ini"),
@@ -67,6 +66,10 @@ class TestMatchesDependencyFile:
     def test_custom_patterns(self):
         assert matches_dependency_file("custom.lock", patterns=("custom.lock",), glob_patterns=()) is True
         assert matches_dependency_file("uv.lock", patterns=("custom.lock",), glob_patterns=()) is False
+
+    def test_the_built_in_globs_have_no_double_star(self):
+        """A recursive ``**`` would widen the built-in set, and plain ``PurePath.match`` would read it otherwise."""
+        assert not [glob for glob in DEFAULT_DEPENDENCY_GLOB_PATTERNS if "**" in glob.split("/")]
 
 
 class TestHasDependencyFileChanges:
