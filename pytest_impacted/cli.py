@@ -137,7 +137,8 @@ def configure_logging(verbose: bool) -> None:
     default=False,
     help=(
         "Leave application code's type-only imports out of the dependency graph: those in an "
-        + "'if TYPE_CHECKING:' block whose names the module uses only in annotations."
+        + "'if TYPE_CHECKING:' block whose names the module uses only in annotations. Test code and "
+        + "package __init__.py files keep their own."
     ),
 )
 @click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")

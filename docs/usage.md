@@ -339,7 +339,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH` (repeatable) |
 | `--conftest-imports` / `--no-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
-| `--ignore-type-checking-imports` / `--no-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use ([details](#astimpactstrategy)) |
+| `--ignore-type-checking-imports` / `--no-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use; test code and package `__init__.py` files keep their own ([details](#astimpactstrategy)) |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; it takes a value, `true` or `false` for a boolean. Run `impacted-tests --help` to list them |
 

@@ -9,7 +9,7 @@ from unittest.mock import patch
 import networkx as nx
 import pytest
 
-from pytest_impacted import _rust, graph
+from pytest_impacted import _rust, graph, strategies
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
 from pytest_impacted.traversal import _Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
 
@@ -2786,6 +2786,33 @@ def test_a_link_through_a_runtime_spelling_too_is_sure(tmp_path):
 
     assert dep_tree.has_edge(linked, "pkg") and not dep_tree.edges[linked, "pkg"].get("type_only")
     assert "pkg.typed" not in dep_tree.successors(linked), "a plain module loses its type-only import"
+
+
+def test_a_link_through_a_sure_type_only_import_and_a_guessed_runtime_one_only_reaches(tmp_path):
+    """``src/`` holds an ``__init__.py``: ``src/shared/gone.py`` is ``src.shared.gone`` for sure, and
+    ``shared.gone`` only if ``src/`` is on ``sys.path`` (an assumed root, active: ``pkg.a`` imports ``pkg.b``
+    from there). The ``__init__`` imports the sure name only for a hint, the assumed one at runtime: no import
+    of it is both sure and runtime, so the link only reaches, as the edge to an existing file would."""
+    files = {
+        "src/__init__.py": "",
+        "src/pkg/__init__.py": (
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import src.shared.gone\n"
+            "try:\n    import shared.gone\nexcept ImportError:\n    pass\n"
+            "def f(part: 'src.shared.gone.Part') -> None: ...\n"
+        ),
+        "src/pkg/a.py": "import pkg.b\n",
+        "src/pkg/b.py": "",
+    }
+    write_files(tmp_path, files)
+    dep_tree = graph.build_dep_tree("src/pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (linked,) = graph.link_changed_files(["src/shared/gone.py"], dep_tree, root_dir=tmp_path)
+
+    assert strategies._only_reaches(dep_tree.edges[linked, "src.pkg"])
+    write_files(tmp_path, {**files, "src/shared/__init__.py": "", "src/shared/gone.py": ""})
+    built = graph.build_dep_tree("src/pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
+    (node,) = [name for name in built if built.nodes[name]["path"] == str(tmp_path.resolve() / "src/shared/gone.py")]
+    assert strategies._only_reaches(built.edges[node, "src.pkg"])
 
 
 def test_a_cycle_an_init_closes_stays(tmp_path):

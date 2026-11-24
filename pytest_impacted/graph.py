@@ -659,18 +659,16 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             neighbours -= importers
             if not importers and not neighbours and not runners and not os.path.exists(path):
                 continue
-            guessed = importers - {importer for name in sure for importer in unresolved.get(name, ())}
-            typed = _type_only_importers(names, unresolved, dep_tree.graph.get("unresolved_type_only", {}))
+            flags = _link_flags(names, sure, unresolved, dep_tree.graph.get("unresolved_type_only", {}))
             node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
             # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
             aliases.update({name: node for name in names if name != node and name not in taken})
             taken.update(names)
             taken.add(node)
             dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
-            dep_tree.add_edges_from((node, importer) for importer in importers - guessed - typed)
-            dep_tree.add_edges_from(((node, importer) for importer in guessed - typed), assumed_root=True)
-            if typed:  # a kept type-only import may never run: it reaches, as the graph's own edge does
-                dep_tree.add_edges_from(((node, importer) for importer in typed), type_only=True)
+            for importer, edge_flags in flags.items():
+                dep_tree.add_edge(node, importer, **edge_flags)
+            if any(edge_flags.get("type_only") for edge_flags in flags.values()):
                 dep_tree.graph["type_only_edges"] = True
             if neighbours:
                 dep_tree.add_edges_from(((node, importer) for importer in neighbours), basedir=True)
@@ -685,17 +683,42 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     return added
 
 
-def _type_only_importers(
-    names: list[str], unresolved: dict[str, list[str]], unresolved_type_only: dict[str, list[str]]
-) -> set[str]:
-    """The importers of any of *names* whose every import of them is a type-only one the option keeps."""
-    typed = {importer for name in names for importer in unresolved_type_only.get(name, ())}
-    runtime = {
-        importer
-        for name in names
-        for importer in set(unresolved.get(name, ())) - set(unresolved_type_only.get(name, ()))
+def _link_flags(
+    names: list[str], sure: list[str], unresolved: dict[str, list[str]], unresolved_type_only: dict[str, list[str]]
+) -> dict[str, dict[str, bool]]:
+    """Each module importing one of *names*, the names a linked file goes by, with its edge's flags.
+
+    None when it imports one of the *sure* names at runtime. Otherwise the edge only reaches, as
+    :func:`_add_import` leaves it in the graph: ``assumed_root`` when the import that runs is a guess (or it
+    imports no sure name), ``type_only`` when none of its imports runs (a type-only import the option keeps).
+    """
+
+    def importing(spelled: list[str], *, runs: bool) -> set[str]:
+        return {
+            importer
+            for name in spelled
+            for importer in unresolved.get(name, ())
+            if not runs or importer not in unresolved_type_only.get(name, ())
+        }
+
+    running, sure_any, sure_running = (
+        importing(names, runs=True),
+        importing(sure, runs=False),
+        importing(sure, runs=True),
+    )
+    return {
+        importer: {}
+        if importer in sure_running
+        else {
+            flag: True
+            for flag, on in (
+                ("assumed_root", importer in running or importer not in sure_any),
+                ("type_only", importer not in running),
+            )
+            if on
+        }
+        for importer in importing(names, runs=False)
     }
-    return typed - runtime
 
 
 def _basedirs_of_changed(path: Path, basedir_paths: list[Path], root: Path) -> list[Path]:
@@ -982,10 +1005,12 @@ def build_dep_tree(
     digraph.graph["aliases"] = linker.aliases
     # For a changed file the graph lacks — deleted, or created since — see link_changed_files.
     digraph.graph["unresolved"] = {name: sorted(importers) for name, importers in unresolved.items()}
-    # Of those, the importers whose import of the name is a kept type-only one (see link_changed_files).
-    digraph.graph["unresolved_type_only"] = {
-        name: sorted(importers) for name, importers in unresolved_type_only.items()
-    }
+    if (
+        unresolved_type_only
+    ):  # of those, importers whose import of the name is a kept type-only one (link_changed_files)
+        digraph.graph["unresolved_type_only"] = {
+            name: sorted(importers) for name, importers in unresolved_type_only.items()
+        }
     digraph.graph["import_roots"] = [str(directory) for directory in (*roots, *linker.assumed)]
     # For a file created or deleted in one of them since (link_changed_files): neighbours import it by its bare name.
     digraph.graph["rootless_test_dirs"] = [str(directory) for directory in basedirs]

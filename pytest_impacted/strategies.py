@@ -704,7 +704,7 @@ def _changes_by_role(
         imports = dep_tree
         graph = dep_tree.graph
         reach_only = ("runs_init", "assumed_roots", "basedir_edges", "type_only_edges")
-        if any(graph.get(flag) for flag in reach_only):  # few graphs have any edge to skip
+        if any(graph.get(flag) for flag in reach_only):  # a graph without such an edge skips the scan
             # Found once, then hidden by a set lookup: a filter reading every edge's attributes was the walk's cost.
             imports = nx.restricted_view(
                 dep_tree, [], [(u, v) for u, v, data in dep_tree.edges(data=True) if _only_reaches(data)]
