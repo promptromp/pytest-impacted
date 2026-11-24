@@ -335,7 +335,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH` (repeatable) |
 | `--conftest-imports` / `--no-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
-| `--ignore-type-checking-imports` / `--no-ignore-type-checking-imports` | `false` | Leave the imports in `if TYPE_CHECKING:` blocks out of the dependency graph ([details](#astimpactstrategy)) |
+| `--ignore-type-checking-imports` / `--no-ignore-type-checking-imports` | `false` | Leave type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use ([details](#astimpactstrategy)) |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; it takes a value, `true` or `false` for a boolean. Run `impacted-tests --help` to list them |
 
@@ -360,7 +360,7 @@ no_impacted_dep_files = false  # set to true to disable dep file detection
 impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 impacted_map = ["reports/*.json=tests/test_bench.py"]  # a changed data file counts as a change to the file it belongs to
 impacted_conftest_imports = false  # true: a conftest importing changed app code selects every test beneath it
-impacted_ignore_type_checking_imports = false  # true: imports under `if TYPE_CHECKING:` are no dependencies
+impacted_ignore_type_checking_imports = false  # true: type-only imports (annotations alone) are no dependencies
 impacted_unimpacted = "deselect"  # "skip": mark tests not impacted skipped instead of deselecting them
 impacted_no_merge_base = false  # true: branch mode diffs against the base tip
 impacted_disable_ext = []  # extension names to disable
@@ -471,7 +471,7 @@ The Rust extension:
 1. Reads all source files in parallel via rayon
 2. Parses Python ASTs using ruff's hand-written recursive descent parser (the same parser used by the ruff linter)
 3. Extracts import statements by recursively walking all statement bodies (`if`, `try`/`except`/`else`/`finally`, `with`, `for`, `while`, `match`/`case`, function and class blocks), telling type-only imports apart when `--impacted-ignore-type-checking-imports` asks
-4. Returns one `dict[str, list[str]]` mapping module name to its imports — only the final data crosses the Rust/Python boundary
+4. Returns one `dict[str, list[str]]` mapping module name to its imports — or, with `--impacted-ignore-type-checking-imports`, a `(runtime, type-only)` pair of lists per module — so only the final data crosses the Rust/Python boundary
 
 ### Benchmarks
 

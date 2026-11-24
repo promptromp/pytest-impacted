@@ -215,7 +215,7 @@ def cached_build_dep_tree(
             the current directory.
         pythonpath: pytest's ``pythonpath`` entries, absolute or relative to the root:
             each inside it or above it is an import root (see :func:`~pytest_impacted.graph.build_dep_tree`).
-        ignore_type_checking_imports: Leave out the imports under ``if TYPE_CHECKING:``.
+        ignore_type_checking_imports: Leave out the type-only imports (see :mod:`pytest_impacted.type_only`).
 
     Returns:
         NetworkX dependency graph. Do not mutate it — it is shared between

@@ -855,9 +855,10 @@ def build_dep_tree(
     *pythonpath* holds pytest's ``pythonpath`` entries (absolute, or relative to the rootdir):
     each inside the rootdir or above it is an import root too
     (see :func:`~pytest_impacted.traversal.split_import_roots`).
-    With *ignore_type_checking_imports*, an import in the body of an ``if TYPE_CHECKING:`` is none:
-    no edge, no module followed through it, nothing in ``graph["unresolved"]`` (see
-    :func:`~pytest_impacted.parsing.parse_file_imports`).
+    With *ignore_type_checking_imports*, a type-only import — one under ``if TYPE_CHECKING:`` whose
+    names the module uses only in annotations (see :mod:`pytest_impacted.type_only`) — is none: no edge,
+    no module followed through it, nothing in ``graph["unresolved"]``. It still counts as evidence that
+    an assumed import root is on ``sys.path``. Every other import under ``if TYPE_CHECKING:`` is an edge.
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process

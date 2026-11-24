@@ -145,6 +145,9 @@ RUNTIME_USES = [
     pytest.param("def f(x=Thing): ...\n", id="default"),
     pytest.param("@Thing\ndef f(): ...\n", id="decorator"),
     pytest.param("class C(Thing): ...\n", id="base"),
+    # astroid keeps a metaclass out of its child walk; ruff, and the ``ast`` module, among the keywords.
+    pytest.param("def f(x: Thing): ...\nclass C(metaclass=Thing): ...\n", id="metaclass"),
+    pytest.param("def f(x: Thing): ...\nclass C(metaclass=make(lambda: 'Thing')): ...\n", id="metaclass_string"),
     pytest.param("label = f'{Thing}'\n", id="f_string_field"),
     pytest.param("match value:\n    case Thing():\n        pass\n", id="class_pattern"),
     pytest.param("if FLAG:\n    pass\nelse:\n    Thing.setup()\n", id="else_of_another_if"),

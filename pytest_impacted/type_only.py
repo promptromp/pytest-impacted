@@ -14,6 +14,7 @@ from astroid.nodes import (
     AnnAssign,
     Arguments,
     Attribute,
+    ClassDef,
     Const,
     ExceptHandler,
     Expr,
@@ -87,10 +88,22 @@ def _uses(tree: Module, watched: set[str], modules: frozenset[str]) -> tuple[set
     """Which of the *watched* names are used where no code runs, and which where it does."""
     typed: set[str] = set()
     runtime: set[str] = set()
-    for node in tree.nodes_of_class((Name, Const)):
+    for node in _names_and_strings(tree):
         if names := _named_by(node, watched):
             (typed if _in_type_only_code(node, modules) else runtime).update(names)
     return typed, runtime
+
+
+def _names_and_strings(tree: Module) -> Iterator[Name | Const]:
+    """Every name and string in *tree*, a class's ``metaclass=`` included.
+
+    astroid keeps the metaclass out of ``ClassDef.get_children`` (ruff, and the ``ast`` module, keep it among
+    the keywords), in an attribute of its own; no other expression is left out of its walk.
+    """
+    yield from tree.nodes_of_class((Name, Const))
+    for cls in tree.nodes_of_class(ClassDef):
+        if (metaclass := cls._metaclass) is not None:  # private, but the only place astroid keeps it
+            yield from metaclass.nodes_of_class((Name, Const))
 
 
 def _named_by(node: Name | Const, watched: set[str]) -> set[str]:

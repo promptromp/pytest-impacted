@@ -185,8 +185,8 @@ def get_impacted_tests(
     ``ValueError`` under ``-p no:python_path``: no entries then), or
     ``find_pytest_config(root).paths("pythonpath")`` from :mod:`pytest_impacted.ini`, or bare
     imports of the modules in those directories match nothing. ``ignore_type_checking_imports``
-    leaves the imports under ``if TYPE_CHECKING:`` out of the graph
-    (see :func:`~pytest_impacted.graph.build_dep_tree`); it shapes the graph, not the pipeline, so it
+    leaves the type-only imports out of the graph: those under ``if TYPE_CHECKING:`` whose names only
+    annotations use (see :mod:`pytest_impacted.type_only`); it shapes the graph, not the pipeline, so it
     holds with an explicit ``strategy`` too.
 
     Returns ``None`` when nothing is impacted, and raises

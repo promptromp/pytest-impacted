@@ -165,7 +165,7 @@ impacted_tests_dir = "tests"
 # impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 # impacted_map = ["reports/*.json=tests/test_bench.py"]  # a data file counts as a change to the file it belongs to
 # impacted_conftest_imports = true  # a conftest importing changed app code selects every test beneath it
-# impacted_ignore_type_checking_imports = true  # imports under `if TYPE_CHECKING:` are no dependencies
+# impacted_ignore_type_checking_imports = true  # type-only imports (annotations alone) are no dependencies
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
 # impacted_unimpacted = "skip"  # mark tests not impacted skipped instead of deselecting them
 ```
