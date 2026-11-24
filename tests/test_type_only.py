@@ -116,11 +116,15 @@ ANNOTATIONS_ONLY = [
     pytest.param("async def f() -> Thing: ...\n", id="async_return"),
     pytest.param("def f(x: list['Thing']): ...\n", id="quoted_inside"),
     pytest.param("def f(x: 'Thing.Part'): ...\n", id="attribute_in_string"),
-    pytest.param("def f(a: Thing, /, *args: Thing, key: Thing, **kwargs: Thing): ...\n", id="every_parameter"),
+    pytest.param("def f(a: Thing, /): ...\n", id="positional_only"),
+    pytest.param("def f(*args: Thing): ...\n", id="var_positional"),
+    pytest.param("def f(*, key: Thing): ...\n", id="keyword_only"),
+    pytest.param("def f(**kwargs: Thing): ...\n", id="var_keyword"),
     pytest.param("value: Thing = make()\n", id="variable"),
     pytest.param("class C:\n    attr: 'Thing | None' = None\n", id="class_variable"),
     pytest.param("def f():\n    local: Thing = make()\n", id="local_variable"),
     pytest.param("if TYPE_CHECKING:\n    Alias = list[Thing]\n", id="another_type_checking_block"),
+    pytest.param("def f(x: Thing): ...\nThing = make()\n", id="rebound_at_runtime"),
     pytest.param("def f(x: Thing):\n    '''Returns a Thing.'''\n    return x\n", id="docstring"),
     pytest.param("'''A Thing.'''\ndef f(x: Thing): ...\n", id="module_docstring"),
     pytest.param("def f(x: Thing):\n    'Thing'\n", id="bare_string"),
@@ -199,6 +203,34 @@ def test_a_name_the_module_never_uses_keeps_its_import(tmp_path, idiom):
     assert "pkg.lazy" in parse(tmp_path, GUARD + idiom, module="pkg", is_package=True)
 
 
+MODULE_IMPORTS = [
+    pytest.param(
+        "try:\n    import typing as tx\nexcept ImportError:\n    tx = None\n"
+        "if tx.TYPE_CHECKING:\n    from pkg.lazy import Thing\ndef f(x: Thing): ...\n",
+        True,
+        id="module_imported_in_a_try",
+    ),
+    pytest.param(
+        "try:\n    import typing_extensions as tx\nexcept ImportError:\n    import typing as tx\n"
+        "if tx.TYPE_CHECKING:\n    from pkg.lazy import Thing\ndef f(x: Thing): ...\n",
+        True,
+        id="module_imported_in_a_block",
+    ),
+    pytest.param(
+        "def setup():\n    import typing as tx\n"
+        "if tx.TYPE_CHECKING:\n    from pkg.lazy import Thing\ndef f(x: Thing): ...\n",
+        False,
+        id="module_imported_in_a_function",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "type_only"), MODULE_IMPORTS)
+def test_a_module_s_type_checking_is_one_imported_at_module_level(tmp_path, source, type_only):
+    """``tx`` names a module everywhere only if a module-level ``import`` binds it."""
+    assert ("pkg.lazy" not in parse(tmp_path, source)) is type_only
+
+
 def test_a_lazy_module_annotating_with_a_name_it_never_mentions_at_runtime_drops_it(tmp_path):
     """The rule's known limit, pinned: a lazily loading module that also annotates with the name, and never
     names it where code runs (no ``__all__``, no loader table), reads as type-only."""
@@ -214,19 +246,21 @@ def test_a_lazy_module_annotating_with_a_name_it_exports_keeps_it(tmp_path):
     assert "pkg.lazy" in parse(tmp_path, source, module="pkg", is_package=True)
 
 
-@pytest.mark.parametrize(
-    ("guard", "use", "type_only"),
-    [
-        pytest.param("from pkg.lazy import Thing, Other", "def f(a: Thing, b: Other): ...", True, id="all_annotated"),
-        pytest.param("from pkg.lazy import Thing, Other", "def f(a: Thing): return Other", False, id="one_at_runtime"),
-        pytest.param("from pkg.lazy import Thing, Other", "def f(a: Thing): ...", False, id="one_unused"),
-        pytest.param("from pkg.lazy import Thing as T", "def f(a: T): ...", True, id="alias"),
-        pytest.param("from pkg.lazy import *", "def f(a: Thing): ...", False, id="star_names_unknown"),
-        pytest.param("import pkg.lazy", "def f(a: 'pkg.lazy.Thing'): ...", True, id="dotted"),
-        pytest.param("import pkg.lazy", "def f(a: 'pkg.lazy.Thing'): ...\npkg.other.run()", False, id="dotted_used"),
-        pytest.param("import pkg.lazy as lz", "def f(a: lz.Thing): ...", True, id="dotted_alias"),
-    ],
-)
+BINDINGS = [
+    pytest.param("from pkg.lazy import Thing, Other", "def f(a: Thing, b: Other): ...", True, id="all_annotated"),
+    pytest.param("from pkg.lazy import Thing, Other", "def f(a: Thing): return Other", False, id="one_at_runtime"),
+    pytest.param("from pkg.lazy import Thing, Other", "def f(a: Thing): ...", False, id="one_unused"),
+    pytest.param("from pkg.lazy import Thing as T", "def f(a: T): ...", True, id="alias"),
+    pytest.param("from pkg.lazy import *", "def f(a: Thing): ...", False, id="star_names_unknown"),
+    # No name a string can show used: ``*`` is no name it binds.
+    pytest.param("from pkg.lazy import *", "def f(mode: Literal['*']): ...", False, id="star_in_a_literal"),
+    pytest.param("import pkg.lazy", "def f(a: 'pkg.lazy.Thing'): ...", True, id="dotted"),
+    pytest.param("import pkg.lazy", "def f(a: 'pkg.lazy.Thing'): ...\npkg.other.run()", False, id="dotted_used"),
+    pytest.param("import pkg.lazy as lz", "def f(a: lz.Thing): ...", True, id="dotted_alias"),
+]
+
+
+@pytest.mark.parametrize(("guard", "use", "type_only"), BINDINGS)
 def test_every_name_an_import_binds_must_be_type_only(tmp_path, guard, use, type_only):
     source = f"from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    {guard}\n{use}\n"
 
@@ -259,7 +293,14 @@ PARITY_CASES = [
     BLOCKS,
     BLOCKS + PARITY_SOURCE,
     *(GUARD + case.values[0] for case in (*ANNOTATIONS_ONLY, *RUNTIME_USES, *LAZY_IDIOMS)),
+    *(
+        f"from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    {guard}\n{use}\n"
+        for guard, use, _ in (c.values for c in BINDINGS)
+    ),
     GUARD + "label = f'Thing'\n",  # an f-string's text: no string of its own, to either parser
+    GUARD + "def f(x: Thing): ...\nlabel = f'Thing'\n",
+    GUARD + "def f(x: Thing): ...\nfrom pkg.lazy import Other\n",  # pkg.lazy: a runtime candidate too
+    *(case.values[0] for case in MODULE_IMPORTS),
     GUARD + "def f(x: 'Thingé'): ...\n",
     GUARD + "def f(x: 'Chosé'): ...\nif TYPE_CHECKING:\n    from pkg.other import Chosé\n",
     GUARD + "def f(x: '''Thing''' 'Thing'): ...\n",
