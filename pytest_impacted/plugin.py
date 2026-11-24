@@ -237,9 +237,10 @@ def pytest_addoption(parser: Parser):
         default=None,
         dest="impacted_ignore_type_checking_imports",
         help=(
-            "Leave type-only imports out of the dependency graph: those in an 'if TYPE_CHECKING:' block whose "
-            + "names the module uses only in annotations. They never run, but often close import cycles. Off by "
-            + "default, as a type checker, or code evaluating annotations, may still read the modules they name."
+            "Leave application code's type-only imports out of the dependency graph: those in an "
+            + "'if TYPE_CHECKING:' block whose names the module uses only in annotations. They never run, but "
+            + "often close import cycles. Test code keeps its own. Off by default, as a type checker, or code "
+            + "evaluating annotations, may still read the modules they name."
         ),
     )
     parser.addini(

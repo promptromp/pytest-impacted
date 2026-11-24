@@ -144,7 +144,8 @@ The package's own `__init__.py` is a module too. A test that imports from the pa
 - an import whose name a string the code reads mentions: `__all__ = ["Model"]`, a lazy loader's table, `getattr(module, "Model")`. A docstring is read by no code, so it doesn't count;
 - an import whose name the module never uses. It is there for others to import from this module. A lazy `__init__` declares its exports this way and loads them on demand, through a module `__getattr__` or otherwise, so `from my_package import Model` loads `my_package.models` after all;
 - a star import, whose names cannot be known;
-- an import in an `else` branch, or under `not TYPE_CHECKING`, `TYPE_CHECKING or DEBUG`, an alias of the name (`TC`), or another object's `TYPE_CHECKING` (`settings.TYPE_CHECKING` may be true).
+- an import in an `else` branch, or under `not TYPE_CHECKING`, `TYPE_CHECKING or DEBUG`, an alias of the name (`TC`), or another object's `TYPE_CHECKING` (`settings.TYPE_CHECKING` may be true);
+- any import in test code: a test module, a conftest, anything else in `--impacted-tests-dir`, or outside `--impacted-module`. Nothing imports a test, so its type-only imports close no cycle, while one may be its only link to the type a fixture hands it: `def test_name(user: "User")`, with `user` built in a conftest, depends on `User`'s module through that annotation alone. So the option narrows the application code `--impacted-module` holds, and only that.
 
 The option removes those edges and nothing else: a type-only import still shows how the project imports its modules, for instance that `src/` is on `sys.path`.
 
@@ -335,7 +336,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH` (repeatable) |
 | `--conftest-imports` / `--no-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
-| `--ignore-type-checking-imports` / `--no-ignore-type-checking-imports` | `false` | Leave type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use ([details](#astimpactstrategy)) |
+| `--ignore-type-checking-imports` / `--no-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use ([details](#astimpactstrategy)) |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; it takes a value, `true` or `false` for a boolean. Run `impacted-tests --help` to list them |
 
@@ -398,7 +399,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark all tests as impacted (repeatable) |
 | `--impacted-map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH`, a file or directory (repeatable; [details](#mapping-files-to-the-code-they-belong-to)) |
 | `--impacted-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted ([details](#conftestimportimpactstrategy-opt-in)) |
-| `--impacted-ignore-type-checking-imports` | `false` | Leave type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use ([details](#astimpactstrategy)) |
+| `--impacted-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use; test code keeps its own ([details](#astimpactstrategy)) |
 | `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them ([details](#tests-not-impacted)) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension. Installed extensions register their own flags — run `pytest --help` to list them, or see the [Extensions guide](extensions.md#extension-with-configuration) |

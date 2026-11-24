@@ -25,6 +25,7 @@ from pytest_impacted.traversal import (
     _is_regular_package,
     basedir_of,
     canonical_root,
+    discover_application_files,
     forget_listings,
     import_base,
     locate_module,
@@ -765,15 +766,17 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
 
 
 def _parse_project(
-    linker: _Linker, ignore_type_checking_imports: bool = False
+    linker: _Linker, ignore_type_checking_imports: bool = False, application: frozenset[str] = frozenset()
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """The import candidates of every module, and the ``pytest_plugins`` edges.
 
     Imports and declarations that name a module outside the walks add it (see
-    :class:`_Linker`), and its own imports and declarations are followed in turn.
+    :class:`_Linker`), and its own imports and declarations are followed in turn. With
+    *ignore_type_checking_imports*, the type-only imports of application code (the files in
+    *application*) are none (see :func:`_parse_by_role`).
     """
     declarations = cache(parse_pytest_plugins)
-    parse = partial(_parse_all_module_imports, ignore_type_checking_imports=ignore_type_checking_imports)
+    parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, application=application)
     pending = dict(linker.modules)
     imports, type_only = parse(pending)
     # What the walked modules import is the evidence for which assumed roots are on sys.path — a type-only
@@ -793,6 +796,28 @@ def _parse_project(
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
             return imports, plugin_edges
+
+
+def _parse_by_role(
+    submodules: dict[str, str], ignore_type_checking_imports: bool, application: frozenset[str]
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """:func:`_parse_all_module_imports`, each module's type-only candidates folded back into its runtime ones
+    unless it is application code (see :func:`_is_application_code`).
+
+    Test code keeps its type-only imports: nothing imports a test module or a conftest, so they close no import
+    cycle, while one may be a test's only link to the type a fixture hands it (``def test_x(user: "User")``).
+    """
+    runtime, type_only = _parse_all_module_imports(submodules, ignore_type_checking_imports)
+    for name, typed in type_only.items():
+        if typed and not _is_application_code(submodules[name], application):
+            runtime[name] = sorted({*runtime[name], *typed})
+    return runtime, type_only
+
+
+def _is_application_code(path: str, application: frozenset[str]) -> bool:
+    """Whether the file at *path* is code under test: in *application* (the package walk's files less the tests
+    dir's, :func:`~pytest_impacted.traversal.discover_application_files`), and no conftest."""
+    return path in application and os.path.basename(path) != "conftest.py"
 
 
 def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: bool) -> None:
@@ -855,10 +880,11 @@ def build_dep_tree(
     *pythonpath* holds pytest's ``pythonpath`` entries (absolute, or relative to the rootdir):
     each inside the rootdir or above it is an import root too
     (see :func:`~pytest_impacted.traversal.split_import_roots`).
-    With *ignore_type_checking_imports*, a type-only import — one under ``if TYPE_CHECKING:`` whose
-    names the module uses only in annotations (see :mod:`pytest_impacted.type_only`) — is none: no edge,
-    no module followed through it, nothing in ``graph["unresolved"]``. It still counts as evidence that
-    an assumed import root is on ``sys.path``. Every other import under ``if TYPE_CHECKING:`` is an edge.
+    With *ignore_type_checking_imports*, a type-only import of application code — one under
+    ``if TYPE_CHECKING:`` whose names the module uses only in annotations (see
+    :mod:`pytest_impacted.type_only`) — is none: no edge, no module followed through it, nothing in
+    ``graph["unresolved"]``. It still counts as evidence that an assumed import root is on ``sys.path``.
+    Every other import under ``if TYPE_CHECKING:`` is an edge, and so is test code's (see :func:`_parse_by_role`).
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
@@ -880,7 +906,11 @@ def build_dep_tree(
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
-    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports)
+    # Only application code loses its type-only imports (see _parse_by_role).
+    application = (
+        discover_application_files(package, tests_package, root) if ignore_type_checking_imports else frozenset()
+    )
+    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports, application)
 
     digraph = nx.DiGraph()
     unresolved: dict[str, set[str]] = {}

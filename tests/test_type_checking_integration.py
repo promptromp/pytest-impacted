@@ -214,3 +214,32 @@ def test_the_cli_warns_when_an_older_extension_leaves_the_parsing_to_python(proj
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [str((project.path / "suite/test_b.py").resolve())]
     assert "warning: the installed pytest-impacted-rs predates ignoring type-only imports" in result.stderr
+
+
+FIXTURE_FILES = {
+    "app/__init__.py": "",
+    "app/models.py": "class User:\n    name = 'u'\n",
+    "suite/conftest.py": (
+        "import pytest\nfrom app.models import User\n\n@pytest.fixture\ndef user():\n    return User()\n"
+    ),
+    "suite/test_user.py": (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.models import User\n\n"
+        "def test_user(user: 'User'):\n"
+        "    assert user.name == 'u'\n"
+    ),
+    "suite/test_other.py": "def test_other():\n    pass\n",
+}
+
+
+def test_a_test_keeps_its_type_only_imports(make_git_project):
+    """A test annotating a conftest fixture (``user: "User"``) has no other link to the type's module: test
+    code keeps its type-only imports. Nothing imports a test module, so they close no cycle."""
+    project = make_git_project(FIXTURE_FILES, INI)
+    edit(project, "app/models.py")
+
+    result = run(project, FLAG)
+
+    result.assert_outcomes(passed=1, deselected=1)
+    result.stdout.fnmatch_lines(["*suite/test_user.py::test_user PASSED*"])

@@ -18,7 +18,11 @@ add a new one silently. `--impacted-ignore-type-checking-imports` is one only on
 default), and it is one rule, `type_only.py` (mirrored in `rust/src/type_only.rs`): an import under
 `if TYPE_CHECKING:` is left out only when the module uses every name it binds, and only in annotations
 or another such block. A name used at runtime, mentioned in a string the code reads, or never used
-keeps it. Keep it a rule about how names are used, never a list of idioms: skipping every type-only
+keeps it — and so does all test code (`graph._parse_by_role`: the option narrows application code,
+`discover_application_files` less conftests, only): nothing imports a test, so its type-only imports close
+no cycle, but `def test_x(user: "User")` with `user` from a conftest depends on `User`'s module through
+that annotation alone, which the oracle (subtracting what a bare conftest loads) could never show. Keep
+it a rule about how names are used, never a list of idioms: skipping every type-only
 import lost tests through a large typed library's lazy `__init__` (exports declared under
 `TYPE_CHECKING`, loaded by `__getattr__`), and a list of lazy-loading signs that replaced it missed
 new spellings in each of two review rounds. Unused names cover every one, naming none. A false

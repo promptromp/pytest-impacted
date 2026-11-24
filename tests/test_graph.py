@@ -2646,3 +2646,26 @@ def test_a_type_only_import_is_still_evidence_of_how_the_project_imports(tmp_pat
     assert [edge for edge in kept.out_edges("src.shared")] == [edge for edge in ignored.out_edges("src.shared")]
     assert ignored.out_edges("src.shared"), "the runtime import of shared is an edge"
     assert not ignored.has_edge("src.app.a", "src.app.b") and kept.has_edge("src.app.a", "src.app.b")
+
+
+@pytest.mark.parametrize(
+    "importer",
+    ["tests/test_a.py", "tests/conftest.py", "tests/helpers.py", "pkg/conftest.py", "conftest.py"],
+)
+def test_only_application_code_loses_its_type_only_imports(tmp_path, importer):
+    """Test code — the tests directory, every conftest — keeps them: nothing imports it, so they close no
+    cycle, and one may be a test's only link to the type a fixture hands it."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/models.py": "class User: ...\n",
+            importer: "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.models import User\n"
+            "def check(user: 'User') -> None: ...\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / importer).resolve())]
+    assert dep_tree.has_edge("pkg.models", node)
