@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pytest_impacted import _rust
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
     pytest_addoption,
@@ -31,6 +32,7 @@ CLI_OPTION_DESTS = {
     "impacted_invalidate_all",
     "impacted_map",
     "impacted_conftest_imports",
+    "impacted_ignore_type_checking_imports",
     "impacted_unimpacted",
     "impacted_disable_ext",
 }
@@ -88,7 +90,39 @@ def test_pytest_report_header(pytestconfig, monkeypatch):
     assert "impacted_invalidate_all=['*.json']" in header[0]
     assert "impacted_conftest_imports=True" in header[0]
     assert "impacted_unimpacted=skip" in header[0]
+    assert "impacted_ignore_type_checking_imports=False" in header[0]
     assert "backend=" in header[0]
+
+
+OUTDATED = (
+    "pytest-impacted: WARNING: the installed pytest-impacted-rs predates ignoring type-only imports, so the "
+    "slower pure-Python parser reads the files: upgrade it (pip install -U pytest-impacted-rs)."
+)
+
+
+@pytest.mark.parametrize(
+    ("available", "accepts", "ignore", "backend", "warning"),
+    [
+        pytest.param(True, True, True, "rust (ruff parser + rayon)", False, id="rust"),
+        pytest.param(True, False, False, "rust (ruff parser + rayon)", False, id="older_rust_option_off"),
+        pytest.param(True, False, True, "python (astroid)", True, id="older_rust_option_on"),
+        pytest.param(False, False, True, "python (astroid)", False, id="no_rust"),
+    ],
+)
+def test_the_header_names_the_parser_the_options_leave(
+    pytestconfig, monkeypatch, available, accepts, ignore, backend, warning
+):
+    """An installed pytest-impacted-rs older than the option leaves the parsing to astroid, many times slower
+    on a large project: the header warns, as it does when git is missing (the controller writes it)."""
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", available)
+    monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", accepts)
+    monkeypatch.setattr(pytestconfig.option, "impacted", True)
+    monkeypatch.setattr(pytestconfig.option, "impacted_ignore_type_checking_imports", ignore)
+
+    header = pytest_report_header(pytestconfig)
+
+    assert f"backend={backend}" in header[0].split(", ")
+    assert (OUTDATED in header[1:]) is warning
 
 
 def test_validate_config_valid(pytestconfig, monkeypatch):

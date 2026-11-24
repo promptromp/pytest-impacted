@@ -101,6 +101,7 @@ class TestImpactedTestsCLI:
             use_merge_base=True,
             file_map=[],
             pythonpath=[],
+            ignore_type_checking_imports=False,
         )
         call_kwargs = mock_get_impacted_tests.call_args[1]
         assert isinstance(call_kwargs["strategy"], CompositeImpactStrategy)
@@ -198,6 +199,7 @@ class TestImpactedTestsCLI:
             use_merge_base=True,
             file_map=[],
             pythonpath=[],
+            ignore_type_checking_imports=False,
         )
 
     @pytest.mark.usefixtures("in_tmp_dir")
@@ -379,6 +381,7 @@ class TestImpactedTestsCLI:
             use_merge_base=True,
             file_map=[],
             pythonpath=[],
+            ignore_type_checking_imports=False,
         )
 
     @pytest.mark.usefixtures("in_tmp_dir")

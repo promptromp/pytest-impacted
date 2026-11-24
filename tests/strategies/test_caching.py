@@ -29,7 +29,11 @@ class TestCaching:
 
         # build_dep_tree should only be called once due to caching
         mock_build_tree.assert_called_once_with(
-            "mypackage", tests_package="tests", root_dir=canonical_root(None), pythonpath=()
+            "mypackage",
+            tests_package="tests",
+            root_dir=canonical_root(None),
+            pythonpath=(),
+            ignore_type_checking_imports=False,
         )
 
         # Both results should be the same
@@ -50,10 +54,18 @@ class TestCaching:
         # build_dep_tree should be called twice with different parameters
         assert mock_build_tree.call_count == 2
         mock_build_tree.assert_any_call(
-            "mypackage", tests_package="tests", root_dir=canonical_root(None), pythonpath=()
+            "mypackage",
+            tests_package="tests",
+            root_dir=canonical_root(None),
+            pythonpath=(),
+            ignore_type_checking_imports=False,
         )
         mock_build_tree.assert_any_call(
-            "mypackage", tests_package="other_tests", root_dir=canonical_root(None), pythonpath=()
+            "mypackage",
+            tests_package="other_tests",
+            root_dir=canonical_root(None),
+            pythonpath=(),
+            ignore_type_checking_imports=False,
         )
 
         # Results should be different
@@ -92,7 +104,11 @@ class TestCaching:
 
         # Should only call build_dep_tree once
         mock_build_tree.assert_called_once_with(
-            "mypackage", tests_package=None, root_dir=canonical_root(None), pythonpath=()
+            "mypackage",
+            tests_package=None,
+            root_dir=canonical_root(None),
+            pythonpath=(),
+            ignore_type_checking_imports=False,
         )
         assert result1 is result2
 
@@ -135,3 +151,21 @@ class TestCaching:
 
         assert mock_build_tree.call_count == 2
         assert result1 is not result2
+
+    @patch("pytest_impacted.strategies.build_dep_tree")
+    def test_the_type_checking_option_is_part_of_the_key(self, mock_build_tree):
+        """A graph built ignoring type-only imports lacks edges another run may need."""
+        mock_build_tree.side_effect = [MagicMock(), MagicMock()]
+
+        kept = cached_build_dep_tree("mypackage", "tests")
+        ignored = cached_build_dep_tree("mypackage", "tests", ignore_type_checking_imports=True)
+
+        assert kept is not ignored
+        assert cached_build_dep_tree("mypackage", "tests", ignore_type_checking_imports=True) is ignored
+        mock_build_tree.assert_called_with(
+            "mypackage",
+            tests_package="tests",
+            root_dir=canonical_root(None),
+            pythonpath=(),
+            ignore_type_checking_imports=True,
+        )

@@ -145,7 +145,7 @@ fi
 ```
 
 The CLI accepts `--module`, `--git-mode`, `--base-branch`, `--no-merge-base`, `--root-dir`, `-c/--config-file`, `--tests-dir`,
-`--verbose`, `--no-dep-files`, `--invalidate-all`, `--map`, `--conftest-imports` and `--disable-ext`, each defaulting to its pytest setting (`impacted_module`, …) when one is configured, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
+`--verbose`, `--no-dep-files`, `--invalidate-all`, `--map`, `--conftest-imports`, `--ignore-type-checking-imports` and `--disable-ext`, each defaulting to its pytest setting (`impacted_module`, …) when one is configured, plus an `--impacted-ext-{ext}-{option} VALUE` option for each option of an installed extension (it takes a value, `true` or `false` for a boolean). If your tests live outside the package,
 pass `--tests-dir` here as well — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#impacted-tests-options).
 
 In branch mode, CI must fetch the base ref and enough history to find the fork point — e.g. `fetch-depth: 0` with `actions/checkout`, whose default fetches only the checked-out commit — and name it as the remote-tracking ref (`origin/main`): a PR checkout has no local `main`.
@@ -165,6 +165,7 @@ impacted_tests_dir = "tests"
 # impacted_invalidate_all = ["*.json"]  # non-Python files that should trigger every test
 # impacted_map = ["reports/*.json=tests/test_bench.py"]  # a data file counts as a change to the file it belongs to
 # impacted_conftest_imports = true  # a conftest importing changed app code selects every test beneath it
+# impacted_ignore_type_checking_imports = true  # type-only imports (annotations alone) are no dependencies
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
 # impacted_unimpacted = "skip"  # mark tests not impacted skipped instead of deselecting them
 ```
@@ -185,6 +186,7 @@ Command-line flags override these defaults. A boolean set to `true` here has no 
 | `--impacted-invalidate-all` | `[]` | Glob for files that, when changed, mark **all** tests as impacted (repeatable) |
 | `--impacted-map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH` — a test file, a module, a `conftest.py` or a directory (repeatable) |
 | `--impacted-conftest-imports` | `false` | Also select every test beneath a `conftest.py` that imports changed *application* code — see [below](#strategy-based-architecture) |
+| `--impacted-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph — those under `if TYPE_CHECKING:` whose names only annotations use — so the import cycles they close stop selecting each other's tests. A name the code uses, a string names, or the module never uses (a lazy `__init__`'s exports) keeps its import, and test code keeps all of its own; a test running a type checker is no longer selected through them — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#astimpactstrategy) |
 | `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them (the behaviour up to 0.35) |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension (see `pytest --help`) |
@@ -209,7 +211,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 7. **Invalidation patterns** — user-declared globs for non-Python files (JSON fixtures, SQL schemas, YAML configs, …) that static analysis cannot see; see `--impacted-invalidate-all`, or `--impacted-map` to run only the tests of the file they belong to
 8. **Test filtering** deselects tests whose modules are not in the impact set (or skips them, with `--impacted-unimpacted=skip`) — a test counts as belonging both to the file it was collected from and to the file it is defined in, so inherited test methods and pytest-bdd scenarios are covered; doctests and tests collected from non-Python files (e.g. `--doctest-glob`) always run
 
-The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run). The few deliberate exceptions are documented where they apply — most notably, application code used by tests only through a conftest fixture (see `--impacted-conftest-imports`).
+The philosophy is to **err on the side of caution**: we favor false positives (running a test that didn't need to run) over false negatives (missing a test that should have run). The few deliberate exceptions are documented where they apply — most notably, application code used by tests only through a conftest fixture (see `--impacted-conftest-imports`). Ignoring type-only imports (`--impacted-ignore-type-checking-imports`) is one you can choose.
 
 ### Strategy-Based Architecture
 

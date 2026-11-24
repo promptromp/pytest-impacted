@@ -9,7 +9,7 @@ from unittest.mock import patch
 import networkx as nx
 import pytest
 
-from pytest_impacted import graph
+from pytest_impacted import _rust, graph
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
 from pytest_impacted.traversal import _Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
 
@@ -85,7 +85,7 @@ def test_build_dep_tree():
     }
 
     with (
-        patch("pytest_impacted.graph.RUST_AVAILABLE", False),
+        patch("pytest_impacted._rust.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
         patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
     ):
@@ -2517,3 +2517,176 @@ def test_a_package_deleted_with_its_whole_test_directory_reaches_importers_of_a_
     (node,) = graph.link_changed_files(["services/svc_c/tests/hp/__init__.py"], dep_tree, root_dir=tmp_path)
 
     assert "services.svc_a.tests.test_a" in dep_tree.successors(node)
+
+
+TYPE_ONLY = {
+    "pkg/__init__.py": "",
+    "pkg/a.py": (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from pkg.b import X\n"
+        "    import shared_types\n"
+        "    import pkg.gone\n"
+        "def f(x: 'X') -> int:\n"
+        "    return 1\n"
+        "def g(y: 'shared_types.Alias', z: 'pkg.gone.Part') -> None: ...\n"
+    ),
+    "pkg/b.py": "class X: ...\n",
+    "shared_types.py": "",
+    "tests/test_a.py": "from pkg.a import f\n",
+}
+
+
+def test_a_type_only_import_is_an_edge_by_default(tmp_path):
+    """Kept unless asked: a type checker, or code evaluating annotations, may still read it."""
+    write_files(tmp_path, TYPE_ONLY)
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("pkg.b", "pkg.a")
+    assert dep_tree.nodes["shared_types"].get("external") is True
+    assert "pkg.gone" in dep_tree.graph["unresolved"]
+
+
+def test_an_ignored_type_only_import_is_no_edge_nor_followed_nor_awaited(tmp_path):
+    """``if TYPE_CHECKING:`` never runs: no edge, no module outside the walks followed through it, and a
+    deleted module it names reaches nothing (``graph["unresolved"]``)."""
+    write_files(tmp_path, TYPE_ONLY)
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    assert not dep_tree.has_edge("pkg.b", "pkg.a")
+    assert dep_tree.has_edge("pkg.a", "tests.test_a")
+    assert "shared_types" not in dep_tree
+    assert "pkg.gone" not in dep_tree.graph["unresolved"]
+
+
+def test_a_type_only_import_closing_a_cycle_no_longer_ties_the_cycle_together(tmp_path):
+    """The issue's case: ``a`` imports ``b`` at runtime, ``b`` imports ``a`` for annotations only. Ignored,
+    an edit to ``a`` reaches ``b``'s importers no more, while one to ``b`` still reaches ``a``'s."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/a.py": "from pkg.b import helper\n",
+            "pkg/b.py": (
+                "from typing import TYPE_CHECKING\n"
+                "if TYPE_CHECKING:\n"
+                "    from pkg.a import Model\n"
+                "def describe(model: 'Model') -> str: ...\n"
+            ),
+            "tests/test_a.py": "import pkg.a\n",
+            "tests/test_b.py": "import pkg.b\n",
+        },
+    )
+    build = partial(graph.build_dep_tree, "pkg", tests_package="tests", root_dir=tmp_path)
+
+    kept, ignored = build(), build(ignore_type_checking_imports=True)
+
+    assert "tests.test_b" in graph.reached_from(["pkg.a"], kept)
+    assert "tests.test_b" not in graph.reached_from(["pkg.a"], ignored)
+    assert "tests.test_a" in graph.reached_from(["pkg.b"], ignored)
+
+
+def test_an_extension_predating_the_option_leaves_the_parsing_to_python(tmp_path, monkeypatch):
+    """pytest-impacted-rs installs apart and may be older: asked to ignore type-only imports, the Python
+    parser reads the files, rather than the extension rejecting the option (or dropping it unseen)."""
+    calls = []
+
+    def parse_all_imports(modules):  # the extension's signature before the option
+        calls.append(modules)
+        return {name: graph.parse_file_imports(path, name, is_package) for path, name, is_package in modules}
+
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
+    monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", False)
+    monkeypatch.setattr(_rust, "rust_parse_all_imports", parse_all_imports)
+    write_files(tmp_path, TYPE_ONLY)
+    build = partial(graph.build_dep_tree, "pkg", tests_package="tests", root_dir=tmp_path)
+
+    ignoring = build(ignore_type_checking_imports=True)
+    assert not calls
+    assert not ignoring.has_edge("pkg.b", "pkg.a")
+
+    assert build().has_edge("pkg.b", "pkg.a")
+    assert calls, "without the option, the older extension still parses"
+
+
+def test_the_installed_extension_splits_type_only_imports():
+    pytest.importorskip("pytest_impacted_rs")
+
+    assert _rust.RUST_SPLITS_TYPE_ONLY is True
+    assert _rust.uses_rust(ignore_type_checking_imports=True)
+
+
+def test_a_type_only_import_is_still_evidence_of_how_the_project_imports(tmp_path):
+    """Ignoring type-only imports removes their edges and nothing else. ``src/`` holds an ``__init__.py``,
+    so it is an assumed root, looked up only once an import spells the package from there: a type-only
+    ``from app.a import X`` does, and ``import shared`` beside it must still find ``src/shared.py``."""
+    write_files(
+        tmp_path,
+        {
+            "src/__init__.py": "",
+            "src/app/__init__.py": "",
+            "src/app/a.py": "class X: ...\n",
+            "src/app/b.py": (
+                "from typing import TYPE_CHECKING\n"
+                "if TYPE_CHECKING:\n"
+                "    from app.a import X\n"
+                "import shared\n"
+                "def f(x: 'X') -> None: ...\n"
+            ),
+            "src/shared.py": "",
+            "tests/test_b.py": "import src.app.b\n",  # so only the type-only import spells app from src/
+        },
+    )
+    build = partial(graph.build_dep_tree, "src/app", tests_package="tests", root_dir=tmp_path)
+
+    kept, ignored = build(), build(ignore_type_checking_imports=True)
+
+    assert [edge for edge in kept.out_edges("src.shared")] == [edge for edge in ignored.out_edges("src.shared")]
+    assert ignored.out_edges("src.shared"), "the runtime import of shared is an edge"
+    assert not ignored.has_edge("src.app.a", "src.app.b") and kept.has_edge("src.app.a", "src.app.b")
+
+
+@pytest.mark.parametrize(
+    "importer",
+    ["tests/test_a.py", "tests/conftest.py", "tests/helpers.py", "pkg/conftest.py", "conftest.py"],
+)
+def test_only_application_code_loses_its_type_only_imports(tmp_path, importer):
+    """Test code — the tests directory, every conftest — keeps them: nothing imports it, so they close no
+    cycle, and one may be a test's only link to the type a fixture hands it."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/models.py": "class User: ...\n",
+            importer: "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.models import User\n"
+            "def check(user: 'User') -> None: ...\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / importer).resolve())]
+    assert dep_tree.has_edge("pkg.models", node)
+
+
+@pytest.mark.parametrize("importer", ["pkg/tests/test_a.py", "pkg/test_b.py", "pkg/tests/helpers_test.py"])
+def test_a_test_module_inside_the_package_keeps_its_type_only_imports(tmp_path, importer):
+    """With no tests dir configured, tests inside the package are test code still: judged by their path, as the
+    graph judges every test module."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/tests/__init__.py": "",
+            "pkg/models.py": "class User: ...\n",
+            importer: "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.models import User\n"
+            "def check(user: 'User') -> None: ...\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / importer).resolve())]
+    assert dep_tree.has_edge("pkg.models", node)

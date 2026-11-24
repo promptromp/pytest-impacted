@@ -14,7 +14,25 @@ Separately, changes to dependency and test-config files (`uv.lock`, `requirement
 The philosophy is to **err on the side of caution**: false positives (running a test
 that did not need to run) are preferred over false negatives. Exceptions are deliberate,
 documented and opt-back-in-able — chiefly `--impacted-conftest-imports` (below); never
-add a new one silently.
+add a new one silently. `--impacted-ignore-type-checking-imports` is one only on request (off by
+default), and it is one rule, `type_only.py` (mirrored in `rust/src/type_only.rs`): an import under
+`if TYPE_CHECKING:` is left out only when the module uses every name it binds, and only in annotations
+or another such block. A name used at runtime, mentioned in a string the code reads, or never used
+keeps it — and so does all test code (`graph._parse_by_role`: the option narrows application code,
+`graph._application_code` — `discover_application_files` less conftests and test modules judged by path,
+which catches tests inside the package with no tests dir configured — only): nothing imports a test, so its type-only imports close
+no cycle, but `def test_x(user: "User")` with `user` from a conftest depends on `User`'s module through
+that annotation alone, which the oracle (subtracting what a bare conftest loads) could never show. Keep
+it a rule about how names are used, never a list of idioms: skipping every type-only
+import lost tests through a large typed library's lazy `__init__` (exports declared under
+`TYPE_CHECKING`, loaded by `__getattr__`), and a list of lazy-loading signs that replaced it missed
+new spellings in each of two review rounds. Unused names cover every one, naming none. A false
+sighting of an annotation use is the unsafe side (it licenses the drop); a false runtime use only
+keeps an edge. Prove a change by checking each dropped (module, test) pair against what the test file
+loads at collection — "every removal traces to a type-only import" passed while tests were lost. The
+option removes type-only edges and nothing else: assumed roots still activate on type-only imports
+(`parse_all_imports_split` returns both lists from one parse). `TYPE_CHECKING` itself is matched by
+name, as type checkers do, or as the attribute of a module-level `import`.
 
 ## Gotchas
 
@@ -368,7 +386,17 @@ moving it reinterprets an explicit `--module` (two review rounds oscillated on t
 changes which tests run under the `fast` extra. Known parity points: read with `utf-8-sig`
 so a BOM is not a syntax error, and scan `match`/`case` bodies.
 `test_parse_file_imports_matches_rust_backend` pins it and CI runs both backends across
-3.11–3.14 — change one backend, change the other.
+3.11–3.14 — change one backend, change the other. So is the type-only split (`tests/test_type_only.py`
+runs every case through both): an `elif TYPE_CHECKING:` is a nested `If` in astroid's `orelse`, a
+clause with its own test in ruff's `elif_else_clauses`; astroid keeps docstrings out of its tree, ruff
+has them as bare string statements, so no bare string counts; an f-string's text is a string to
+neither; type comments are nodes to neither. Check new rules over every file of a real clone too.
+The extension is a separate distribution and the `fast` extra is unpinned (a development build is
+`0.1.0`, which a pin would refuse), so an install may hold an older one: never change an existing
+function's signature — add a function (`parse_all_imports_split`), import it in `_rust.py` behind
+`ImportError` like the extension itself (`RUST_SPLITS_TYPE_ONLY`), and let `uses_rust` leave the
+parsing to astroid when the extension cannot honour the options; the header and the CLI warn
+(`outdated_for`) — never a TypeError, never an option dropped unseen.
 
 **Logging: every module that logs declares `logger = logging.getLogger(__name__)`.**
 Never call `logging.info(...)` and friends — those hit the root logger and are

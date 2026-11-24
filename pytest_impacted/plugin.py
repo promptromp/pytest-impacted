@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from pytest import Config, DoctestItem, ExitCode, Parser, StashKey, UsageError
 
-from pytest_impacted._rust import RUST_AVAILABLE
+from pytest_impacted import _rust
 from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
@@ -232,6 +232,25 @@ def pytest_addoption(parser: Parser):
     )
 
     group.addoption(
+        "--impacted-ignore-type-checking-imports",
+        action="store_true",
+        default=None,
+        dest="impacted_ignore_type_checking_imports",
+        help=(
+            "Leave application code's type-only imports out of the dependency graph: those in an "
+            + "'if TYPE_CHECKING:' block whose names the module uses only in annotations. They never run, but "
+            + "often close import cycles. Test code keeps its own. Off by default, as a type checker, or code "
+            + "evaluating annotations, may still read the modules they name."
+        ),
+    )
+    parser.addini(
+        "impacted_ignore_type_checking_imports",
+        help="default value for --impacted-ignore-type-checking-imports",
+        type="bool",
+        default=False,
+    )
+
+    group.addoption(
         "--impacted-unimpacted",
         action="store",
         default=None,
@@ -298,7 +317,7 @@ def pytest_configure(config: Config):
 def pytest_report_header(config: Config) -> list[str]:
     """Add pytest-impacted config to pytest header."""
     get_option = partial(get_option_from_config, config)
-    backend = "rust (ruff parser + rayon)" if RUST_AVAILABLE else "python (astroid)"
+    ignore_type_checking_imports = get_option("impacted_ignore_type_checking_imports")
     ext_names = [e.name for e in discover_extension_metadata()]
     header = [
         f"impacted_module={get_option('impacted_module')}",
@@ -310,8 +329,9 @@ def pytest_report_header(config: Config) -> list[str]:
         f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
         f"impacted_map={get_option('impacted_map')}",
         f"impacted_conftest_imports={get_option('impacted_conftest_imports')}",
+        f"impacted_ignore_type_checking_imports={ignore_type_checking_imports}",
         f"impacted_unimpacted={get_option('impacted_unimpacted')}",
-        f"backend={backend}",
+        f"backend={_backend(bool(ignore_type_checking_imports))}",
     ]
     if ext_names:
         header.append(f"extensions={','.join(ext_names)}")
@@ -321,6 +341,8 @@ def pytest_report_header(config: Config) -> list[str]:
         lines.extend(
             f"pytest-impacted: WARNING: --impacted-map path {path} matches no file git knows." for path in unknown
         )
+    if get_option("impacted") and (outdated := _rust.outdated_for(bool(ignore_type_checking_imports))):
+        lines.append(f"pytest-impacted: WARNING: {outdated}")
     if get_option("impacted") and not GIT_AVAILABLE:
         # The header is written by the controller, so this survives pytest-xdist,
         # whose workers run collection and whose terminal output is discarded.
@@ -378,6 +400,11 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
         return None
 
 
+def _backend(ignore_type_checking_imports: bool) -> str:
+    """The parser the analysis uses, for the report header (see :func:`~pytest_impacted._rust.uses_rust`)."""
+    return "rust (ruff parser + rayon)" if _rust.uses_rust(ignore_type_checking_imports) else "python (astroid)"
+
+
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
     """The impacted test files, relative to the rootdir, or ``None`` to run every test.
 
@@ -405,6 +432,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             use_merge_base=not get_option("impacted_no_merge_base"),
             file_map=parse_file_map(get_option("impacted_map") or []),
             pythonpath=_pythonpath(config),
+            ignore_type_checking_imports=bool(get_option("impacted_ignore_type_checking_imports")),
         )
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not

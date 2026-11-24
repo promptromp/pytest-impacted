@@ -11,6 +11,8 @@ from pathlib import Path
 import astroid
 from astroid.nodes import Import, ImportFrom
 
+from pytest_impacted.type_only import BLOCK_FIELDS, type_only_imports
+
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +122,9 @@ def _extract_imports_from_node(node: Import | ImportFrom, package: str) -> set[s
     return imports
 
 
-def parse_file_imports(file_path: str, module_name: str, is_package: bool = False) -> list[str]:
+def parse_file_imports(
+    file_path: str, module_name: str, is_package: bool = False, *, ignore_type_checking_imports: bool = False
+) -> list[str]:
     """Parse imports from a source file without importing the module.
 
     Reads the file directly and resolves relative imports from *module_name*
@@ -130,6 +134,8 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         file_path: Absolute path to the ``.py`` file.
         module_name: Fully-qualified module name (e.g. ``"pkg.sub.mod"``).
         is_package: ``True`` when the file is an ``__init__.py``.
+        ignore_type_checking_imports: Leave out the type-only imports, those under ``if TYPE_CHECKING:``
+            whose names only annotations use (see :mod:`pytest_impacted.type_only`).
 
     Returns:
         Sorted list of *candidate* absolute module names. ``from pkg import
@@ -138,12 +144,26 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         callers map them through the graph's aliases and keep those that are nodes;
         :func:`~pytest_impacted.graph.build_dep_tree` also looks the rest up on disk.
     """
+    runtime, _ = split_file_imports(file_path, module_name, is_package, find_type_only=ignore_type_checking_imports)
+    return runtime
+
+
+def split_file_imports(
+    file_path: str, module_name: str, is_package: bool = False, *, find_type_only: bool = True
+) -> tuple[list[str], list[str]]:
+    """The candidates of :func:`parse_file_imports`, split into runtime and type-only ones.
+
+    The type-only ones come from type-only imports (see :mod:`pytest_impacted.type_only`) and no other
+    import; with *find_type_only* false, every candidate is a runtime one. The graph links the runtime ones
+    alone, but counts both as evidence of how the project imports its modules. Mirrors
+    ``parse_file_imports_core`` in the Rust backend.
+    """
     source = read_source(file_path)
     if source is None:
         logger.error("Error reading file %s", file_path)
-        return []
+        return [], []
     if not source.strip():
-        return []
+        return [], []
 
     package = _package_of(module_name, is_package)
 
@@ -152,13 +172,14 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
             tree = astroid.parse(source)
     except astroid.exceptions.AstroidSyntaxError:
         logger.warning("Syntax error while parsing %s", file_path)
-        return []
+        return [], []
 
-    imports: set[str] = set()
+    type_only = {id(node) for node in type_only_imports(tree)} if find_type_only else set()
+    runtime: set[str] = set()
+    typed: set[str] = set()
     for node in tree.nodes_of_class((Import, ImportFrom)):
-        imports.update(_extract_imports_from_node(node, package))
-
-    return sorted(imports)
+        (typed if id(node) in type_only else runtime).update(_extract_imports_from_node(node, package))
+    return sorted(runtime), sorted(typed - runtime)
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:
@@ -185,7 +206,6 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
         return []
 
 
-_BLOCK_FIELDS = ("body", "cases", "handlers", "orelse", "finalbody")  # source order
 _BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.ExceptHandler, ast.Match, ast.match_case, ast.For, ast.While)
 
 
@@ -195,7 +215,7 @@ def _module_level_statements(body: list) -> Iterator[ast.stmt]:
         if isinstance(stmt, ast.stmt):
             yield stmt
         if isinstance(stmt, _BLOCKS):
-            for field in _BLOCK_FIELDS:
+            for field in BLOCK_FIELDS:
                 yield from _module_level_statements(getattr(stmt, field, []))
 
 

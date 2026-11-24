@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
+
+mod type_only;
 
 /// Resolve a relative import to its absolute module path.
 ///
@@ -112,64 +114,78 @@ fn extract_from_import_from(
     imports
 }
 
+/// A source's runtime and type-only import candidates, each sorted.
+type Split = (Vec<String>, Vec<String>);
+
+/// Where the walk puts each import's candidates, and the context relative imports resolve in.
+struct Walk<'a> {
+    module_name: &'a str,
+    is_package: bool,
+    /// The addresses of the type-only import statements (see `type_only`).
+    type_only: HashSet<usize>,
+    runtime: HashSet<String>,
+    typed: HashSet<String>,
+}
+
+impl Walk<'_> {
+    fn add(&mut self, stmt: &Stmt, candidates: Vec<String>) {
+        let into = if self.type_only.contains(&type_only::address(stmt)) {
+            &mut self.typed
+        } else {
+            &mut self.runtime
+        };
+        into.extend(candidates);
+    }
+}
+
 /// Recursively collect import statements from a list of statements.
 ///
 /// Python imports can appear inside if/try/with/for/while/match/function/class bodies,
 /// so we must recurse into all compound statement bodies.
-fn collect_imports_from_stmts(
-    stmts: &[Stmt],
-    module_name: &str,
-    is_package: bool,
-    imports: &mut std::collections::HashSet<String>,
-) {
+fn collect_imports_from_stmts(stmts: &[Stmt], walk: &mut Walk) {
     for stmt in stmts {
         match stmt {
-            Stmt::Import(node) => {
-                for imp in extract_from_import(node) {
-                    imports.insert(imp);
-                }
-            }
+            Stmt::Import(node) => walk.add(stmt, extract_from_import(node)),
             Stmt::ImportFrom(node) => {
-                for imp in extract_from_import_from(node, module_name, is_package) {
-                    imports.insert(imp);
-                }
+                let candidates = extract_from_import_from(node, walk.module_name, walk.is_package);
+                walk.add(stmt, candidates);
             }
             // Recurse into compound statement bodies
             Stmt::If(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk);
                 for clause in &node.elif_else_clauses {
-                    collect_imports_from_stmts(&clause.body, module_name, is_package, imports);
+                    collect_imports_from_stmts(&clause.body, walk);
                 }
             }
             Stmt::Try(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk);
                 for handler in &node.handlers {
                     let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
-                    collect_imports_from_stmts(&h.body, module_name, is_package, imports);
+                    collect_imports_from_stmts(&h.body, walk);
                 }
-                collect_imports_from_stmts(&node.orelse, module_name, is_package, imports);
-                collect_imports_from_stmts(&node.finalbody, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.orelse, walk);
+                collect_imports_from_stmts(&node.finalbody, walk);
             }
             Stmt::With(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk);
             }
             Stmt::For(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
-                collect_imports_from_stmts(&node.orelse, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk);
+                collect_imports_from_stmts(&node.orelse, walk);
             }
             Stmt::While(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
-                collect_imports_from_stmts(&node.orelse, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk);
+                collect_imports_from_stmts(&node.orelse, walk);
             }
             Stmt::FunctionDef(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk);
             }
             Stmt::ClassDef(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk);
             }
             Stmt::Match(node) => {
                 for case in &node.cases {
-                    collect_imports_from_stmts(&case.body, module_name, is_package, imports);
+                    collect_imports_from_stmts(&case.body, walk);
                 }
             }
             _ => {}
@@ -177,25 +193,46 @@ fn collect_imports_from_stmts(
     }
 }
 
-/// Core import extraction logic used by both the PyO3 function and the parallel batch function.
-fn parse_file_imports_core(source: &str, module_name: &str, is_package: bool) -> Vec<String> {
+/// The runtime and the type-only import candidates of a source, each sorted.
+///
+/// Every candidate is a runtime one unless `find_type_only` asks for the type-only ones: those of a
+/// type-only import (see `type_only`) and of no other. Mirrors `split_file_imports` in the Python
+/// backend; used by both PyO3 functions and the parallel batch functions.
+fn parse_file_imports_core(
+    source: &str,
+    module_name: &str,
+    is_package: bool,
+    find_type_only: bool,
+) -> Split {
     if source.trim().is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // Parse with ruff's parse_module (returns Parsed<ModModule> directly)
     let parsed = match ruff_python_parser::parse_module(source) {
         Ok(p) => p,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), Vec::new()),
     };
 
-    let mut imports = std::collections::HashSet::new();
     let suite = parsed.into_suite();
-    collect_imports_from_stmts(&suite, module_name, is_package, &mut imports);
+    let mut walk = Walk {
+        module_name,
+        is_package,
+        type_only: if find_type_only {
+            type_only::type_only_imports(&suite)
+        } else {
+            HashSet::new()
+        },
+        runtime: HashSet::new(),
+        typed: HashSet::new(),
+    };
+    collect_imports_from_stmts(&suite, &mut walk);
 
-    let mut result: Vec<String> = imports.into_iter().collect();
-    result.sort();
-    result
+    let mut runtime: Vec<String> = walk.runtime.iter().cloned().collect();
+    runtime.sort();
+    let mut typed: Vec<String> = walk.typed.difference(&walk.runtime).cloned().collect();
+    typed.sort();
+    (runtime, typed)
 }
 
 /// Parse imports from a Python source file.
@@ -213,7 +250,19 @@ fn parse_file_imports(
         Err(_) => return Ok(Vec::new()),
     };
 
-    Ok(parse_file_imports_core(&source, module_name, is_package))
+    Ok(parse_file_imports_core(&source, module_name, is_package, false).0)
+}
+
+/// Parse each `(file_path, module_name, is_package)` in parallel, via rayon.
+fn parse_all(modules: &[(String, String, bool)], find_type_only: bool) -> Vec<(String, Split)> {
+    modules
+        .par_iter()
+        .map(|(file_path, module_name, is_package)| {
+            let source = fs::read_to_string(file_path).unwrap_or_default();
+            let split = parse_file_imports_core(&source, module_name, *is_package, find_type_only);
+            (module_name.clone(), split)
+        })
+        .collect()
 }
 
 /// Parse imports from multiple Python source files in parallel.
@@ -226,16 +275,20 @@ fn parse_file_imports(
 fn parse_all_imports(
     modules: Vec<(String, String, bool)>,
 ) -> PyResult<HashMap<String, Vec<String>>> {
-    let results: Vec<(String, Vec<String>)> = modules
-        .par_iter()
-        .map(|(file_path, module_name, is_package)| {
-            let source = fs::read_to_string(file_path).unwrap_or_default();
-            let imports = parse_file_imports_core(&source, module_name, *is_package);
-            (module_name.clone(), imports)
-        })
-        .collect();
+    Ok(parse_all(&modules, false)
+        .into_iter()
+        .map(|(name, (runtime, _))| (name, runtime))
+        .collect())
+}
 
-    Ok(results.into_iter().collect())
+/// `parse_all_imports`, with each module's candidates split into runtime and type-only ones
+/// (see `type_only`): the graph links the runtime ones, and counts both as evidence of how the
+/// project imports its modules. Mirrors `split_file_imports` in the Python backend.
+#[pyfunction]
+fn parse_all_imports_split(
+    modules: Vec<(String, String, bool)>,
+) -> PyResult<HashMap<String, Split>> {
+    Ok(parse_all(&modules, true).into_iter().collect())
 }
 
 /// Python module definition.
@@ -243,5 +296,6 @@ fn parse_all_imports(
 fn pytest_impacted_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_file_imports, m)?)?;
     m.add_function(wrap_pyfunction!(parse_all_imports, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_all_imports_split, m)?)?;
     Ok(())
 }

@@ -4,18 +4,19 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Iterable
-from functools import cache
+from functools import cache, partial
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 import networkx as nx
 
-from pytest_impacted._rust import RUST_AVAILABLE, rust_parse_all_imports
+from pytest_impacted import _rust
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_test_module,
     parse_file_imports,
     parse_pytest_plugins,
+    split_file_imports,
 )
 from pytest_impacted.traversal import (
     LAST_RESORT_PREFIX,
@@ -24,6 +25,7 @@ from pytest_impacted.traversal import (
     _is_regular_package,
     basedir_of,
     canonical_root,
+    discover_application_files,
     forget_listings,
     import_base,
     locate_module,
@@ -39,8 +41,10 @@ from pytest_impacted.traversal import (
 logger = logging.getLogger(__name__)
 
 
-def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
-    """Parse imports for all discovered submodules.
+def _parse_all_module_imports(
+    submodules: dict[str, str], ignore_type_checking_imports: bool = False
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Parse imports for all discovered submodules (see :func:`_parse_imports`).
 
     A conftest with no free name is keyed by its last resort (see
     :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), which is no base
@@ -48,32 +52,47 @@ def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]
     :func:`~pytest_impacted.traversal.import_base`. That name may belong to another
     module, so it is parsed apart.
     """
+    parse = partial(_parse_imports, ignore_type_checking_imports=ignore_type_checking_imports)
     bases = {import_base(name): name for name in submodules if name.startswith(LAST_RESORT_PREFIX)}
     if not bases:
-        return _parse_imports(submodules)
-    result = _parse_imports(
+        return parse(submodules)
+    runtime, type_only = parse(
         {name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)}
     )
-    parsed = _parse_imports({base: submodules[name] for base, name in bases.items()})
-    return result | {bases[base]: imports for base, imports in parsed.items()}
+    based_runtime, based_type_only = parse({base: submodules[name] for base, name in bases.items()})
+    return (
+        runtime | {bases[base]: imports for base, imports in based_runtime.items()},
+        type_only | {bases[base]: imports for base, imports in based_type_only.items()},
+    )
 
 
-def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
-    """Parse the imports of each ``{name: path}``, resolving relative imports from *name*.
+def _parse_imports(
+    submodules: dict[str, str], ignore_type_checking_imports: bool = False
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """The runtime and the type-only import candidates of each ``{name: path}``, relative imports resolved from *name*.
 
-    Uses the Rust extension (parallel batch via rayon) when available,
+    Every candidate is a runtime one unless *ignore_type_checking_imports* asks for the type-only ones
+    (see :func:`~pytest_impacted.parsing.split_file_imports`). Uses the Rust extension (parallel batch via
+    rayon) when available and new enough for the options (:func:`~pytest_impacted._rust.uses_rust`),
     falling back to sequential astroid parsing.
     """
-    if RUST_AVAILABLE:
+    if _rust.uses_rust(ignore_type_checking_imports):
         modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
-        return rust_parse_all_imports(modules_info)
+        if not ignore_type_checking_imports:
+            return _rust.rust_parse_all_imports(modules_info), {}
+        split = _rust.rust_parse_all_imports_split(modules_info)
+        return {name: found for name, (found, _) in split.items()}, {name: typed for name, (_, typed) in split.items()}
 
-    result: dict[str, list[str]] = {}
+    runtime: dict[str, list[str]] = {}
+    type_only: dict[str, list[str]] = {}
     for name, file_path in submodules.items():
         logger.debug("Processing submodule: %s", name)
         is_pkg = file_path.endswith("__init__.py")
-        result[name] = parse_file_imports(file_path, name, is_package=is_pkg)
-    return result
+        if ignore_type_checking_imports:
+            runtime[name], type_only[name] = split_file_imports(file_path, name, is_package=is_pkg)
+        else:
+            runtime[name] = parse_file_imports(file_path, name, is_package=is_pkg)
+    return runtime, type_only
 
 
 def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
@@ -746,20 +765,27 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
     return {name: plugins for name, plugins in edges.items() if plugins}
 
 
-def _parse_project(linker: _Linker) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def _parse_project(
+    linker: _Linker, ignore_type_checking_imports: bool = False, application: frozenset[str] = frozenset()
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """The import candidates of every module, and the ``pytest_plugins`` edges.
 
     Imports and declarations that name a module outside the walks add it (see
-    :class:`_Linker`), and its own imports and declarations are followed in turn.
+    :class:`_Linker`), and its own imports and declarations are followed in turn. With
+    *ignore_type_checking_imports*, the type-only imports of application code (the files in
+    *application*) are none (see :func:`_parse_by_role`).
     """
     declarations = cache(parse_pytest_plugins)
-    imports: dict[str, list[str]] = {}
+    parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, application=application)
     pending = dict(linker.modules)
-    # What the walked modules import is the evidence for which assumed roots are on sys.path.
-    imports |= _parse_all_module_imports(pending)
-    linker.activate(candidate for candidates in imports.values() for candidate in candidates)
+    imports, type_only = parse(pending)
+    # What the walked modules import is the evidence for which assumed roots are on sys.path — a type-only
+    # import too, though it is no edge: ignoring type-only imports removes their edges, and nothing else.
+    linker.activate(
+        candidate for found in (imports, type_only) for candidates in found.values() for candidate in candidates
+    )
     while True:
-        imports |= _parse_all_module_imports({name: path for name, path in pending.items() if name not in imports})
+        imports |= parse({name: path for name, path in pending.items() if name not in imports})[0]
         for name, path in pending.items():
             for candidate in imports[name]:
                 linker.targets(candidate)
@@ -770,6 +796,33 @@ def _parse_project(linker: _Linker) -> tuple[dict[str, list[str]], dict[str, lis
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
             return imports, plugin_edges
+
+
+def _parse_by_role(
+    submodules: dict[str, str], ignore_type_checking_imports: bool, application: frozenset[str]
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """:func:`_parse_all_module_imports`, each module's type-only candidates folded back into its runtime ones
+    unless it is application code (one of the files in *application*, see :func:`_application_code`).
+
+    Test code keeps its type-only imports: nothing imports a test module or a conftest, so they close no import
+    cycle, while one may be a test's only link to the type a fixture hands it (``def test_x(user: "User")``).
+    """
+    runtime, type_only = _parse_all_module_imports(submodules, ignore_type_checking_imports)
+    for name, typed in type_only.items():
+        if typed and submodules[name] not in application:
+            runtime[name] = sorted({*runtime[name], *typed})
+    return runtime, type_only
+
+
+def _application_code(package: str, tests_package: str | None, root: Path) -> frozenset[str]:
+    """The files of the code under test: the package walk's less the tests dir's
+    (:func:`~pytest_impacted.traversal.discover_application_files`), less every conftest and test module,
+    which are test code wherever they are (:func:`_is_test_file`: by the path, as the graph judges them)."""
+    return frozenset(
+        path
+        for path in discover_application_files(package, tests_package, root)
+        if os.path.basename(path) != "conftest.py" and not _is_test_file(Path(path), root)
+    )
 
 
 def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: bool) -> None:
@@ -810,6 +863,7 @@ def build_dep_tree(
     tests_package: str | None = None,
     root_dir: str | Path | None = None,
     pythonpath: str | Path | Iterable[str | Path] = (),
+    ignore_type_checking_imports: bool = False,
 ) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
@@ -831,6 +885,11 @@ def build_dep_tree(
     *pythonpath* holds pytest's ``pythonpath`` entries (absolute, or relative to the rootdir):
     each inside the rootdir or above it is an import root too
     (see :func:`~pytest_impacted.traversal.split_import_roots`).
+    With *ignore_type_checking_imports*, a type-only import of application code — one under
+    ``if TYPE_CHECKING:`` whose names the module uses only in annotations (see
+    :mod:`pytest_impacted.type_only`) — is none: no edge, no module followed through it, nothing in
+    ``graph["unresolved"]``. It still counts as evidence that an assumed import root is on ``sys.path``.
+    Every other import under ``if TYPE_CHECKING:`` is an edge, and so is test code's (see :func:`_parse_by_role`).
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
@@ -852,7 +911,9 @@ def build_dep_tree(
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
-    imports, plugin_edges = _parse_project(linker)
+    # Only application code loses its type-only imports (see _parse_by_role).
+    application = _application_code(package, tests_package, root) if ignore_type_checking_imports else frozenset()
+    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports, application)
 
     digraph = nx.DiGraph()
     unresolved: dict[str, set[str]] = {}

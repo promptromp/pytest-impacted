@@ -11,6 +11,7 @@ from click.core import ParameterSource
 from rich.console import Console
 from rich.logging import RichHandler
 
+from pytest_impacted._rust import outdated_for
 from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests
 from pytest_impacted.extensions import (
     discover_extension_metadata,
@@ -34,6 +35,7 @@ INI_NAMES = {
     "invalidate_all": "impacted_invalidate_all",
     "file_map": "impacted_map",
     "conftest_imports": "impacted_conftest_imports",
+    "ignore_type_checking_imports": "impacted_ignore_type_checking_imports",
     "disable_ext": "impacted_disable_ext",
 }
 # The prefix of an extension option's name, which is its pytest setting's too.
@@ -130,6 +132,14 @@ def configure_logging(verbose: bool) -> None:
     default=False,
     help="Also treat a conftest.py that imports changed application code as impacting every test beneath it.",
 )
+@click.option(
+    "--ignore-type-checking-imports/--no-ignore-type-checking-imports",
+    default=False,
+    help=(
+        "Leave application code's type-only imports out of the dependency graph: those in an "
+        + "'if TYPE_CHECKING:' block whose names the module uses only in annotations."
+    ),
+)
 @click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
 @click.pass_context
 def impacted_tests_cli(ctx, **options):
@@ -223,6 +233,7 @@ def _run(
     invalidate_all,
     file_map,
     conftest_imports,
+    ignore_type_checking_imports,
     disable_ext,
     **ext_kwargs,
 ) -> None:
@@ -242,6 +253,10 @@ def _run(
         click.secho("  map: {}".format(", ".join(file_map)), fg="blue", bold=True, err=True)
     if conftest_imports:
         click.secho("  conftest-imports: True", fg="blue", bold=True, err=True)
+    if ignore_type_checking_imports:
+        click.secho("  ignore-type-checking-imports: True", fg="blue", bold=True, err=True)
+    if outdated := outdated_for(ignore_type_checking_imports):
+        click.secho(f"  warning: {outdated}", fg="yellow", bold=True, err=True)
     try:
         pythonpath = config.paths("pythonpath")
     except ValueError as err:  # it names the setting and the file
@@ -294,6 +309,7 @@ def _run(
             use_merge_base=not no_merge_base,
             file_map=mappings,
             pythonpath=pythonpath,
+            ignore_type_checking_imports=ignore_type_checking_imports,
         )
     except GitUnavailableError as err:
         # Printing nothing would read as "no tests impacted" to a script piping
