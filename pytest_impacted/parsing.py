@@ -15,12 +15,17 @@ from astroid.nodes import (
     AssignAttr,
     AssignName,
     Attribute,
+    Const,
+    DelAttr,
     ExceptHandler,
     For,
     FunctionDef,
+    Global,
     If,
     Import,
     ImportFrom,
+    JoinedStr,
+    Keyword,
     List,
     Match,
     MatchCase,
@@ -28,7 +33,6 @@ from astroid.nodes import (
     Name,
     NodeNG,
     Starred,
-    Subscript,
     Try,
     TryStar,
     Tuple,
@@ -184,50 +188,69 @@ def parse_file_imports(
         logger.warning("Syntax error while parsing %s", file_path)
         return []
 
-    ignore_type_checking_imports = ignore_type_checking_imports and not _loads_lazily(tree)
+    ignore = ignore_type_checking_imports and not _loads_lazily(tree)
+    typing_names = _bound_to(tree, ("typing", "typing_extensions")) if ignore else frozenset()
     imports: set[str] = set()
     for node in tree.nodes_of_class((Import, ImportFrom)):
-        if not (ignore_type_checking_imports and _under_type_checking(node)):
+        if not (ignore and _under_type_checking(node, typing_names)):
             imports.update(_extract_imports_from_node(node, package))
 
     return sorted(imports)
 
 
-def _under_type_checking(node: NodeNG) -> bool:
+def _bound_to(tree: Module, modules: tuple[str, ...]) -> frozenset[str]:
+    """The names *modules* go by in *tree*: their own, and each ``import <module> as X`` anywhere in it."""
+    aliases = (alias or name for node in tree.nodes_of_class(Import) for name, alias in node.names if name in modules)
+    return frozenset((*modules, *aliases))
+
+
+def _under_type_checking(node: NodeNG, typing_names: frozenset[str]) -> bool:
     """Whether *node* sits in the body of an ``if TYPE_CHECKING:``, which is false at runtime (PEP 484).
 
-    The test must be the name ``TYPE_CHECKING`` or ``<name>.TYPE_CHECKING`` alone (``typing.TYPE_CHECKING``),
-    as mypy reads it. Anything else may run: an ``else``, ``not TYPE_CHECKING``, ``TYPE_CHECKING or X``, an
-    alias of the name. An ``elif TYPE_CHECKING:`` is an ``if`` nested in the ``orelse``, so it counts too.
-    Mirrors ``is_type_checking`` in the Rust backend.
+    The test must be the name ``TYPE_CHECKING`` alone, or that attribute of ``typing`` or ``typing_extensions``
+    (*typing_names*, their aliases included: ``t.TYPE_CHECKING`` after ``import typing as t``). Anything else may
+    run: an ``else``, ``not TYPE_CHECKING``, ``TYPE_CHECKING or X``, an alias of the name, another object's
+    ``TYPE_CHECKING`` (a project's flag may be true). An ``elif TYPE_CHECKING:`` is an ``if`` nested in the
+    ``orelse``, so it counts too. Mirrors ``is_type_checking`` in the Rust backend.
     """
     child = node
     for ancestor in node.node_ancestors():
-        if isinstance(ancestor, If) and _is_type_checking(ancestor.test) and any(child is s for s in ancestor.body):
+        if (
+            isinstance(ancestor, If)
+            and _is_type_checking(ancestor.test, typing_names)
+            and any(child is s for s in ancestor.body)
+        ):
             return True
         child = ancestor
     return False
 
 
-def _is_type_checking(test: NodeNG) -> bool:
+def _is_type_checking(test: NodeNG, typing_names: frozenset[str]) -> bool:
     if isinstance(test, Attribute):
-        return test.attrname == "TYPE_CHECKING" and isinstance(test.expr, Name)
+        return test.attrname == "TYPE_CHECKING" and isinstance(test.expr, Name) and test.expr.name in typing_names
     return isinstance(test, Name) and test.name == "TYPE_CHECKING"
 
 
 _ASTROID_BLOCKS = (If, Try, TryStar, With, ExceptHandler, Match, MatchCase, For, While)
+_LAZY_SIGNALS = (Global, ImportFrom, Const, Keyword, Attribute, AssignAttr, DelAttr)
 
 
 def _loads_lazily(tree: Module) -> bool:
-    """Whether the module loads names lazily, at runtime, from what its ``if TYPE_CHECKING:`` imports declare.
+    """Whether the module may load names lazily, at runtime, from what its ``if TYPE_CHECKING:`` imports declare.
 
-    A module ``__getattr__`` (PEP 562) — ``def``, assigned (``__getattr__, __dir__, __all__ =
-    lazy.attach(...)``) or imported — runs ``import_module`` when ``from pkg import Thing`` asks, and so does
-    a module replaced in ``sys.modules`` (``sys.modules[__name__] = _LazyModule(...)``). Bound at module
-    level, in any block but a function or class body: a class's ``__getattr__`` loads nothing. Mirrors
-    ``loads_lazily`` in the Rust backend.
+    A module ``__getattr__`` (PEP 562) runs ``import_module`` when ``from pkg import Thing`` asks, and so does a
+    module replaced in ``sys.modules`` (``sys.modules[__name__] = _LazyModule(...)``) or given a new class. Each
+    is spelt many ways, so anything that may do either counts, since over-matching only keeps edges:
+    ``__getattr__`` bound at module level (``def``, assigned, imported; in any block but a function or class
+    body), declared ``global``, set or deleted as an attribute, passed as a keyword or named in a string
+    (``globals()["__getattr__"]``); ``sys.modules`` mentioned at all (``import sys as s`` too), or imported
+    (``from sys import modules``); a star import, which may bring a ``__getattr__``. A class's ``__getattr__``,
+    or reading one, loads nothing. Mirrors ``loads_lazily`` in the Rust backend.
     """
-    return any(_marks_lazy(stmt) for stmt in _astroid_module_statements(tree.body))
+    if any(_marks_lazy(stmt) for stmt in _astroid_module_statements(tree.body)):
+        return True
+    sys_names = _bound_to(tree, ("sys",))
+    return any(_signals_lazy(node, sys_names) for node in tree.nodes_of_class(_LAZY_SIGNALS))
 
 
 def _astroid_module_statements(body: list) -> Iterator[NodeNG]:
@@ -240,33 +263,39 @@ def _astroid_module_statements(body: list) -> Iterator[NodeNG]:
 
 
 def _marks_lazy(stmt: NodeNG) -> bool:
+    """Whether a module-level statement binds ``__getattr__``."""
     if isinstance(stmt, FunctionDef):  # AsyncFunctionDef too, its subclass
         return stmt.name == "__getattr__"
     if isinstance(stmt, ImportFrom):
         return any((alias or name) == "__getattr__" for name, alias in stmt.names)
     targets = stmt.targets if isinstance(stmt, Assign) else [stmt.target] if isinstance(stmt, AnnAssign) else []
-    return any(_binds_lazily(target) for target in targets)
+    return any(_binds_getattr(target) for target in targets)
 
 
-def _binds_lazily(target: NodeNG) -> bool:
-    """Whether an assignment target binds ``__getattr__`` or writes into ``sys.modules``."""
+def _binds_getattr(target: NodeNG) -> bool:
     if isinstance(target, AssignName):
         return target.name == "__getattr__"
     if isinstance(target, Tuple | List):
-        return any(_binds_lazily(element) for element in target.elts)
-    if isinstance(target, Starred):
-        return _binds_lazily(target.value)
-    # ``sys.modules[...]``, or an attribute of the module there (``sys.modules[__name__].__class__``).
-    while isinstance(target, Subscript | AssignAttr | Attribute):
-        inner = target.value if isinstance(target, Subscript) else target.expr
-        if isinstance(target, Subscript) and _is_sys_modules(inner):
-            return True
-        target = inner
-    return False
+        return any(_binds_getattr(element) for element in target.elts)
+    return isinstance(target, Starred) and _binds_getattr(target.value)
 
 
-def _is_sys_modules(node: NodeNG) -> bool:
-    return isinstance(node, Attribute) and node.attrname == "modules" and isinstance(node.expr, Name)
+def _signals_lazy(node: NodeNG, sys_names: frozenset[str]) -> bool:
+    """Whether a node anywhere in the module may install a module ``__getattr__`` or replace the module."""
+    if isinstance(node, Global):
+        return "__getattr__" in node.names
+    if isinstance(node, ImportFrom):
+        return any(
+            name == "*" or (node.modname == "sys" and not node.level and name == "modules") for name, _ in node.names
+        )
+    if isinstance(node, Const):  # an f-string's text is no string of its own, nor is it to ruff
+        return node.value == "__getattr__" and not isinstance(node.parent, JoinedStr)
+    if isinstance(node, Keyword):
+        return node.arg == "__getattr__"
+    # Attribute (read), AssignAttr or DelAttr: ``sys.modules`` used at all, or a ``__getattr__`` set or deleted.
+    if node.attrname == "modules":
+        return isinstance(node.expr, Name) and node.expr.name in sys_names
+    return node.attrname == "__getattr__" and not isinstance(node, Attribute)
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:

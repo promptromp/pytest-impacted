@@ -447,6 +447,7 @@ def test_parse_pytest_plugins_survives_a_long_concatenation(tmp_path):
 TYPE_CHECKING_SOURCE = """\
 import typing
 import typing as t
+import typing_extensions as te
 from typing import TYPE_CHECKING
 from typing import TYPE_CHECKING as TC
 if TYPE_CHECKING:
@@ -456,6 +457,12 @@ if typing.TYPE_CHECKING:
     import pkg.typed_attr
 if t.TYPE_CHECKING:
     import pkg.typed_alias_module
+if te.TYPE_CHECKING:
+    import pkg.typed_extensions_alias
+if typing_extensions.TYPE_CHECKING:
+    import pkg.typed_extensions
+if settings.TYPE_CHECKING:
+    import pkg.runtime_settings_flag
 if (TYPE_CHECKING):
     import pkg.typed_parens
 if TYPE_CHECKING:
@@ -500,6 +507,8 @@ TYPED_ONLY = {
     "pkg.only_typed.Thing",
     "pkg.typed_attr",
     "pkg.typed_alias_module",
+    "pkg.typed_extensions_alias",
+    "pkg.typed_extensions",
     "pkg.typed_parens",
     "pkg.typed_with_else",
     "pkg.typed_elif",
@@ -522,10 +531,12 @@ def test_parse_file_imports_keeps_type_checking_imports_by_default(tmp_path):
 
 
 def test_parse_file_imports_can_ignore_imports_under_type_checking(tmp_path):
-    """``if TYPE_CHECKING:`` (or ``<module>.TYPE_CHECKING``) is false at runtime: its body never imports.
+    """``if TYPE_CHECKING:`` (or ``typing.TYPE_CHECKING``, through an alias too) is false at runtime: its body
+    never imports.
 
     Only that body: an ``else`` or later ``elif`` runs, as does ``not TYPE_CHECKING``, a test combining it with
-    something else, an alias of the name, and a name imported at runtime elsewhere in the file too.
+    something else, an alias of the name, another object's ``TYPE_CHECKING`` (a project flag may be true), and a
+    name imported at runtime elsewhere in the file too.
     """
     path = tmp_path / "mod.py"
     path.write_text(TYPE_CHECKING_SOURCE)
@@ -535,6 +546,7 @@ def test_parse_file_imports_can_ignore_imports_under_type_checking(tmp_path):
 
     assert everything - imports == TYPED_ONLY
     assert {"pkg.also_runtime", "pkg.runtime_else", "pkg.runtime_final_else", "pkg.not_else"} <= imports
+    assert "pkg.runtime_settings_flag" in imports
 
 
 def test_parse_file_imports_ignoring_type_checking_matches_rust_backend(tmp_path):
@@ -587,6 +599,18 @@ LAZY_IMPORT = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg
         pytest.param(
             "try:\n    pass\nexcept ImportError:\n    def __getattr__(name):\n        return 1\n", id="in_try"
         ),
+        # Anywhere in the file, and however it is spelled: over-matching only keeps edges.
+        pytest.param("from sys import modules\nmodules[__name__] = LazyModule(__name__)\n", id="from_sys_modules"),
+        pytest.param("import sys as _sys\n_sys.modules[__name__] = LazyModule(__name__)\n", id="sys_alias"),
+        pytest.param("import sys\n_module = sys.modules[__name__]\n_module.__class__ = LazyModule\n", id="via_name"),
+        pytest.param("import sys\nsys.modules.update({__name__: LazyModule(__name__)})\n", id="update"),
+        pytest.param("import sys\nsetattr(sys.modules[__name__], '__class__', LazyModule)\n", id="setattr_class"),
+        pytest.param("import sys\nmodules = sys.modules\n", id="sys_modules_read"),
+        pytest.param("globals()['__getattr__'] = make_getattr(__name__)\n", id="globals_item"),
+        pytest.param("globals().update(__getattr__=make_getattr(__name__))\n", id="keyword"),
+        pytest.param("def install():\n    global __getattr__\n    __getattr__ = make_getattr(__name__)\n", id="global"),
+        pytest.param("this_module.__getattr__ = make_getattr(__name__)\n", id="attribute_assigned"),
+        pytest.param("from pkg._lazy import *\n", id="star_import"),
     ],
 )
 def test_a_lazily_loading_module_keeps_its_type_checking_imports(tmp_path, marker):
@@ -606,14 +630,19 @@ def test_a_lazily_loading_module_keeps_its_type_checking_imports(tmp_path, marke
     [
         pytest.param("class C:\n    def __getattr__(self, name):\n        return 1\n", id="method"),
         pytest.param("def f():\n    def __getattr__(name):\n        return 1\n", id="nested_function"),
-        pytest.param("obj.__getattr__ = handler\n", id="attribute"),
+        pytest.param(
+            "class C:\n    def __getattr__(self, name):\n        return super().__getattr__(name)\n", id="super_call"
+        ),
         pytest.param("getattr_ = __getattr__\n", id="read_not_bound"),
-        pytest.param("import sys\nmodules = sys.modules\nlookup = sys.modules[__name__]\n", id="sys_modules_read"),
         pytest.param("cache[__name__] = module\n", id="other_subscript"),
+        pytest.param("self_modules = registry.modules\n", id="another_object_s_modules"),
+        pytest.param("label = f'__getattr__'\n", id="f_string"),
+        pytest.param("from sys import path\n", id="from_sys_other"),
     ],
 )
 def test_only_a_module_level_marker_makes_a_module_lazy(tmp_path, unrelated):
-    """A class's ``__getattr__``, or reading ``sys.modules``, loads no module: the option still applies."""
+    """A class's ``__getattr__``, a nested function's, or another object's ``modules``, loads no module: the
+    option still applies."""
     path = tmp_path / "mod.py"
     path.write_text(LAZY_IMPORT + unrelated)
 
@@ -637,6 +666,22 @@ LAZY_PARITY = [
     "def f():\n    def __getattr__(name):\n        return 1\n",
     "obj.__getattr__ = handler\n",
     "lookup = sys.modules[__name__]\n",
+    "from sys import modules as m\nm[__name__] = LazyModule(__name__)\n",
+    "import sys as _sys\n_module = _sys.modules[__name__]\n",
+    "globals()['__get' 'attr__'] = make_getattr(__name__)\n",
+    "label = f'__getattr__'\n",
+    "label = f'{\"__getattr__\"}'\n",
+    "def install():\n    global __getattr__\n",
+    "globals().update(__getattr__=make_getattr(__name__))\n",
+    "class Proxy(Base, __getattr__=None):\n    pass\n",
+    "del this_module.__getattr__\n",
+    "value = this_module.__getattr__\n",
+    "from pkg._lazy import *\n",
+    "from . import *\n",
+    "registry.modules[__name__] = module\n",
+    "if typing_extensions.TYPE_CHECKING:\n    from pkg import te_typed\n",
+    "import typing as t\nif t.TYPE_CHECKING:\n    from pkg import t_typed\n",
+    "if settings.TYPE_CHECKING:\n    from pkg import settings_runtime\n",
 ]
 
 

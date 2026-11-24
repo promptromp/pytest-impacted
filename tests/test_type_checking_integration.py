@@ -8,6 +8,7 @@ may still read the module. Such imports often close import cycles, which then se
 import pytest
 from click.testing import CliRunner
 
+from pytest_impacted import _rust
 from pytest_impacted.cli import impacted_tests_cli
 
 from .git_helpers import edit_file as edit
@@ -200,3 +201,16 @@ def test_a_lazily_loading_package_keeps_its_type_only_imports(make_git_project, 
 
     (project.path / "app/models.py").write_text("raise RuntimeError('imported')\n")
     run(project, FLAG).assert_outcomes(errors=1, deselected=1)
+
+
+def test_the_cli_warns_when_an_older_extension_leaves_the_parsing_to_python(project, monkeypatch):
+    """An older pytest-impacted-rs cannot leave type-only imports out: the slower parser does, and says so."""
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
+    monkeypatch.setattr(_rust, "RUST_IGNORES_TYPE_CHECKING", False)
+    edit(project, "app/b.py")
+
+    result = cli(project, "--ignore-type-checking-imports")
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [str((project.path / "suite/test_b.py").resolve())]
+    assert "warning: the installed pytest-impacted-rs predates ignoring type-only imports" in result.stderr

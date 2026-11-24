@@ -15,12 +15,16 @@ The philosophy is to **err on the side of caution**: false positives (running a 
 that did not need to run) are preferred over false negatives. Exceptions are deliberate,
 documented and opt-back-in-able — chiefly `--impacted-conftest-imports` (below); never
 add a new one silently. `--impacted-ignore-type-checking-imports` is one only on request (off by
-default): an `if TYPE_CHECKING:` import never runs, but a module that loads lazily (a module-level
-`__getattr__`, PEP 562, or an assignment into `sys.modules`) imports at runtime what its type-only
+default): an `if TYPE_CHECKING:` import never runs, but a module that loads lazily (a module
+`__getattr__`, PEP 562, or a module replaced in `sys.modules`) imports at runtime what its type-only
 imports declare, so it keeps them (`parsing._loads_lazily`). A large typed library's `__init__`
 declares its exports that way: ignored, they lost tests, which only checking each dropped (module,
 test) pair against what the test file loads at collection showed — "every removal traces to a
-type-only import" passed. Over-matching the lazy markers only keeps edges; under-matching loses tests.
+type-only import" passed. Over-matching the lazy markers only keeps edges; under-matching loses tests,
+so they are signs, not proofs: `__getattr__` bound at module level, declared `global`, set as an
+attribute, passed as a keyword or named in a string; `sys.modules` mentioned at all; a star import.
+A review found seven idioms a first, binding-only rule missed. Conversely, `<x>.TYPE_CHECKING` counts
+only for `typing`/`typing_extensions` (aliases included): there, under-matching is the safe side.
 
 ## Gotchas
 

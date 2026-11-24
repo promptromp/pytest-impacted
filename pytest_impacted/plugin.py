@@ -341,6 +341,8 @@ def pytest_report_header(config: Config) -> list[str]:
         lines.extend(
             f"pytest-impacted: WARNING: --impacted-map path {path} matches no file git knows." for path in unknown
         )
+    if get_option("impacted") and (outdated := _rust.outdated_for(bool(ignore_type_checking_imports))):
+        lines.append(f"pytest-impacted: WARNING: {outdated}")
     if get_option("impacted") and not GIT_AVAILABLE:
         # The header is written by the controller, so this survives pytest-xdist,
         # whose workers run collection and whose terminal output is discarded.
@@ -400,11 +402,7 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
 
 def _backend(ignore_type_checking_imports: bool) -> str:
     """The parser the analysis uses, for the report header (see :func:`~pytest_impacted._rust.uses_rust`)."""
-    if _rust.uses_rust(ignore_type_checking_imports):
-        return "rust (ruff parser + rayon)"
-    if _rust.RUST_AVAILABLE:
-        return "python (astroid; pytest-impacted-rs predates --impacted-ignore-type-checking-imports)"
-    return "python (astroid)"
+    return "rust (ruff parser + rayon)" if _rust.uses_rust(ignore_type_checking_imports) else "python (astroid)"
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:

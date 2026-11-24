@@ -11,6 +11,7 @@ from click.core import ParameterSource
 from rich.console import Console
 from rich.logging import RichHandler
 
+from pytest_impacted._rust import outdated_for
 from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests
 from pytest_impacted.extensions import (
     discover_extension_metadata,
@@ -254,6 +255,8 @@ def _run(
         click.secho("  conftest-imports: True", fg="blue", bold=True, err=True)
     if ignore_type_checking_imports:
         click.secho("  ignore-type-checking-imports: True", fg="blue", bold=True, err=True)
+    if outdated := outdated_for(ignore_type_checking_imports):
+        click.secho(f"  warning: {outdated}", fg="yellow", bold=True, err=True)
     try:
         pythonpath = config.paths("pythonpath")
     except ValueError as err:  # it names the setting and the file

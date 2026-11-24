@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use ruff_python_ast::{Expr, Stmt, StmtImport, StmtImportFrom};
+use ruff_python_ast::visitor::{self, Visitor};
+use ruff_python_ast::{Expr, ExprContext, Keyword, Stmt, StmtImport, StmtImportFrom};
 
 /// Resolve a relative import to its absolute module path.
 ///
@@ -112,89 +113,174 @@ fn extract_from_import_from(
     imports
 }
 
-/// Whether an `if` test is `TYPE_CHECKING` or `<name>.TYPE_CHECKING` alone, false at runtime (PEP 484).
+/// Whether an `if` test is `TYPE_CHECKING` alone, or that attribute of `typing` or `typing_extensions`
+/// (`typing_names`, their aliases included), false at runtime (PEP 484).
 ///
 /// Mirrors `_is_type_checking` in the Python backend: anything else (`not TYPE_CHECKING`,
-/// `TYPE_CHECKING or X`, an alias of the name) may be true at runtime.
-fn is_type_checking(test: &Expr) -> bool {
+/// `TYPE_CHECKING or X`, an alias of the name, another object's `TYPE_CHECKING`) may be true at runtime.
+fn is_type_checking(test: &Expr, typing_names: &HashSet<String>) -> bool {
     match test {
         Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
         Expr::Attribute(attr) => {
-            attr.attr.as_str() == "TYPE_CHECKING" && matches!(*attr.value, Expr::Name(_))
+            attr.attr.as_str() == "TYPE_CHECKING"
+                && matches!(&*attr.value, Expr::Name(name) if typing_names.contains(name.id.as_str()))
         }
         _ => false,
     }
 }
 
-/// Whether the module loads names lazily, at runtime, from what its `if TYPE_CHECKING:` imports declare.
-///
-/// Mirrors `_loads_lazily` in the Python backend: a module-level `__getattr__` (PEP 562), defined,
-/// assigned or imported, or an assignment into `sys.modules[...]`, in any block but a function or
-/// class body.
-fn loads_lazily(stmts: &[Stmt]) -> bool {
+/// What a module's whole tree says: the names `sys` and `typing` go by, and the signs that it may
+/// load names lazily. Mirrors `_bound_to` and `_signals_lazy` in the Python backend.
+struct Facts {
+    sys_names: HashSet<String>,
+    typing_names: HashSet<String>,
+    /// The names whose `.modules` the module uses: `sys.modules` when one is a name of `sys`.
+    modules_of: HashSet<String>,
+    signals_lazy: bool,
+}
+
+impl Facts {
+    fn of(suite: &[Stmt]) -> Self {
+        let mut facts = Facts {
+            sys_names: HashSet::from(["sys".to_string()]),
+            typing_names: HashSet::from(["typing".to_string(), "typing_extensions".to_string()]),
+            modules_of: HashSet::new(),
+            signals_lazy: false,
+        };
+        facts.visit_body(suite);
+        facts
+    }
+
+    /// Whether the module may load names lazily, at runtime, from what its `if TYPE_CHECKING:`
+    /// imports declare: a module `__getattr__` (PEP 562), or a module replaced in `sys.modules`,
+    /// however spelt. Mirrors `_loads_lazily` in the Python backend.
+    fn loads_lazily(&self, suite: &[Stmt]) -> bool {
+        self.signals_lazy
+            || binds_getattr_at_module_level(suite)
+            || !self.modules_of.is_disjoint(&self.sys_names)
+    }
+}
+
+impl<'a> Visitor<'a> for Facts {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::Global(node) => {
+                self.signals_lazy |= node.names.iter().any(|name| name.as_str() == "__getattr__");
+            }
+            Stmt::Import(node) => {
+                for alias in &node.names {
+                    let bound = alias.asname.as_ref().unwrap_or(&alias.name).to_string();
+                    match alias.name.as_str() {
+                        "sys" => {
+                            self.sys_names.insert(bound);
+                        }
+                        "typing" | "typing_extensions" => {
+                            self.typing_names.insert(bound);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Stmt::ImportFrom(node) => {
+                let from_sys =
+                    node.level == 0 && node.module.as_ref().is_some_and(|m| m.as_str() == "sys");
+                self.signals_lazy |= node.names.iter().any(|alias| {
+                    alias.name.as_str() == "*" || (from_sys && alias.name.as_str() == "modules")
+                });
+            }
+            _ => {}
+        }
+        visitor::walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::StringLiteral(string) => {
+                self.signals_lazy |= string.value.to_str() == "__getattr__";
+            }
+            Expr::Attribute(attr) if attr.attr.as_str() == "modules" => {
+                if let Expr::Name(name) = &*attr.value {
+                    self.modules_of.insert(name.id.to_string());
+                }
+            }
+            Expr::Attribute(attr) if attr.attr.as_str() == "__getattr__" => {
+                self.signals_lazy |= !matches!(attr.ctx, ExprContext::Load);
+            }
+            _ => {}
+        }
+        visitor::walk_expr(self, expr);
+    }
+
+    fn visit_keyword(&mut self, keyword: &'a Keyword) {
+        self.signals_lazy |= keyword
+            .arg
+            .as_ref()
+            .is_some_and(|arg| arg.as_str() == "__getattr__");
+        visitor::walk_keyword(self, keyword);
+    }
+}
+
+/// Whether `__getattr__` is bound at module level: defined, assigned or imported, in any block but
+/// a function or class body. Mirrors `_marks_lazy` in the Python backend.
+fn binds_getattr_at_module_level(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|stmt| {
-        marks_lazy(stmt)
+        binds_getattr(stmt)
             || match stmt {
                 Stmt::If(node) => {
-                    loads_lazily(&node.body)
-                        || node.elif_else_clauses.iter().any(|c| loads_lazily(&c.body))
+                    binds_getattr_at_module_level(&node.body)
+                        || node
+                            .elif_else_clauses
+                            .iter()
+                            .any(|c| binds_getattr_at_module_level(&c.body))
                 }
                 Stmt::Try(node) => {
-                    loads_lazily(&node.body)
+                    binds_getattr_at_module_level(&node.body)
                         || node.handlers.iter().any(|handler| {
                             let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
-                            loads_lazily(&h.body)
+                            binds_getattr_at_module_level(&h.body)
                         })
-                        || loads_lazily(&node.orelse)
-                        || loads_lazily(&node.finalbody)
+                        || binds_getattr_at_module_level(&node.orelse)
+                        || binds_getattr_at_module_level(&node.finalbody)
                 }
-                Stmt::With(node) => loads_lazily(&node.body),
-                Stmt::For(node) => loads_lazily(&node.body) || loads_lazily(&node.orelse),
-                Stmt::While(node) => loads_lazily(&node.body) || loads_lazily(&node.orelse),
-                Stmt::Match(node) => node.cases.iter().any(|case| loads_lazily(&case.body)),
+                Stmt::With(node) => binds_getattr_at_module_level(&node.body),
+                Stmt::For(node) => {
+                    binds_getattr_at_module_level(&node.body)
+                        || binds_getattr_at_module_level(&node.orelse)
+                }
+                Stmt::While(node) => {
+                    binds_getattr_at_module_level(&node.body)
+                        || binds_getattr_at_module_level(&node.orelse)
+                }
+                Stmt::Match(node) => node
+                    .cases
+                    .iter()
+                    .any(|case| binds_getattr_at_module_level(&case.body)),
                 _ => false,
             }
     })
 }
 
-fn marks_lazy(stmt: &Stmt) -> bool {
+fn binds_getattr(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::FunctionDef(node) => node.name.as_str() == "__getattr__",
         Stmt::ImportFrom(node) => node
             .names
             .iter()
             .any(|alias| alias.asname.as_ref().unwrap_or(&alias.name).as_str() == "__getattr__"),
-        Stmt::Assign(node) => node.targets.iter().any(binds_lazily),
-        Stmt::AnnAssign(node) => binds_lazily(&node.target),
+        Stmt::Assign(node) => node.targets.iter().any(binds_getattr_target),
+        Stmt::AnnAssign(node) => binds_getattr_target(&node.target),
         _ => false,
     }
 }
 
-/// Whether an assignment target binds `__getattr__` or writes into `sys.modules`.
-fn binds_lazily(target: &Expr) -> bool {
+fn binds_getattr_target(target: &Expr) -> bool {
     match target {
         Expr::Name(name) => name.id.as_str() == "__getattr__",
-        Expr::Tuple(tuple) => tuple.elts.iter().any(binds_lazily),
-        Expr::List(list) => list.elts.iter().any(binds_lazily),
-        Expr::Starred(starred) => binds_lazily(&starred.value),
-        _ => writes_sys_modules(target),
-    }
-}
-
-/// `sys.modules[...]`, or an attribute of the module there (`sys.modules[__name__].__class__`).
-fn writes_sys_modules(target: &Expr) -> bool {
-    match target {
-        Expr::Subscript(subscript) => {
-            is_sys_modules(&subscript.value) || writes_sys_modules(&subscript.value)
-        }
-        Expr::Attribute(attr) => writes_sys_modules(&attr.value),
+        Expr::Tuple(tuple) => tuple.elts.iter().any(binds_getattr_target),
+        Expr::List(list) => list.elts.iter().any(binds_getattr_target),
+        Expr::Starred(starred) => binds_getattr_target(&starred.value),
         _ => false,
     }
-}
-
-fn is_sys_modules(node: &Expr) -> bool {
-    matches!(node, Expr::Attribute(attr)
-        if attr.attr.as_str() == "modules" && matches!(*attr.value, Expr::Name(_)))
 }
 
 /// What the walk leaves out, and the context relative imports resolve in.
@@ -203,6 +289,8 @@ struct Walk<'a> {
     is_package: bool,
     /// Skip the body of an `if TYPE_CHECKING:` (or `elif`), which never runs.
     ignore_type_checking: bool,
+    /// The names `typing` and `typing_extensions` go by in the module.
+    typing_names: &'a HashSet<String>,
 }
 
 /// Recursively collect import statements from a list of statements.
@@ -215,7 +303,8 @@ fn collect_imports_from_stmts(
     imports: &mut std::collections::HashSet<String>,
 ) {
     let (module_name, is_package) = (walk.module_name, walk.is_package);
-    let skips = |test: &Expr| walk.ignore_type_checking && is_type_checking(test);
+    let skips =
+        |test: &Expr| walk.ignore_type_checking && is_type_checking(test, walk.typing_names);
     for stmt in stmts {
         match stmt {
             Stmt::Import(node) => {
@@ -295,11 +384,18 @@ fn parse_file_imports_core(
 
     let mut imports = std::collections::HashSet::new();
     let suite = parsed.into_suite();
+    // A lazily loading module imports at runtime what its type-only imports declare.
+    let (ignore_type_checking, typing_names) = if ignore_type_checking {
+        let facts = Facts::of(&suite);
+        (!facts.loads_lazily(&suite), facts.typing_names)
+    } else {
+        (false, HashSet::new())
+    };
     let walk = Walk {
         module_name,
         is_package,
-        // A lazily loading module imports at runtime what its type-only imports declare.
-        ignore_type_checking: ignore_type_checking && !loads_lazily(&suite),
+        ignore_type_checking,
+        typing_names: &typing_names,
     };
     collect_imports_from_stmts(&suite, &walk, &mut imports);
 
