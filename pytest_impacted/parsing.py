@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import astroid
-from astroid.nodes import Import, ImportFrom
+from astroid.nodes import Attribute, If, Import, ImportFrom, Name, NodeNG
 
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,9 @@ def _extract_imports_from_node(node: Import | ImportFrom, package: str) -> set[s
     return imports
 
 
-def parse_file_imports(file_path: str, module_name: str, is_package: bool = False) -> list[str]:
+def parse_file_imports(
+    file_path: str, module_name: str, is_package: bool = False, *, ignore_type_checking_imports: bool = False
+) -> list[str]:
     """Parse imports from a source file without importing the module.
 
     Reads the file directly and resolves relative imports from *module_name*
@@ -130,6 +132,8 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
         file_path: Absolute path to the ``.py`` file.
         module_name: Fully-qualified module name (e.g. ``"pkg.sub.mod"``).
         is_package: ``True`` when the file is an ``__init__.py``.
+        ignore_type_checking_imports: Leave out the imports in the body of an ``if TYPE_CHECKING:``
+            (see :func:`_under_type_checking`), which never run.
 
     Returns:
         Sorted list of *candidate* absolute module names. ``from pkg import
@@ -156,9 +160,32 @@ def parse_file_imports(file_path: str, module_name: str, is_package: bool = Fals
 
     imports: set[str] = set()
     for node in tree.nodes_of_class((Import, ImportFrom)):
-        imports.update(_extract_imports_from_node(node, package))
+        if not (ignore_type_checking_imports and _under_type_checking(node)):
+            imports.update(_extract_imports_from_node(node, package))
 
     return sorted(imports)
+
+
+def _under_type_checking(node: NodeNG) -> bool:
+    """Whether *node* sits in the body of an ``if TYPE_CHECKING:``, which is false at runtime (PEP 484).
+
+    The test must be the name ``TYPE_CHECKING`` or ``<name>.TYPE_CHECKING`` alone (``typing.TYPE_CHECKING``),
+    as mypy reads it. Anything else may run: an ``else``, ``not TYPE_CHECKING``, ``TYPE_CHECKING or X``, an
+    alias of the name. An ``elif TYPE_CHECKING:`` is an ``if`` nested in the ``orelse``, so it counts too.
+    Mirrors ``is_type_checking`` in the Rust backend.
+    """
+    child = node
+    for ancestor in node.node_ancestors():
+        if isinstance(ancestor, If) and _is_type_checking(ancestor.test) and any(child is s for s in ancestor.body):
+            return True
+        child = ancestor
+    return False
+
+
+def _is_type_checking(test: NodeNG) -> bool:
+    if isinstance(test, Attribute):
+        return test.attrname == "TYPE_CHECKING" and isinstance(test.expr, Name)
+    return isinstance(test, Name) and test.name == "TYPE_CHECKING"
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:

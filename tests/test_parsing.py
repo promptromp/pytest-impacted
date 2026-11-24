@@ -442,3 +442,123 @@ def test_parse_pytest_plugins_survives_a_long_concatenation(tmp_path):
     path.write_text("pytest_plugins = " + " + ".join(['["a"]'] * 3000) + "\n")
 
     assert parsing.parse_pytest_plugins(str(path)) == []
+
+
+TYPE_CHECKING_SOURCE = """\
+import typing
+import typing as t
+from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING as TC
+if TYPE_CHECKING:
+    from pkg.only_typed import Thing
+    import pkg.also_runtime
+if typing.TYPE_CHECKING:
+    import pkg.typed_attr
+if t.TYPE_CHECKING:
+    import pkg.typed_alias_module
+if (TYPE_CHECKING):
+    import pkg.typed_parens
+if TYPE_CHECKING:
+    import pkg.typed_with_else
+else:
+    import pkg.runtime_else
+if FLAG:
+    import pkg.runtime_if
+elif TYPE_CHECKING:
+    import pkg.typed_elif
+elif OTHER:
+    import pkg.runtime_elif
+else:
+    import pkg.runtime_final_else
+if not TYPE_CHECKING:
+    import pkg.runtime_not
+else:
+    import pkg.not_else
+if TYPE_CHECKING or FLAG:
+    import pkg.runtime_or
+if TC:
+    import pkg.runtime_aliased_name
+if a.b.TYPE_CHECKING:
+    import pkg.runtime_deep_attr
+if TYPE_CHECKING:
+    if FLAG:
+        import pkg.typed_nested
+    def g():
+        import pkg.typed_in_function
+def f():
+    if TYPE_CHECKING:
+        import pkg.typed_inside_function
+    import pkg.runtime_in_function
+class C:
+    if TYPE_CHECKING:
+        from . import typed_relative
+def h():
+    import pkg.also_runtime
+"""
+TYPED_ONLY = {
+    "pkg.only_typed",
+    "pkg.only_typed.Thing",
+    "pkg.typed_attr",
+    "pkg.typed_alias_module",
+    "pkg.typed_parens",
+    "pkg.typed_with_else",
+    "pkg.typed_elif",
+    "pkg.typed_nested",
+    "pkg.typed_in_function",
+    "pkg.typed_inside_function",
+    "my_package.sub",  # what ``from . import typed_relative`` imports from
+    "my_package.sub.typed_relative",
+}
+
+
+def test_parse_file_imports_keeps_type_checking_imports_by_default(tmp_path):
+    """Off by default: a type-only import is an edge, as it always was (false positives over missed tests)."""
+    path = tmp_path / "mod.py"
+    path.write_text(TYPE_CHECKING_SOURCE)
+
+    imports = parsing.parse_file_imports(str(path), "my_package.sub.mod")
+
+    assert set(imports) >= TYPED_ONLY
+
+
+def test_parse_file_imports_can_ignore_imports_under_type_checking(tmp_path):
+    """``if TYPE_CHECKING:`` (or ``<module>.TYPE_CHECKING``) is false at runtime: its body never imports.
+
+    Only that body: an ``else`` or later ``elif`` runs, as does ``not TYPE_CHECKING``, a test combining it with
+    something else, an alias of the name, and a name imported at runtime elsewhere in the file too.
+    """
+    path = tmp_path / "mod.py"
+    path.write_text(TYPE_CHECKING_SOURCE)
+
+    everything = set(parsing.parse_file_imports(str(path), "my_package.sub.mod"))
+    imports = set(parsing.parse_file_imports(str(path), "my_package.sub.mod", ignore_type_checking_imports=True))
+
+    assert everything - imports == TYPED_ONLY
+    assert {"pkg.also_runtime", "pkg.runtime_else", "pkg.runtime_final_else", "pkg.not_else"} <= imports
+
+
+def test_parse_file_imports_ignoring_type_checking_matches_rust_backend(tmp_path):
+    """The option must change both backends alike, ``elif`` included (astroid nests it; ruff lists clauses)."""
+    rust = pytest.importorskip("pytest_impacted_rs")
+    path = tmp_path / "mod.py"
+    path.write_text(TYPE_CHECKING_SOURCE + PARITY_SOURCE)
+
+    for ignore in (False, True):
+        python = parsing.parse_file_imports(str(path), "my_package.sub.mod", ignore_type_checking_imports=ignore)
+        rust_result = rust.parse_file_imports(
+            str(path), "my_package.sub.mod", False, ignore_type_checking_imports=ignore
+        )
+        assert python == rust_result, ignore
+
+
+def test_rust_batch_parser_ignores_type_checking_imports_on_request(tmp_path):
+    """The batch entry point the graph uses takes the option too, and leaves it off by default."""
+    rust = pytest.importorskip("pytest_impacted_rs")
+    path = tmp_path / "mod.py"
+    path.write_text(TYPE_CHECKING_SOURCE)
+    modules = [(str(path), "my_package.sub.mod", False)]
+
+    everything = set(rust.parse_all_imports(modules)["my_package.sub.mod"])
+    ignoring = set(rust.parse_all_imports(modules, ignore_type_checking_imports=True)["my_package.sub.mod"])
+
+    assert everything - ignoring == TYPED_ONLY

@@ -177,16 +177,26 @@ def has_dependency_file_changes(
 
 @lru_cache(maxsize=8)
 def _cached_build_dep_tree(
-    ns_module: str, tests_package: str | None, root: Path, pythonpath: tuple[str, ...] = ()
+    ns_module: str,
+    tests_package: str | None,
+    root: Path,
+    pythonpath: tuple[str, ...] = (),
+    ignore_type_checking_imports: bool = False,
 ) -> nx.DiGraph:
-    """Cached graph construction, keyed on the canonical *root* and the resolved *pythonpath*.
+    """Cached graph construction, keyed on the canonical *root*, the resolved *pythonpath* and the options.
 
     Note:
         maxsize=8 keeps recent dependency trees without unbounded growth. The
         common case is the same ns_module/tests_package/root used repeatedly
         across runs in one process (in-process ``pytest.main``, pytester).
     """
-    return build_dep_tree(ns_module, tests_package=tests_package, root_dir=root, pythonpath=pythonpath)
+    return build_dep_tree(
+        ns_module,
+        tests_package=tests_package,
+        root_dir=root,
+        pythonpath=pythonpath,
+        ignore_type_checking_imports=ignore_type_checking_imports,
+    )
 
 
 def cached_build_dep_tree(
@@ -194,6 +204,7 @@ def cached_build_dep_tree(
     tests_package: str | None = None,
     root_dir: str | Path | None = None,
     pythonpath: str | Path | Iterable[str | Path] = (),
+    ignore_type_checking_imports: bool = False,
 ) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
@@ -204,6 +215,7 @@ def cached_build_dep_tree(
             the current directory.
         pythonpath: pytest's ``pythonpath`` entries, absolute or relative to the root:
             each inside it or above it is an import root (see :func:`~pytest_impacted.graph.build_dep_tree`).
+        ignore_type_checking_imports: Leave out the imports under ``if TYPE_CHECKING:``.
 
     Returns:
         NetworkX dependency graph. Do not mutate it — it is shared between
@@ -218,7 +230,7 @@ def cached_build_dep_tree(
     # Resolved before the lookup, as the root is, and only those the graph may read (inside the root or
     # above it, once each): two spellings of one entry, or one elsewhere, change nothing, so they share one.
     entries = tuple(str(entry) for entry in pythonpath_roots(pythonpath, root))
-    return _cached_build_dep_tree(ns_module, tests_package, root, entries)
+    return _cached_build_dep_tree(ns_module, tests_package, root, entries, bool(ignore_type_checking_imports))
 
 
 def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:

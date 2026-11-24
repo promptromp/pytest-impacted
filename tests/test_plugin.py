@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pytest_impacted import _rust
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
     pytest_addoption,
@@ -31,6 +32,7 @@ CLI_OPTION_DESTS = {
     "impacted_invalidate_all",
     "impacted_map",
     "impacted_conftest_imports",
+    "impacted_ignore_type_checking_imports",
     "impacted_unimpacted",
     "impacted_disable_ext",
 }
@@ -88,7 +90,34 @@ def test_pytest_report_header(pytestconfig, monkeypatch):
     assert "impacted_invalidate_all=['*.json']" in header[0]
     assert "impacted_conftest_imports=True" in header[0]
     assert "impacted_unimpacted=skip" in header[0]
+    assert "impacted_ignore_type_checking_imports=False" in header[0]
     assert "backend=" in header[0]
+
+
+@pytest.mark.parametrize(
+    ("available", "accepts", "ignore", "backend"),
+    [
+        pytest.param(True, True, True, "backend=rust (ruff parser + rayon)", id="rust"),
+        pytest.param(True, False, False, "backend=rust (ruff parser + rayon)", id="older_rust_option_off"),
+        pytest.param(
+            True,
+            False,
+            True,
+            "backend=python (astroid; pytest-impacted-rs predates --impacted-ignore-type-checking-imports)",
+            id="older_rust_option_on",
+        ),
+        pytest.param(False, False, True, "backend=python (astroid)", id="no_rust"),
+    ],
+)
+def test_the_header_names_the_parser_the_options_leave(pytestconfig, monkeypatch, available, accepts, ignore, backend):
+    """An installed pytest-impacted-rs older than the option leaves the parsing to astroid: say so."""
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", available)
+    monkeypatch.setattr(_rust, "RUST_IGNORES_TYPE_CHECKING", accepts)
+    monkeypatch.setattr(pytestconfig.option, "impacted_ignore_type_checking_imports", ignore)
+
+    (header,) = pytest_report_header(pytestconfig)
+
+    assert backend in header.split(", ")
 
 
 def test_validate_config_valid(pytestconfig, monkeypatch):

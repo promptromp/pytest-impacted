@@ -1,0 +1,150 @@
+"""End-to-end: ``--impacted-ignore-type-checking-imports`` leaves type-only imports out of the graph.
+
+An import in the body of ``if TYPE_CHECKING:`` never runs (``typing.TYPE_CHECKING`` is ``False`` at
+runtime), but by default it is an edge like any other: a type checker, or code evaluating annotations,
+may still read the module. Such imports often close import cycles, which then select each other's tests.
+"""
+
+import pytest
+from click.testing import CliRunner
+
+from pytest_impacted.cli import impacted_tests_cli
+
+from .git_helpers import edit_file as edit
+
+
+FILES = {
+    "app/__init__.py": "",
+    "app/a.py": (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.b import X\n"
+        "def f(x: 'X') -> int:\n"
+        "    return 1\n"
+    ),
+    "app/b.py": "class X:\n    pass\n",
+    "suite/test_a.py": "from app.a import f\n\ndef test_a():\n    assert f(None) == 1\n",
+    "suite/test_b.py": "from app.b import X\n\ndef test_b():\n    assert X()\n",
+}
+INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
+FLAG = "--impacted-ignore-type-checking-imports"
+
+
+def run(project, *args):
+    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
+
+
+def cli(project, *args):
+    return CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(project.path), *args])
+
+
+@pytest.fixture
+def project(make_git_project):
+    return make_git_project(FILES, INI)
+
+
+def test_a_type_only_import_selects_its_importer_s_tests_by_default(project):
+    edit(project, "app/b.py")
+
+    result = run(project)
+
+    result.assert_outcomes(passed=2)
+    result.stdout.fnmatch_lines(["*impacted_ignore_type_checking_imports=False*"])
+
+
+def test_ignored_a_type_only_import_selects_nothing(project):
+    """The issue's case: an edit to ``app/b.py`` selects ``test_b`` only."""
+    edit(project, "app/b.py")
+
+    result = run(project, FLAG)
+
+    result.assert_outcomes(passed=1, deselected=1)
+    result.stdout.fnmatch_lines(["*impacted_ignore_type_checking_imports=True*", "*suite/test_b.py::test_b PASSED*"])
+
+
+def test_the_test_left_out_never_imports_the_module_at_runtime(project):
+    """The oracle: break ``app/b.py`` at import, and the test the option leaves out still passes when run."""
+    (project.path / "app/b.py").write_text("raise RuntimeError('imported')\n")
+
+    selected = run(project, FLAG, "--continue-on-collection-errors")
+    everything = project.runpytest("-p", "no:cacheprovider", "-v", "--continue-on-collection-errors")
+
+    selected.assert_outcomes(errors=1, deselected=1)  # test_b's module fails to import
+    everything.assert_outcomes(passed=1, errors=1)
+    everything.stdout.fnmatch_lines(["*suite/test_a.py::test_a PASSED*"])
+
+
+def test_the_ini_setting_turns_it_on(make_git_project):
+    project = make_git_project(FILES, INI + "impacted_ignore_type_checking_imports = true\n")
+    edit(project, "app/b.py")
+
+    result = run(project)
+
+    result.assert_outcomes(passed=1, deselected=1)
+
+
+def test_ignored_a_type_only_import_no_longer_closes_a_cycle(make_git_project):
+    """``a`` uses ``b`` at runtime and ``b`` names ``a`` in annotations only: an edit to ``a`` selected
+    ``b``'s tests through the cycle; ignored, only ``a``'s. An edit to ``b`` still selects both."""
+    files = {
+        "app/__init__.py": "",
+        "app/a.py": "from app.b import helper\n\nclass Model:\n    value = helper()\n",
+        "app/b.py": (
+            "from typing import TYPE_CHECKING\n"
+            "if TYPE_CHECKING:\n"
+            "    from app.a import Model\n"
+            "def helper() -> int:\n"
+            "    return 1\n"
+            "def describe(model: 'Model') -> str:\n"
+            "    return 'model'\n"
+        ),
+        "suite/test_a.py": "from app.a import Model\n\ndef test_a():\n    assert Model.value == 1\n",
+        "suite/test_b.py": "from app.b import describe\n\ndef test_b():\n    assert describe(None)\n",
+    }
+    project = make_git_project(files, INI)
+    edit(project, "app/a.py")
+
+    run(project).assert_outcomes(passed=2)
+    run(project, FLAG).assert_outcomes(passed=1, deselected=1)
+
+    (project.path / "app/a.py").write_text(files["app/a.py"])  # unedited again
+    edit(project, "app/b.py")
+    run(project, FLAG).assert_outcomes(passed=2)
+
+
+def test_the_cli_takes_the_option_and_the_setting(make_git_project):
+    project = make_git_project(FILES, INI + "impacted_ignore_type_checking_imports = true\n")
+    edit(project, "app/b.py")
+    test_b = str((project.path / "suite/test_b.py").resolve())
+    test_a = str((project.path / "suite/test_a.py").resolve())
+
+    from_setting = cli(project)
+    overridden = cli(project, "--no-ignore-type-checking-imports")
+
+    assert from_setting.exit_code == 0, from_setting.output
+    assert from_setting.stdout.splitlines() == [test_b]
+    assert "ignore-type-checking-imports: True" in from_setting.output
+    assert overridden.exit_code == 0, overridden.output
+    assert sorted(overridden.stdout.splitlines()) == [test_a, test_b]
+
+
+def test_the_cli_flag(project):
+    edit(project, "app/b.py")
+
+    result = cli(project, "--ignore-type-checking-imports")
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [str((project.path / "suite/test_b.py").resolve())]
+
+
+def test_under_xdist(project):
+    """The controller analyses with the option, and the workers deselect what it leaves out."""
+    pytest.importorskip("xdist")
+    edit(project, "app/b.py")
+
+    result = project.runpytest_subprocess(
+        "--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", FLAG, "-n", "2"
+    )
+
+    result.assert_outcomes(passed=1)  # the workers deselect: xdist's summary counts no deselection
+    result.stdout.fnmatch_lines(["pytest-impacted: 1 test not impacted by the changes, deselected"])

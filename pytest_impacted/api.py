@@ -169,6 +169,7 @@ def get_impacted_tests(
     conftest_imports: bool = False,
     file_map: Sequence[tuple[str, str]] = (),
     pythonpath: str | Path | Sequence[str | Path] = (),
+    ignore_type_checking_imports: bool = False,
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
@@ -183,7 +184,10 @@ def get_impacted_tests(
     the pytest configuration here: pass ``config.getini("pythonpath")`` (before pytest 8.4 it raises
     ``ValueError`` under ``-p no:python_path``: no entries then), or
     ``find_pytest_config(root).paths("pythonpath")`` from :mod:`pytest_impacted.ini`, or bare
-    imports of the modules in those directories match nothing.
+    imports of the modules in those directories match nothing. ``ignore_type_checking_imports``
+    leaves the imports under ``if TYPE_CHECKING:`` out of the graph
+    (see :func:`~pytest_impacted.graph.build_dep_tree`); it shapes the graph, not the pipeline, so it
+    holds with an explicit ``strategy`` too.
 
     Returns ``None`` when nothing is impacted, and raises
     :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known
@@ -237,7 +241,11 @@ def get_impacted_tests(
     # copy. Strategies that implement enrich_dep_tree() mutate the copy,
     # leaving the cached base graph pristine for subsequent runs.
     cached = cached_build_dep_tree(
-        ns_module, tests_package=tests_package, root_dir=canonical_root(root_dir), pythonpath=pythonpath
+        ns_module,
+        tests_package=tests_package,
+        root_dir=canonical_root(root_dir),
+        pythonpath=pythonpath,
+        ignore_type_checking_imports=ignore_type_checking_imports,
     )
     dep_tree = run_copy(cached)
 

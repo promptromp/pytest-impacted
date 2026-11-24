@@ -3,7 +3,7 @@ use std::fs;
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
+use ruff_python_ast::{Expr, Stmt, StmtImport, StmtImportFrom};
 
 /// Resolve a relative import to its absolute module path.
 ///
@@ -112,16 +112,39 @@ fn extract_from_import_from(
     imports
 }
 
+/// Whether an `if` test is `TYPE_CHECKING` or `<name>.TYPE_CHECKING` alone, false at runtime (PEP 484).
+///
+/// Mirrors `_is_type_checking` in the Python backend: anything else (`not TYPE_CHECKING`,
+/// `TYPE_CHECKING or X`, an alias of the name) may be true at runtime.
+fn is_type_checking(test: &Expr) -> bool {
+    match test {
+        Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
+        Expr::Attribute(attr) => {
+            attr.attr.as_str() == "TYPE_CHECKING" && matches!(*attr.value, Expr::Name(_))
+        }
+        _ => false,
+    }
+}
+
+/// What the walk leaves out, and the context relative imports resolve in.
+struct Walk<'a> {
+    module_name: &'a str,
+    is_package: bool,
+    /// Skip the body of an `if TYPE_CHECKING:` (or `elif`), which never runs.
+    ignore_type_checking: bool,
+}
+
 /// Recursively collect import statements from a list of statements.
 ///
 /// Python imports can appear inside if/try/with/for/while/match/function/class bodies,
 /// so we must recurse into all compound statement bodies.
 fn collect_imports_from_stmts(
     stmts: &[Stmt],
-    module_name: &str,
-    is_package: bool,
+    walk: &Walk,
     imports: &mut std::collections::HashSet<String>,
 ) {
+    let (module_name, is_package) = (walk.module_name, walk.is_package);
+    let skips = |test: &Expr| walk.ignore_type_checking && is_type_checking(test);
     for stmt in stmts {
         match stmt {
             Stmt::Import(node) => {
@@ -136,40 +159,45 @@ fn collect_imports_from_stmts(
             }
             // Recurse into compound statement bodies
             Stmt::If(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                if !skips(&node.test) {
+                    collect_imports_from_stmts(&node.body, walk, imports);
+                }
+                // An `elif TYPE_CHECKING:` too: astroid nests it as an `if` in the `orelse`.
                 for clause in &node.elif_else_clauses {
-                    collect_imports_from_stmts(&clause.body, module_name, is_package, imports);
+                    if !clause.test.as_ref().is_some_and(skips) {
+                        collect_imports_from_stmts(&clause.body, walk, imports);
+                    }
                 }
             }
             Stmt::Try(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk, imports);
                 for handler in &node.handlers {
                     let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
-                    collect_imports_from_stmts(&h.body, module_name, is_package, imports);
+                    collect_imports_from_stmts(&h.body, walk, imports);
                 }
-                collect_imports_from_stmts(&node.orelse, module_name, is_package, imports);
-                collect_imports_from_stmts(&node.finalbody, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.orelse, walk, imports);
+                collect_imports_from_stmts(&node.finalbody, walk, imports);
             }
             Stmt::With(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk, imports);
             }
             Stmt::For(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
-                collect_imports_from_stmts(&node.orelse, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk, imports);
+                collect_imports_from_stmts(&node.orelse, walk, imports);
             }
             Stmt::While(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
-                collect_imports_from_stmts(&node.orelse, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk, imports);
+                collect_imports_from_stmts(&node.orelse, walk, imports);
             }
             Stmt::FunctionDef(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk, imports);
             }
             Stmt::ClassDef(node) => {
-                collect_imports_from_stmts(&node.body, module_name, is_package, imports);
+                collect_imports_from_stmts(&node.body, walk, imports);
             }
             Stmt::Match(node) => {
                 for case in &node.cases {
-                    collect_imports_from_stmts(&case.body, module_name, is_package, imports);
+                    collect_imports_from_stmts(&case.body, walk, imports);
                 }
             }
             _ => {}
@@ -178,7 +206,12 @@ fn collect_imports_from_stmts(
 }
 
 /// Core import extraction logic used by both the PyO3 function and the parallel batch function.
-fn parse_file_imports_core(source: &str, module_name: &str, is_package: bool) -> Vec<String> {
+fn parse_file_imports_core(
+    source: &str,
+    module_name: &str,
+    is_package: bool,
+    ignore_type_checking: bool,
+) -> Vec<String> {
     if source.trim().is_empty() {
         return Vec::new();
     }
@@ -191,7 +224,12 @@ fn parse_file_imports_core(source: &str, module_name: &str, is_package: bool) ->
 
     let mut imports = std::collections::HashSet::new();
     let suite = parsed.into_suite();
-    collect_imports_from_stmts(&suite, module_name, is_package, &mut imports);
+    let walk = Walk {
+        module_name,
+        is_package,
+        ignore_type_checking,
+    };
+    collect_imports_from_stmts(&suite, &walk, &mut imports);
 
     let mut result: Vec<String> = imports.into_iter().collect();
     result.sort();
@@ -203,17 +241,24 @@ fn parse_file_imports_core(source: &str, module_name: &str, is_package: bool) ->
 /// Returns a sorted list of imported module names, mirroring the Python
 /// `parse_file_imports()` function.
 #[pyfunction]
+#[pyo3(signature = (file_path, module_name, is_package, *, ignore_type_checking_imports=false))]
 fn parse_file_imports(
     file_path: &str,
     module_name: &str,
     is_package: bool,
+    ignore_type_checking_imports: bool,
 ) -> PyResult<Vec<String>> {
     let source = match fs::read_to_string(file_path) {
         Ok(s) => s,
         Err(_) => return Ok(Vec::new()),
     };
 
-    Ok(parse_file_imports_core(&source, module_name, is_package))
+    Ok(parse_file_imports_core(
+        &source,
+        module_name,
+        is_package,
+        ignore_type_checking_imports,
+    ))
 }
 
 /// Parse imports from multiple Python source files in parallel.
@@ -222,15 +267,24 @@ fn parse_file_imports(
 /// a dict mapping module_name -> list of imports.
 ///
 /// This is the primary performance win — parallel file I/O + parsing via rayon.
+/// `ignore_type_checking_imports` leaves out the imports under `if TYPE_CHECKING:`;
+/// keyword-only, and off by default, so a caller that predates it reads as before.
 #[pyfunction]
+#[pyo3(signature = (modules, *, ignore_type_checking_imports=false))]
 fn parse_all_imports(
     modules: Vec<(String, String, bool)>,
+    ignore_type_checking_imports: bool,
 ) -> PyResult<HashMap<String, Vec<String>>> {
     let results: Vec<(String, Vec<String>)> = modules
         .par_iter()
         .map(|(file_path, module_name, is_package)| {
             let source = fs::read_to_string(file_path).unwrap_or_default();
-            let imports = parse_file_imports_core(&source, module_name, *is_package);
+            let imports = parse_file_imports_core(
+                &source,
+                module_name,
+                *is_package,
+                ignore_type_checking_imports,
+            );
             (module_name.clone(), imports)
         })
         .collect();

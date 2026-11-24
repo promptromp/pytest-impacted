@@ -71,6 +71,7 @@ impacted_no_merge_base = true
 no_impacted_dep_files = yes
 impacted_invalidate_all = *.json 'my dir/*.yaml'
 impacted_conftest_imports = 1
+impacted_ignore_type_checking_imports = true
 impacted_disable_ext = slow-ext
 """
 
@@ -92,6 +93,7 @@ def test_every_setting_is_read(calls, tmp_path):
         "use_merge_base": False,
         "file_map": [],
         "pythonpath": [],
+        "ignore_type_checking_imports": True,
     }
     assert build.call_args.kwargs == {
         "watch_dep_files": False,
@@ -110,7 +112,7 @@ def test_flags_win_over_the_configuration(calls, tmp_path):
 
     result = invoke(
         "--module", "other", "--git-mode", "unstaged", "--merge-base", "--dep-files", "--no-conftest-imports",
-        "--invalidate-all", "*.sql", "--disable-ext", "x",
+        "--no-ignore-type-checking-imports", "--invalidate-all", "*.sql", "--disable-ext", "x",
     )  # fmt: skip
 
     assert result.exit_code == 0, result.output
@@ -119,6 +121,7 @@ def test_flags_win_over_the_configuration(calls, tmp_path):
     assert run.call_args.kwargs["use_merge_base"] is True
     assert build.call_args.kwargs["watch_dep_files"] is True
     assert build.call_args.kwargs["conftest_imports"] is False
+    assert run.call_args.kwargs["ignore_type_checking_imports"] is False
     assert build.call_args.kwargs["invalidate_all_patterns"] == ("*.sql",)
     assert build.call_args.kwargs["disabled"] == ("x",)
 

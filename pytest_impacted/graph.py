@@ -4,13 +4,13 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Iterable
-from functools import cache
+from functools import cache, partial
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 import networkx as nx
 
-from pytest_impacted._rust import RUST_AVAILABLE, rust_parse_all_imports
+from pytest_impacted import _rust
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_test_module,
@@ -39,8 +39,10 @@ from pytest_impacted.traversal import (
 logger = logging.getLogger(__name__)
 
 
-def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
-    """Parse imports for all discovered submodules.
+def _parse_all_module_imports(
+    submodules: dict[str, str], ignore_type_checking_imports: bool = False
+) -> dict[str, list[str]]:
+    """Parse imports for all discovered submodules (see :func:`_parse_imports`).
 
     A conftest with no free name is keyed by its last resort (see
     :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), which is no base
@@ -48,31 +50,35 @@ def _parse_all_module_imports(submodules: dict[str, str]) -> dict[str, list[str]
     :func:`~pytest_impacted.traversal.import_base`. That name may belong to another
     module, so it is parsed apart.
     """
+    parse = partial(_parse_imports, ignore_type_checking_imports=ignore_type_checking_imports)
     bases = {import_base(name): name for name in submodules if name.startswith(LAST_RESORT_PREFIX)}
     if not bases:
-        return _parse_imports(submodules)
-    result = _parse_imports(
-        {name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)}
-    )
-    parsed = _parse_imports({base: submodules[name] for base, name in bases.items()})
+        return parse(submodules)
+    result = parse({name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)})
+    parsed = parse({base: submodules[name] for base, name in bases.items()})
     return result | {bases[base]: imports for base, imports in parsed.items()}
 
 
-def _parse_imports(submodules: dict[str, str]) -> dict[str, list[str]]:
+def _parse_imports(submodules: dict[str, str], ignore_type_checking_imports: bool = False) -> dict[str, list[str]]:
     """Parse the imports of each ``{name: path}``, resolving relative imports from *name*.
 
-    Uses the Rust extension (parallel batch via rayon) when available,
-    falling back to sequential astroid parsing.
+    Uses the Rust extension (parallel batch via rayon) when available and new enough for the
+    options (:func:`~pytest_impacted._rust.uses_rust`), falling back to sequential astroid parsing.
+    *ignore_type_checking_imports* leaves out the imports under ``if TYPE_CHECKING:``.
     """
-    if RUST_AVAILABLE:
+    if _rust.uses_rust(ignore_type_checking_imports):
         modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
-        return rust_parse_all_imports(modules_info)
+        # Passed only when set: an extension older than the option parses as it did without it.
+        options = {"ignore_type_checking_imports": True} if ignore_type_checking_imports else {}
+        return _rust.rust_parse_all_imports(modules_info, **options)
 
     result: dict[str, list[str]] = {}
     for name, file_path in submodules.items():
         logger.debug("Processing submodule: %s", name)
         is_pkg = file_path.endswith("__init__.py")
-        result[name] = parse_file_imports(file_path, name, is_package=is_pkg)
+        result[name] = parse_file_imports(
+            file_path, name, is_package=is_pkg, ignore_type_checking_imports=ignore_type_checking_imports
+        )
     return result
 
 
@@ -746,20 +752,23 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
     return {name: plugins for name, plugins in edges.items() if plugins}
 
 
-def _parse_project(linker: _Linker) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def _parse_project(
+    linker: _Linker, ignore_type_checking_imports: bool = False
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """The import candidates of every module, and the ``pytest_plugins`` edges.
 
     Imports and declarations that name a module outside the walks add it (see
     :class:`_Linker`), and its own imports and declarations are followed in turn.
     """
     declarations = cache(parse_pytest_plugins)
+    parse = partial(_parse_all_module_imports, ignore_type_checking_imports=ignore_type_checking_imports)
     imports: dict[str, list[str]] = {}
     pending = dict(linker.modules)
     # What the walked modules import is the evidence for which assumed roots are on sys.path.
-    imports |= _parse_all_module_imports(pending)
+    imports |= parse(pending)
     linker.activate(candidate for candidates in imports.values() for candidate in candidates)
     while True:
-        imports |= _parse_all_module_imports({name: path for name, path in pending.items() if name not in imports})
+        imports |= parse({name: path for name, path in pending.items() if name not in imports})
         for name, path in pending.items():
             for candidate in imports[name]:
                 linker.targets(candidate)
@@ -810,6 +819,7 @@ def build_dep_tree(
     tests_package: str | None = None,
     root_dir: str | Path | None = None,
     pythonpath: str | Path | Iterable[str | Path] = (),
+    ignore_type_checking_imports: bool = False,
 ) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
@@ -831,6 +841,9 @@ def build_dep_tree(
     *pythonpath* holds pytest's ``pythonpath`` entries (absolute, or relative to the rootdir):
     each inside the rootdir or above it is an import root too
     (see :func:`~pytest_impacted.traversal.split_import_roots`).
+    With *ignore_type_checking_imports*, an import in the body of an ``if TYPE_CHECKING:`` is none:
+    no edge, no module followed through it, nothing in ``graph["unresolved"]`` (see
+    :func:`~pytest_impacted.parsing.parse_file_imports`).
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
@@ -852,7 +865,7 @@ def build_dep_tree(
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
-    imports, plugin_edges = _parse_project(linker)
+    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports)
 
     digraph = nx.DiGraph()
     unresolved: dict[str, set[str]] = {}
