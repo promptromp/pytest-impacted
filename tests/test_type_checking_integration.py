@@ -179,6 +179,20 @@ LAZY_INITS = {
         "    _module.__path__, _module.__spec__, _module.__file__ = __path__, __spec__, __file__\n"
         "    sys.modules[__name__] = _module\n"
     ),
+    # Loads by a name it computes, mentions ``Model`` in no string, and uses it in a type hint: to the rule, a
+    # type-only import (see test_type_only); kept because the file is a package's ``__init__``.
+    "computed_name_annotated": (
+        "from importlib import import_module\n"
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.models import Model\n"
+        "def __getattr__(name):\n"
+        "    if not name[:1].isupper():\n"
+        "        raise AttributeError(name)\n"
+        "    return getattr(import_module(f'app.{name.lower()}s'), name)\n"
+        "def build(cls: 'type[Model]') -> 'Model':\n"
+        "    return cls()\n"
+    ),
 }
 
 

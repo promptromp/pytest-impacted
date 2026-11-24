@@ -766,17 +766,17 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
 
 
 def _parse_project(
-    linker: _Linker, ignore_type_checking_imports: bool = False, application: frozenset[str] = frozenset()
+    linker: _Linker, ignore_type_checking_imports: bool = False, narrowed: frozenset[str] = frozenset()
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """The import candidates of every module, and the ``pytest_plugins`` edges.
 
     Imports and declarations that name a module outside the walks add it (see
     :class:`_Linker`), and its own imports and declarations are followed in turn. With
-    *ignore_type_checking_imports*, the type-only imports of application code (the files in
-    *application*) are none (see :func:`_parse_by_role`).
+    *ignore_type_checking_imports*, the type-only imports of the files in *narrowed* are none
+    (see :func:`_parse_by_role`).
     """
     declarations = cache(parse_pytest_plugins)
-    parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, application=application)
+    parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, narrowed=narrowed)
     pending = dict(linker.modules)
     imports, type_only = parse(pending)
     # What the walked modules import is the evidence for which assumed roots are on sys.path — a type-only
@@ -799,29 +799,33 @@ def _parse_project(
 
 
 def _parse_by_role(
-    submodules: dict[str, str], ignore_type_checking_imports: bool, application: frozenset[str]
+    submodules: dict[str, str], ignore_type_checking_imports: bool, narrowed: frozenset[str]
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """:func:`_parse_all_module_imports`, each module's type-only candidates folded back into its runtime ones
-    unless it is application code (one of the files in *application*, see :func:`_application_code`).
-
-    Test code keeps its type-only imports: nothing imports a test module or a conftest, so they close no import
-    cycle, while one may be a test's only link to the type a fixture hands it (``def test_x(user: "User")``).
+    unless its file is one the option narrows (one of *narrowed*, see :func:`_narrowed_files`).
     """
     runtime, type_only = _parse_all_module_imports(submodules, ignore_type_checking_imports)
     for name, typed in type_only.items():
-        if typed and submodules[name] not in application:
+        if typed and submodules[name] not in narrowed:
             runtime[name] = sorted({*runtime[name], *typed})
     return runtime, type_only
 
 
-def _application_code(package: str, tests_package: str | None, root: Path) -> frozenset[str]:
-    """The files of the code under test: the package walk's less the tests dir's
-    (:func:`~pytest_impacted.traversal.discover_application_files`), less every conftest and test module,
-    which are test code wherever they are (:func:`_is_test_file`: by the path, as the graph judges them)."""
+def _narrowed_files(package: str, tests_package: str | None, root: Path) -> frozenset[str]:
+    """The files that lose their type-only imports: the code under test, the package walk's less the tests
+    dir's (:func:`~pytest_impacted.traversal.discover_application_files`), less two kinds of file that keep them.
+
+    - Test code: every conftest and test module, wherever it is (:func:`_is_test_file`: by the path, as the graph
+      judges them). Nothing imports it, so its type-only imports close no import cycle, while one may be a test's
+      only link to the type a fixture hands it (``def test_x(user: "User")``).
+    - A package's ``__init__.py``, which ``from pkg import Name`` runs: it may provide a name it declares under
+      ``if TYPE_CHECKING:`` at runtime, by a name it computes, and a type hint in the same file does not rule
+      that out.
+    """
     return frozenset(
         path
         for path in discover_application_files(package, tests_package, root)
-        if os.path.basename(path) != "conftest.py" and not _is_test_file(Path(path), root)
+        if os.path.basename(path) not in {"conftest.py", "__init__.py"} and not _is_test_file(Path(path), root)
     )
 
 
@@ -889,7 +893,8 @@ def build_dep_tree(
     ``if TYPE_CHECKING:`` whose names the module uses only in annotations (see
     :mod:`pytest_impacted.type_only`) — is none: no edge, no module followed through it, nothing in
     ``graph["unresolved"]``. It still counts as evidence that an assumed import root is on ``sys.path``.
-    Every other import under ``if TYPE_CHECKING:`` is an edge, and so is test code's (see :func:`_parse_by_role`).
+    Every other import under ``if TYPE_CHECKING:`` is an edge, and so are test code's and a package
+    ``__init__.py``'s (see :func:`_narrowed_files`).
     """
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
@@ -911,9 +916,9 @@ def build_dep_tree(
 
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
-    # Only application code loses its type-only imports (see _parse_by_role).
-    application = _application_code(package, tests_package, root) if ignore_type_checking_imports else frozenset()
-    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports, application)
+    # Only application code loses its type-only imports, and not a package's __init__.py (see _narrowed_files).
+    narrowed = _narrowed_files(package, tests_package, root) if ignore_type_checking_imports else frozenset()
+    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports, narrowed)
 
     digraph = nx.DiGraph()
     unresolved: dict[str, set[str]] = {}

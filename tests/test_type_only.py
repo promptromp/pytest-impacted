@@ -238,7 +238,9 @@ def test_a_module_s_type_checking_is_one_imported_at_module_level(tmp_path, sour
 
 def test_a_lazy_module_annotating_with_a_name_it_never_mentions_at_runtime_drops_it(tmp_path):
     """The rule's known limit, pinned: a lazily loading module that also annotates with the name, and never
-    names it where code runs (no ``__all__``, no loader table), reads as type-only."""
+    names it where code runs (no ``__all__``, no loader table), reads as type-only. The option keeps every
+    type-only import of a package's ``__init__.py``, where lazy loading lives (see test_graph), so only another
+    module loading this way loses the import."""
     source = GUARD + "def __getattr__(name):\n    return load(name)\ndef make() -> Thing: ...\n"
 
     assert "pkg.lazy" not in parse(tmp_path, source, module="pkg", is_package=True)
