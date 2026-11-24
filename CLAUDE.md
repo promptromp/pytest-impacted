@@ -25,7 +25,8 @@ type-only imports close no cycle, but `def test_x(user: "User")` with `user` fro
 `User`'s module through that annotation alone, which the oracle (subtracting what a bare conftest loads)
 could never show. `from pkg import X` runs `pkg/__init__.py`, which may provide `X` by a name it computes
 while using `X` only in a type hint: keeping its declarations closes the rule's hole for a lazy `__init__` by
-the file's role (no idiom named), at no measured cost on two large typed libraries; a loader declaring its
+the file's role (no idiom named). Its cost, the cycles an `__init__` closes staying in the graph, measured nil on
+two large typed libraries (it selects the same tests there); a loader declaring its
 names in another module is still a documented trade-off. What the option keeps behaves exactly as without
 it, placement included: a helper outside the analysed directories that an `__init__` imports for a hint is
 application code, so a conftest importing it is under the `--impacted-conftest-imports` opt-in again. A
