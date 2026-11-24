@@ -29,6 +29,7 @@ from astroid.nodes import (
     Module,
     Name,
     NodeNG,
+    TemplateStr,
     Try,
     TryStar,
     While,
@@ -110,12 +111,12 @@ def _named_by(node: Name | Const, watched: set[str]) -> set[str]:
     """The *watched* names a load of a name, or a string, refers to.
 
     A string counts wherever it may be read: an annotation's (``"Model | None"``) or one the code uses. Not a
-    bare string statement, such as a docstring, which no code reads; nor the text of an f-string, which is no
-    string of its own (to ruff either).
+    bare string statement, such as a docstring, which no code reads; nor the text of an f-string or a t-string,
+    which is no string of its own (to ruff either).
     """
     if isinstance(node, Name):
         return {node.name} & watched
-    if isinstance(node.value, str) and not isinstance(node.parent, Expr | JoinedStr):
+    if isinstance(node.value, str) and not isinstance(node.parent, Expr | JoinedStr | TemplateStr):
         return {name for name in watched if mentions(node.value, name)}
     return set()
 

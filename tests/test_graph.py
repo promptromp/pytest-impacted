@@ -2669,3 +2669,24 @@ def test_only_application_code_loses_its_type_only_imports(tmp_path, importer):
 
     (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / importer).resolve())]
     assert dep_tree.has_edge("pkg.models", node)
+
+
+@pytest.mark.parametrize("importer", ["pkg/tests/test_a.py", "pkg/test_b.py", "pkg/tests/helpers_test.py"])
+def test_a_test_module_inside_the_package_keeps_its_type_only_imports(tmp_path, importer):
+    """With no tests dir configured, tests inside the package are test code still: judged by their path, as the
+    graph judges every test module."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/tests/__init__.py": "",
+            "pkg/models.py": "class User: ...\n",
+            importer: "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.models import User\n"
+            "def check(user: 'User') -> None: ...\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / importer).resolve())]
+    assert dep_tree.has_edge("pkg.models", node)

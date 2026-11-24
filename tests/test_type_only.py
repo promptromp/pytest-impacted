@@ -5,6 +5,8 @@ or another such block. No code here names a lazy-loading idiom: each is kept bec
 does not use) the names, which is the point.
 """
 
+import sys
+
 import pytest
 
 from pytest_impacted import parsing
@@ -329,3 +331,15 @@ def test_by_default_every_candidate_is_a_runtime_one_in_both_backends(tmp_path):
     assert python == rust.parse_file_imports(str(path), "my_package.sub.mod", False)
     assert python == rust.parse_all_imports([(str(path), "my_package.sub.mod", False)])["my_package.sub.mod"]
     assert parsing.split_file_imports(str(path), "my_package.sub.mod", find_type_only=False) == (python, [])
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="t-strings are new in Python 3.14")
+@pytest.mark.parametrize(
+    "use",
+    ["msg = t'Thing {x}'\n", "msg = t'{x:Thing}'\n", "msg = t'{\"Thing\"}'\n"],
+)
+def test_a_t_string_s_text_is_no_string_of_its_own_to_either_backend(tmp_path, use):
+    """Like an f-string's: astroid keeps it in a ``Const`` under ``TemplateStr``, ruff in no string literal."""
+    python, rust = both_backends(tmp_path, GUARD + "def f(x: Thing): ...\n" + use)
+
+    assert python == rust

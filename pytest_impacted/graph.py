@@ -802,22 +802,27 @@ def _parse_by_role(
     submodules: dict[str, str], ignore_type_checking_imports: bool, application: frozenset[str]
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """:func:`_parse_all_module_imports`, each module's type-only candidates folded back into its runtime ones
-    unless it is application code (see :func:`_is_application_code`).
+    unless it is application code (one of the files in *application*, see :func:`_application_code`).
 
     Test code keeps its type-only imports: nothing imports a test module or a conftest, so they close no import
     cycle, while one may be a test's only link to the type a fixture hands it (``def test_x(user: "User")``).
     """
     runtime, type_only = _parse_all_module_imports(submodules, ignore_type_checking_imports)
     for name, typed in type_only.items():
-        if typed and not _is_application_code(submodules[name], application):
+        if typed and submodules[name] not in application:
             runtime[name] = sorted({*runtime[name], *typed})
     return runtime, type_only
 
 
-def _is_application_code(path: str, application: frozenset[str]) -> bool:
-    """Whether the file at *path* is code under test: in *application* (the package walk's files less the tests
-    dir's, :func:`~pytest_impacted.traversal.discover_application_files`), and no conftest."""
-    return path in application and os.path.basename(path) != "conftest.py"
+def _application_code(package: str, tests_package: str | None, root: Path) -> frozenset[str]:
+    """The files of the code under test: the package walk's less the tests dir's
+    (:func:`~pytest_impacted.traversal.discover_application_files`), less every conftest and test module,
+    which are test code wherever they are (:func:`_is_test_file`: by the path, as the graph judges them)."""
+    return frozenset(
+        path
+        for path in discover_application_files(package, tests_package, root)
+        if os.path.basename(path) != "conftest.py" and not _is_test_file(Path(path), root)
+    )
 
 
 def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: bool) -> None:
@@ -907,9 +912,7 @@ def build_dep_tree(
     logger.debug("Building dependency tree for %d submodules", len(linker.modules))
 
     # Only application code loses its type-only imports (see _parse_by_role).
-    application = (
-        discover_application_files(package, tests_package, root) if ignore_type_checking_imports else frozenset()
-    )
+    application = _application_code(package, tests_package, root) if ignore_type_checking_imports else frozenset()
     imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports, application)
 
     digraph = nx.DiGraph()
