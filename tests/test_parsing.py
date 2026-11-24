@@ -562,3 +562,90 @@ def test_rust_batch_parser_ignores_type_checking_imports_on_request(tmp_path):
     ignoring = set(rust.parse_all_imports(modules, ignore_type_checking_imports=True)["my_package.sub.mod"])
 
     assert everything - ignoring == TYPED_ONLY
+
+
+LAZY_IMPORT = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.lazy import Thing\n"
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        pytest.param("def __getattr__(name):\n    return 1\n", id="def"),
+        pytest.param("async def __getattr__(name):\n    return 1\n", id="async_def"),
+        pytest.param("__getattr__ = make_getattr(__name__)\n", id="assigned"),
+        pytest.param("__getattr__, __dir__, __all__ = lazy.attach(__name__)\n", id="unpacked"),
+        pytest.param("[*__getattr__] = loaders\n", id="starred"),
+        pytest.param("__getattr__: object = make_getattr(__name__)\n", id="annotated"),
+        pytest.param("from pkg._lazy import __getattr__\n", id="imported"),
+        pytest.param("from pkg._lazy import loader as __getattr__\n", id="imported_as"),
+        pytest.param("import sys\nsys.modules[__name__] = LazyModule(__name__)\n", id="sys_modules"),
+        pytest.param("import sys\nsys.modules[__name__].__class__ = LazyModule\n", id="sys_modules_class"),
+        pytest.param(
+            "if TYPE_CHECKING:\n    pass\nelse:\n    import sys\n    sys.modules[__name__] = LazyModule(__name__)\n",
+            id="sys_modules_in_else",
+        ),
+        pytest.param(
+            "try:\n    pass\nexcept ImportError:\n    def __getattr__(name):\n        return 1\n", id="in_try"
+        ),
+    ],
+)
+def test_a_lazily_loading_module_keeps_its_type_checking_imports(tmp_path, marker):
+    """A module ``__getattr__`` (PEP 562) or a module in ``sys.modules`` replaced loads at runtime what the
+    ``if TYPE_CHECKING:`` imports declare for type checkers (``from pkg import Thing`` runs
+    ``import_module("pkg.lazy")``): those are dependencies, option or not."""
+    path = tmp_path / "mod.py"
+    path.write_text(LAZY_IMPORT + marker)
+
+    imports = parsing.parse_file_imports(str(path), "pkg", is_package=True, ignore_type_checking_imports=True)
+
+    assert "pkg.lazy" in imports
+
+
+@pytest.mark.parametrize(
+    "unrelated",
+    [
+        pytest.param("class C:\n    def __getattr__(self, name):\n        return 1\n", id="method"),
+        pytest.param("def f():\n    def __getattr__(name):\n        return 1\n", id="nested_function"),
+        pytest.param("obj.__getattr__ = handler\n", id="attribute"),
+        pytest.param("getattr_ = __getattr__\n", id="read_not_bound"),
+        pytest.param("import sys\nmodules = sys.modules\nlookup = sys.modules[__name__]\n", id="sys_modules_read"),
+        pytest.param("cache[__name__] = module\n", id="other_subscript"),
+    ],
+)
+def test_only_a_module_level_marker_makes_a_module_lazy(tmp_path, unrelated):
+    """A class's ``__getattr__``, or reading ``sys.modules``, loads no module: the option still applies."""
+    path = tmp_path / "mod.py"
+    path.write_text(LAZY_IMPORT + unrelated)
+
+    imports = parsing.parse_file_imports(str(path), "pkg", is_package=True, ignore_type_checking_imports=True)
+
+    assert "pkg.lazy" not in imports
+
+
+LAZY_PARITY = [
+    "def __getattr__(name):\n    return 1\n",
+    "__getattr__, __dir__, __all__ = lazy.attach(__name__)\n",
+    "[*__getattr__] = loaders\n",
+    "__getattr__: object = make_getattr(__name__)\n",
+    "from pkg._lazy import loader as __getattr__\n",
+    "import sys\nsys.modules[__name__].__class__ = LazyModule\n",
+    "if TYPE_CHECKING:\n    pass\nelse:\n    import sys\n    sys.modules[__name__] = LazyModule(__name__)\n",
+    "while False:\n    pass\nelse:\n    def __getattr__(name):\n        return 1\n",
+    "with ctx:\n    __getattr__ = make_getattr(__name__)\n",
+    "match PLATFORM:\n    case 'linux':\n        def __getattr__(name):\n            return 1\n",
+    "class C:\n    def __getattr__(self, name):\n        return 1\n",
+    "def f():\n    def __getattr__(name):\n        return 1\n",
+    "obj.__getattr__ = handler\n",
+    "lookup = sys.modules[__name__]\n",
+]
+
+
+@pytest.mark.parametrize("marker", LAZY_PARITY)
+def test_lazy_modules_are_told_alike_by_both_backends(tmp_path, marker):
+    rust = pytest.importorskip("pytest_impacted_rs")
+    path = tmp_path / "mod.py"
+    path.write_text(LAZY_IMPORT + marker)
+
+    python = parsing.parse_file_imports(str(path), "pkg", is_package=True, ignore_type_checking_imports=True)
+
+    assert python == rust.parse_file_imports(str(path), "pkg", True, ignore_type_checking_imports=True)

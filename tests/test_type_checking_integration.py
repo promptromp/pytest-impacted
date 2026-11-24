@@ -148,3 +148,55 @@ def test_under_xdist(project):
 
     result.assert_outcomes(passed=1)  # the workers deselect: xdist's summary counts no deselection
     result.stdout.fnmatch_lines(["pytest-impacted: 1 test not impacted by the changes, deselected"])
+
+
+LAZY_INITS = {
+    "module_getattr": (
+        "from importlib import import_module\n"
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.models import Model\n"
+        "def __getattr__(name):\n"
+        "    if name == 'Model':\n"
+        "        return import_module('app.models').Model\n"
+        "    raise AttributeError(name)\n"
+    ),
+    "sys_modules": (
+        "import sys\n"
+        "import types\n"
+        "from importlib import import_module\n"
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.models import Model\n"
+        "else:\n"
+        "    class _Lazy(types.ModuleType):\n"
+        "        def __getattr__(self, name):\n"
+        "            if name == 'Model':\n"
+        "                return import_module('app.models').Model\n"
+        "            raise AttributeError(name)\n"
+        "    _module = _Lazy(__name__)\n"
+        "    _module.__path__, _module.__spec__, _module.__file__ = __path__, __spec__, __file__\n"
+        "    sys.modules[__name__] = _module\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("init", LAZY_INITS.values(), ids=LAZY_INITS.keys())
+def test_a_lazily_loading_package_keeps_its_type_only_imports(make_git_project, init):
+    """``from app import Model`` imports ``app.models`` at runtime, through the ``__getattr__`` its
+    ``if TYPE_CHECKING:`` import declares: an edit to ``app/models.py`` must still select the test, and
+    breaking it breaks the test (at collection: the test module imports ``Model``)."""
+    files = {
+        "app/__init__.py": init,
+        "app/models.py": "class Model:\n    value = 1\n",
+        "app/other.py": "",
+        "suite/test_lazy.py": "from app import Model\n\ndef test_lazy():\n    assert Model.value == 1\n",
+        "suite/test_other.py": "import app.other\n\ndef test_other():\n    pass\n",
+    }
+    project = make_git_project(files, INI)
+    edit(project, "app/models.py")
+
+    run(project, FLAG).assert_outcomes(passed=1, deselected=1)
+
+    (project.path / "app/models.py").write_text("raise RuntimeError('imported')\n")
+    run(project, FLAG).assert_outcomes(errors=1, deselected=1)

@@ -9,7 +9,32 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import astroid
-from astroid.nodes import Attribute, If, Import, ImportFrom, Name, NodeNG
+from astroid.nodes import (
+    AnnAssign,
+    Assign,
+    AssignAttr,
+    AssignName,
+    Attribute,
+    ExceptHandler,
+    For,
+    FunctionDef,
+    If,
+    Import,
+    ImportFrom,
+    List,
+    Match,
+    MatchCase,
+    Module,
+    Name,
+    NodeNG,
+    Starred,
+    Subscript,
+    Try,
+    TryStar,
+    Tuple,
+    While,
+    With,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -133,7 +158,8 @@ def parse_file_imports(
         module_name: Fully-qualified module name (e.g. ``"pkg.sub.mod"``).
         is_package: ``True`` when the file is an ``__init__.py``.
         ignore_type_checking_imports: Leave out the imports in the body of an ``if TYPE_CHECKING:``
-            (see :func:`_under_type_checking`), which never run.
+            (see :func:`_under_type_checking`), which never run — unless the module loads lazily
+            (see :func:`_loads_lazily`).
 
     Returns:
         Sorted list of *candidate* absolute module names. ``from pkg import
@@ -158,6 +184,7 @@ def parse_file_imports(
         logger.warning("Syntax error while parsing %s", file_path)
         return []
 
+    ignore_type_checking_imports = ignore_type_checking_imports and not _loads_lazily(tree)
     imports: set[str] = set()
     for node in tree.nodes_of_class((Import, ImportFrom)):
         if not (ignore_type_checking_imports and _under_type_checking(node)):
@@ -186,6 +213,60 @@ def _is_type_checking(test: NodeNG) -> bool:
     if isinstance(test, Attribute):
         return test.attrname == "TYPE_CHECKING" and isinstance(test.expr, Name)
     return isinstance(test, Name) and test.name == "TYPE_CHECKING"
+
+
+_ASTROID_BLOCKS = (If, Try, TryStar, With, ExceptHandler, Match, MatchCase, For, While)
+
+
+def _loads_lazily(tree: Module) -> bool:
+    """Whether the module loads names lazily, at runtime, from what its ``if TYPE_CHECKING:`` imports declare.
+
+    A module ``__getattr__`` (PEP 562) — ``def``, assigned (``__getattr__, __dir__, __all__ =
+    lazy.attach(...)``) or imported — runs ``import_module`` when ``from pkg import Thing`` asks, and so does
+    a module replaced in ``sys.modules`` (``sys.modules[__name__] = _LazyModule(...)``). Bound at module
+    level, in any block but a function or class body: a class's ``__getattr__`` loads nothing. Mirrors
+    ``loads_lazily`` in the Rust backend.
+    """
+    return any(_marks_lazy(stmt) for stmt in _astroid_module_statements(tree.body))
+
+
+def _astroid_module_statements(body: list) -> Iterator[NodeNG]:
+    """:func:`_module_level_statements` for astroid's tree, whose blocks have the same fields."""
+    for stmt in body:
+        yield stmt
+        if isinstance(stmt, _ASTROID_BLOCKS):
+            for field in _BLOCK_FIELDS:
+                yield from _astroid_module_statements(getattr(stmt, field, None) or [])
+
+
+def _marks_lazy(stmt: NodeNG) -> bool:
+    if isinstance(stmt, FunctionDef):  # AsyncFunctionDef too, its subclass
+        return stmt.name == "__getattr__"
+    if isinstance(stmt, ImportFrom):
+        return any((alias or name) == "__getattr__" for name, alias in stmt.names)
+    targets = stmt.targets if isinstance(stmt, Assign) else [stmt.target] if isinstance(stmt, AnnAssign) else []
+    return any(_binds_lazily(target) for target in targets)
+
+
+def _binds_lazily(target: NodeNG) -> bool:
+    """Whether an assignment target binds ``__getattr__`` or writes into ``sys.modules``."""
+    if isinstance(target, AssignName):
+        return target.name == "__getattr__"
+    if isinstance(target, Tuple | List):
+        return any(_binds_lazily(element) for element in target.elts)
+    if isinstance(target, Starred):
+        return _binds_lazily(target.value)
+    # ``sys.modules[...]``, or an attribute of the module there (``sys.modules[__name__].__class__``).
+    while isinstance(target, Subscript | AssignAttr | Attribute):
+        inner = target.value if isinstance(target, Subscript) else target.expr
+        if isinstance(target, Subscript) and _is_sys_modules(inner):
+            return True
+        target = inner
+    return False
+
+
+def _is_sys_modules(node: NodeNG) -> bool:
+    return isinstance(node, Attribute) and node.attrname == "modules" and isinstance(node.expr, Name)
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:

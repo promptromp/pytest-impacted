@@ -126,6 +126,77 @@ fn is_type_checking(test: &Expr) -> bool {
     }
 }
 
+/// Whether the module loads names lazily, at runtime, from what its `if TYPE_CHECKING:` imports declare.
+///
+/// Mirrors `_loads_lazily` in the Python backend: a module-level `__getattr__` (PEP 562), defined,
+/// assigned or imported, or an assignment into `sys.modules[...]`, in any block but a function or
+/// class body.
+fn loads_lazily(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| {
+        marks_lazy(stmt)
+            || match stmt {
+                Stmt::If(node) => {
+                    loads_lazily(&node.body)
+                        || node.elif_else_clauses.iter().any(|c| loads_lazily(&c.body))
+                }
+                Stmt::Try(node) => {
+                    loads_lazily(&node.body)
+                        || node.handlers.iter().any(|handler| {
+                            let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
+                            loads_lazily(&h.body)
+                        })
+                        || loads_lazily(&node.orelse)
+                        || loads_lazily(&node.finalbody)
+                }
+                Stmt::With(node) => loads_lazily(&node.body),
+                Stmt::For(node) => loads_lazily(&node.body) || loads_lazily(&node.orelse),
+                Stmt::While(node) => loads_lazily(&node.body) || loads_lazily(&node.orelse),
+                Stmt::Match(node) => node.cases.iter().any(|case| loads_lazily(&case.body)),
+                _ => false,
+            }
+    })
+}
+
+fn marks_lazy(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::FunctionDef(node) => node.name.as_str() == "__getattr__",
+        Stmt::ImportFrom(node) => node
+            .names
+            .iter()
+            .any(|alias| alias.asname.as_ref().unwrap_or(&alias.name).as_str() == "__getattr__"),
+        Stmt::Assign(node) => node.targets.iter().any(binds_lazily),
+        Stmt::AnnAssign(node) => binds_lazily(&node.target),
+        _ => false,
+    }
+}
+
+/// Whether an assignment target binds `__getattr__` or writes into `sys.modules`.
+fn binds_lazily(target: &Expr) -> bool {
+    match target {
+        Expr::Name(name) => name.id.as_str() == "__getattr__",
+        Expr::Tuple(tuple) => tuple.elts.iter().any(binds_lazily),
+        Expr::List(list) => list.elts.iter().any(binds_lazily),
+        Expr::Starred(starred) => binds_lazily(&starred.value),
+        _ => writes_sys_modules(target),
+    }
+}
+
+/// `sys.modules[...]`, or an attribute of the module there (`sys.modules[__name__].__class__`).
+fn writes_sys_modules(target: &Expr) -> bool {
+    match target {
+        Expr::Subscript(subscript) => {
+            is_sys_modules(&subscript.value) || writes_sys_modules(&subscript.value)
+        }
+        Expr::Attribute(attr) => writes_sys_modules(&attr.value),
+        _ => false,
+    }
+}
+
+fn is_sys_modules(node: &Expr) -> bool {
+    matches!(node, Expr::Attribute(attr)
+        if attr.attr.as_str() == "modules" && matches!(*attr.value, Expr::Name(_)))
+}
+
 /// What the walk leaves out, and the context relative imports resolve in.
 struct Walk<'a> {
     module_name: &'a str,
@@ -227,7 +298,8 @@ fn parse_file_imports_core(
     let walk = Walk {
         module_name,
         is_package,
-        ignore_type_checking,
+        // A lazily loading module imports at runtime what its type-only imports declare.
+        ignore_type_checking: ignore_type_checking && !loads_lazily(&suite),
     };
     collect_imports_from_stmts(&suite, &walk, &mut imports);
 
