@@ -1005,9 +1005,8 @@ def build_dep_tree(
     digraph.graph["aliases"] = linker.aliases
     # For a changed file the graph lacks — deleted, or created since — see link_changed_files.
     digraph.graph["unresolved"] = {name: sorted(importers) for name, importers in unresolved.items()}
-    if (
-        unresolved_type_only
-    ):  # of those, importers whose import of the name is a kept type-only one (link_changed_files)
+    # Of those, the importers whose import of the name is a kept type-only one (see link_changed_files).
+    if unresolved_type_only:
         digraph.graph["unresolved_type_only"] = {
             name: sorted(importers) for name, importers in unresolved_type_only.items()
         }
