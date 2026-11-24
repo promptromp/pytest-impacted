@@ -87,10 +87,11 @@ def _bound_names(node: Import | ImportFrom) -> frozenset[str] | None:
 
 def _uses(tree: Module, watched: set[str], modules: frozenset[str]) -> tuple[set[str], set[str]]:
     """Which of the *watched* names are used where no code runs, and which where it does."""
+    unread = _unread_strings(tree)
     typed: set[str] = set()
     runtime: set[str] = set()
     for node in _names_and_strings(tree):
-        if names := _named_by(node, watched):
+        if names := _named_by(node, watched, unread):
             (typed if _in_type_only_code(node, modules) else runtime).update(names)
     return typed, runtime
 
@@ -107,16 +108,30 @@ def _names_and_strings(tree: Module) -> Iterator[Name | Const]:
             yield from metaclass.nodes_of_class((Name, Const))
 
 
-def _named_by(node: Name | Const, watched: set[str]) -> set[str]:
+def _unread_strings(tree: Module) -> set[int]:
+    """The strings no code reads, by ``id``: a bare string statement, such as a docstring, and the text of an
+    f-string or a t-string, which is no string of its own (to ruff either).
+
+    Found as children, not by their ``parent``: on Python 3.14 astroid makes a t-string the parent of the
+    expressions in its ``{...}`` fields too, which code does read.
+    """
+    return {
+        id(part)
+        for node in tree.nodes_of_class((Expr, JoinedStr, TemplateStr))
+        for part in node.get_children()
+        if isinstance(part, Const)
+    }
+
+
+def _named_by(node: Name | Const, watched: set[str], unread: set[int]) -> set[str]:
     """The *watched* names a load of a name, or a string, refers to.
 
-    A string counts wherever it may be read: an annotation's (``"Model | None"``) or one the code uses. Not a
-    bare string statement, such as a docstring, which no code reads; nor the text of an f-string or a t-string,
-    which is no string of its own (to ruff either).
+    A string counts wherever it may be read: an annotation's (``"Model | None"``) or one the code uses — not
+    one of the *unread* (see :func:`_unread_strings`).
     """
     if isinstance(node, Name):
         return {node.name} & watched
-    if isinstance(node.value, str) and not isinstance(node.parent, Expr | JoinedStr | TemplateStr):
+    if isinstance(node.value, str) and id(node) not in unread:
         return {name for name in watched if mentions(node.value, name)}
     return set()
 
