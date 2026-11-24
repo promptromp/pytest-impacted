@@ -611,7 +611,8 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     *dep_tree* — the run's copy, never the cached graph — with an edge to every module
     whose import of one of its names matched nothing (``graph["unresolved"]``; flagged
     ``assumed_root`` when only a name under an assumed import root matched, ``basedir`` when only one
-    from a test basedir did: see :meth:`_Linker.local_targets`). A deleted
+    from a test basedir did: see :meth:`_Linker.local_targets`; ``type_only`` when only a type-only import
+    the option keeps did). A deleted
     file nothing imports gets none — unless it is an ``__init__.py`` whose package has importers
     of a missing name (below): nothing else is left for it to impact.
 
@@ -659,14 +660,18 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             if not importers and not neighbours and not runners and not os.path.exists(path):
                 continue
             guessed = importers - {importer for name in sure for importer in unresolved.get(name, ())}
+            typed = _type_only_importers(names, unresolved, dep_tree.graph.get("unresolved_type_only", {}))
             node = _free_name(names, _last_resort_name(path, root), taken.__contains__)
             # Its other names reach it too, e.g. a ``-p`` plugin spelled from the rootdir.
             aliases.update({name: node for name in names if name != node and name not in taken})
             taken.update(names)
             taken.add(node)
             dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
-            dep_tree.add_edges_from((node, importer) for importer in importers - guessed)
-            dep_tree.add_edges_from(((node, importer) for importer in guessed), assumed_root=True)
+            dep_tree.add_edges_from((node, importer) for importer in importers - guessed - typed)
+            dep_tree.add_edges_from(((node, importer) for importer in guessed - typed), assumed_root=True)
+            if typed:  # a kept type-only import may never run: it reaches, as the graph's own edge does
+                dep_tree.add_edges_from(((node, importer) for importer in typed), type_only=True)
+                dep_tree.graph["type_only_edges"] = True
             if neighbours:
                 dep_tree.add_edges_from(((node, importer) for importer in neighbours), basedir=True)
                 dep_tree.graph["basedir_edges"] = True
@@ -678,6 +683,19 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             dep_tree.add_edges_from(((node, runner) for runner in runs), runs_init=True)
             dep_tree.graph["runs_init"] = True
     return added
+
+
+def _type_only_importers(
+    names: list[str], unresolved: dict[str, list[str]], unresolved_type_only: dict[str, list[str]]
+) -> set[str]:
+    """The importers of any of *names* whose every import of them is a type-only one the option keeps."""
+    typed = {importer for name in names for importer in unresolved_type_only.get(name, ())}
+    runtime = {
+        importer
+        for name in names
+        for importer in set(unresolved.get(name, ())) - set(unresolved_type_only.get(name, ()))
+    }
+    return typed - runtime
 
 
 def _basedirs_of_changed(path: Path, basedir_paths: list[Path], root: Path) -> list[Path]:
@@ -767,25 +785,27 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
 
 def _parse_project(
     linker: _Linker, ignore_type_checking_imports: bool = False, narrowed: frozenset[str] = frozenset()
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """The import candidates of every module, and the ``pytest_plugins`` edges.
+) -> tuple[dict[str, list[str]], dict[str, frozenset[str]], dict[str, list[str]]]:
+    """The import candidates of every module, the type-only ones among them, and the ``pytest_plugins`` edges.
 
     Imports and declarations that name a module outside the walks add it (see
     :class:`_Linker`), and its own imports and declarations are followed in turn. With
-    *ignore_type_checking_imports*, the type-only imports of the files in *narrowed* are none
-    (see :func:`_parse_by_role`).
+    *ignore_type_checking_imports*, the type-only imports of the files in *narrowed* are none, and every
+    other module's are candidates still, listed apart as well (see :func:`_parse_by_role`).
     """
     declarations = cache(parse_pytest_plugins)
     parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, narrowed=narrowed)
     pending = dict(linker.modules)
-    imports, type_only = parse(pending)
+    imports, type_only, kept = parse(pending)
     # What the walked modules import is the evidence for which assumed roots are on sys.path — a type-only
     # import too, though it is no edge: ignoring type-only imports removes their edges, and nothing else.
     linker.activate(
         candidate for found in (imports, type_only) for candidates in found.values() for candidate in candidates
     )
     while True:
-        imports |= parse({name: path for name, path in pending.items() if name not in imports})[0]
+        found, _, found_kept = parse({name: path for name, path in pending.items() if name not in imports})
+        imports |= found
+        kept |= found_kept
         for name, path in pending.items():
             for candidate in imports[name]:
                 linker.targets(candidate)
@@ -795,20 +815,23 @@ def _parse_project(
         plugin_edges = _pytest_plugin_edges(linker, declarations)
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
-            return imports, plugin_edges
+            return imports, kept, plugin_edges
 
 
 def _parse_by_role(
     submodules: dict[str, str], ignore_type_checking_imports: bool, narrowed: frozenset[str]
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, frozenset[str]]]:
     """:func:`_parse_all_module_imports`, each module's type-only candidates folded back into its runtime ones
-    unless its file is one the option narrows (one of *narrowed*, see :func:`_narrowed_files`).
+    unless its file is one the option narrows (one of *narrowed*, see :func:`_narrowed_files`) — and those
+    folded back, by module: kept, they may still be no runtime import, so their edges only reach.
     """
     runtime, type_only = _parse_all_module_imports(submodules, ignore_type_checking_imports)
+    kept = {}
     for name, typed in type_only.items():
         if typed and submodules[name] not in narrowed:
             runtime[name] = sorted({*runtime[name], *typed})
-    return runtime, type_only
+            kept[name] = frozenset(typed)
+    return runtime, type_only, kept
 
 
 def _narrowed_files(package: str, tests_package: str | None, root: Path) -> frozenset[str]:
@@ -829,20 +852,23 @@ def _narrowed_files(package: str, tests_package: str | None, root: Path) -> froz
     )
 
 
-def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: bool) -> None:
-    """An import edge; flagged ``assumed_root`` while every import of *module* by *importer* is a guess.
+def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: bool, type_only: bool = False) -> None:
+    """An import edge; flagged ``assumed_root`` while every import of *module* by *importer* is a guess, and
+    ``type_only`` while every one is a type-only import the option keeps.
 
     Whether an assumed root is on ``sys.path`` is a guess, and a bare name matched there may be
-    a coincidence: such an edge reaches the importer, but never places the module as application
-    code (see ``strategies._changes_by_role``), which could make a conftest rule opt-in — fewer tests.
-    A sure import supersedes that flag, and a ``basedir`` one (see :meth:`_Linker.local_targets`).
+    a coincidence; a kept type-only import may never run. Such an edge reaches the importer, but never
+    places the module as application code (see ``strategies._changes_by_role``), which could make a
+    conftest rule opt-in — fewer tests. A sure runtime import supersedes those flags, and a ``basedir``
+    one (see :meth:`_Linker.local_targets`).
     """
-    if not guessed:
+    if not guessed and not type_only:
         digraph.add_edge(importer, module)
-        digraph.edges[importer, module].pop("assumed_root", None)
-        digraph.edges[importer, module].pop("basedir", None)
+        for flag in ("assumed_root", "basedir", "type_only"):
+            digraph.edges[importer, module].pop(flag, None)
     elif not digraph.has_edge(importer, module):
-        digraph.add_edge(importer, module, assumed_root=True)
+        flags = {flag: True for flag, on in (("assumed_root", guessed), ("type_only", type_only)) if on}
+        digraph.add_edge(importer, module, **flags)
 
 
 def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
@@ -918,18 +944,20 @@ def build_dep_tree(
 
     # Only application code loses its type-only imports, and not a package's __init__.py (see _narrowed_files).
     narrowed = _narrowed_files(package, tests_package, root) if ignore_type_checking_imports else frozenset()
-    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports, narrowed)
+    imports, kept, plugin_edges = _parse_project(linker, ignore_type_checking_imports, narrowed)
 
     digraph = nx.DiGraph()
     unresolved: dict[str, set[str]] = {}
+    unresolved_type_only: dict[str, set[str]] = {}
     basedir_edges = False
     for name, file_path in linker.modules.items():
         digraph.add_node(name, path=file_path)
         for candidate in imports[name]:
             # A name conftests above the package contest is an import of each of them too.
             guessed = linker.only_assumed(candidate)
+            typed = candidate in kept.get(name, ())
             for target in linker.targets(candidate):
-                _add_import(digraph, name, target, guessed=target in guessed)
+                _add_import(digraph, name, target, guessed=target in guessed, type_only=typed)
             # Through pytest's basedirs: which file depends on the collection order, and a bare name may be
             # a coincidence (an app module's ``import helpers``), so these only reach, never place.
             if linker.looks_locally(file_path, candidate):  # not for most imports of most modules
@@ -939,6 +967,8 @@ def build_dep_tree(
                         basedir_edges = True
             if _may_name_a_module(candidate, discovered):
                 unresolved.setdefault(candidate, set()).add(name)
+                if typed:
+                    unresolved_type_only.setdefault(candidate, set()).add(name)
         for plugin in plugin_edges.get(name, ()):
             # No guess: pytest imports a declared plugin, and fails the run if it cannot.
             _add_import(digraph, name, plugin, guessed=False)
@@ -952,11 +982,17 @@ def build_dep_tree(
     digraph.graph["aliases"] = linker.aliases
     # For a changed file the graph lacks — deleted, or created since — see link_changed_files.
     digraph.graph["unresolved"] = {name: sorted(importers) for name, importers in unresolved.items()}
+    # Of those, the importers whose import of the name is a kept type-only one (see link_changed_files).
+    digraph.graph["unresolved_type_only"] = {
+        name: sorted(importers) for name, importers in unresolved_type_only.items()
+    }
     digraph.graph["import_roots"] = [str(directory) for directory in (*roots, *linker.assumed)]
     # For a file created or deleted in one of them since (link_changed_files): neighbours import it by its bare name.
     digraph.graph["rootless_test_dirs"] = [str(directory) for directory in basedirs]
     if basedir_edges:  # strategies._changes_by_role skips reach-only edges only when a graph has some
         digraph.graph["basedir_edges"] = True
+    if kept and any(data.get("type_only") for _, _, data in digraph.edges(data=True)):
+        digraph.graph["type_only_edges"] = True
     digraph.graph["assumed_roots"] = {
         # ``certain`` only when set: a graph without pythonpath entries reads as it always did.
         str(base): {"gateways": sorted(how.gateways), "active": how.active} | ({"certain": True} if how.certain else {})

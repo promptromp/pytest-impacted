@@ -257,3 +257,32 @@ def test_a_test_keeps_its_type_only_imports(make_git_project):
 
     result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines(["*suite/test_user.py::test_user PASSED*"])
+
+
+PLACEMENT_FILES = {
+    "app/__init__.py": (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from testing.factories import Factory\n"
+        "def make(factory: 'Factory') -> None: ...\n"
+    ),
+    "testing/__init__.py": "",
+    "testing/factories.py": "class Factory:\n    pass\n",
+    "suite/conftest.py": (
+        "import pytest\nfrom testing.factories import Factory\n\n"
+        "@pytest.fixture\ndef factory():\n    return Factory()\n"
+    ),
+    "suite/test_one.py": "def test_one(factory):\n    assert factory\n",
+    "suite/test_two.py": "def test_two():\n    pass\n",
+}
+
+
+def test_a_type_only_import_the_option_keeps_reaches_but_does_not_place(make_git_project):
+    """``testing/factories.py``, outside both analysed directories, is test code: only a conftest imports it at
+    runtime, so an edit selects the conftest's directory. The ``__init__``'s type-only import of it is kept, as
+    every ``__init__``'s is, but may be no runtime import: it reaches the ``__init__``'s importers, and does not
+    make the module application code, whose conftest rule is opt-in (fewer tests)."""
+    project = make_git_project(PLACEMENT_FILES, INI)
+    edit(project, "testing/factories.py")
+
+    run(project, FLAG).assert_outcomes(passed=2)

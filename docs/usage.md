@@ -148,7 +148,7 @@ The package's own `__init__.py` is a module too. A test that imports from the pa
 - any import in test code: a test module (named `test_*`/`*_test`, or under a `test`/`tests` directory, wherever it is) or a conftest, anything else in `--impacted-tests-dir`, or outside `--impacted-module`. Nothing imports a test, so its type-only imports close no cycle, while one may be its only link to the type a fixture hands it: `def test_name(user: "User")`, with `user` built in a conftest, depends on `User`'s module through that annotation alone;
 - any import in a package's `__init__.py` (since 0.39.1). `from my_package import Model` runs it, and it may provide `Model` at runtime by a name it computes, say through a module `__getattr__` that turns `Model` into `my_package.models`, even if the file itself uses `Model` only in a type hint.
 
-So the option narrows only the application code `--impacted-module` holds, other than its `__init__.py` files.
+So the option narrows only the application code `--impacted-module` holds, other than its `__init__.py` files. A type-only import it keeps may still never run, so it selects its importer's tests but never makes the module it names application code: a module outside the analysed directories that only such an import ties to application code stays test code, whose conftest rule selects (see [ConftestImportImpactStrategy](#conftestimportimpactstrategy-opt-in)).
 
 The option removes those edges and nothing else: a type-only import still shows how the project imports its modules, for instance that `src/` is on `sys.path`.
 

@@ -2690,6 +2690,78 @@ def test_a_package_init_keeps_its_type_only_imports(tmp_path, init):
     assert not dep_tree.has_edge("pkg.models", "pkg.plain")
 
 
+def test_a_type_only_import_the_option_keeps_only_reaches(tmp_path):
+    """An ``__init__``'s type-only import, and test code's, may be no runtime import: kept, it reaches the
+    importer, flagged ``type_only`` so it does not place what it reaches as application code (see
+    strategies._changes_by_role). A runtime import of the same module supersedes the flag."""
+    guarded = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.models import User\n"
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": guarded + "def check(user: 'User') -> None: ...\n",
+            "pkg/sub/__init__.py": guarded + "import pkg.models\ndef check(user: 'User') -> None: ...\n",
+            "pkg/models.py": "class User: ...\n",
+            "pkg/core.py": "import shared\n",
+            "shared.py": guarded + "def check(user: 'User') -> None: ...\n",  # outside the walks: followed
+            "tests/test_a.py": guarded + "def test_a(user: 'User'): ...\n",
+        },
+    )
+    build = partial(graph.build_dep_tree, "pkg", tests_package="tests", root_dir=tmp_path)
+
+    ignoring, kept = build(ignore_type_checking_imports=True), build()
+
+    assert ignoring.edges["pkg.models", "pkg"].get("type_only") is True
+    assert ignoring.edges["pkg.models", "tests.test_a"].get("type_only") is True
+    assert ignoring.edges["pkg.models", "shared"].get("type_only") is True
+    assert not ignoring.edges["pkg.models", "pkg.sub"].get("type_only")
+    assert ignoring.graph.get("type_only_edges") is True
+    assert not any(data.get("type_only") for _, _, data in kept.edges(data=True))
+    assert not kept.graph.get("type_only_edges")
+
+
+def test_a_missing_module_only_a_kept_type_only_import_names_is_linked_to_reach_only(tmp_path):
+    """A module created (or deleted) after the graph was built is linked to its importers by
+    ``link_changed_files``: through a kept type-only import, flagged ``type_only`` like the graph's own edge."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": (
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from shared.gone import Part\n"
+                "def f(part: 'Part') -> None: ...\n"
+            ),
+            "tests/helpers.py": "try:\n    import shared.gone\nexcept ImportError:\n    pass\n",
+            "tests/test_a.py": "import pkg\n",
+        },
+    )
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (linked,) = graph.link_changed_files(["shared/gone.py"], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.edges[linked, "pkg"].get("type_only") is True
+    assert not dep_tree.edges[linked, "tests.helpers"].get("type_only")
+    assert dep_tree.graph.get("type_only_edges") is True
+
+
+def test_a_cycle_an_init_closes_stays(tmp_path):
+    """The price of keeping an ``__init__``'s type-only imports: a cycle one closes still ties the cycle
+    together. ``pkg/config.py`` imports the package at runtime; the ``__init__`` imports it only for a hint."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": (
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.config import Config\n"
+                "def configure(config: 'Config') -> None: ...\n"
+            ),
+            "pkg/config.py": "import pkg\nclass Config: ...\n",
+            "tests/test_pkg.py": "import pkg\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    assert "tests.test_pkg" in graph.reached_from(["pkg.config"], dep_tree)
+
+
 @pytest.mark.parametrize("importer", ["pkg/tests/test_a.py", "pkg/test_b.py", "pkg/tests/helpers_test.py"])
 def test_a_test_module_inside_the_package_keeps_its_type_only_imports(tmp_path, importer):
     """With no tests dir configured, tests inside the package are test code still: judged by their path, as the
