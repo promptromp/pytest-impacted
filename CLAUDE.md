@@ -26,10 +26,11 @@ type-only imports close no cycle, but `def test_x(user: "User")` with `user` fro
 could never show. `from pkg import X` runs `pkg/__init__.py`, which may provide `X` by a name it computes
 while using `X` only in a type hint: keeping its declarations closes the rule's hole for a lazy `__init__` by
 the file's role (no idiom named), at no measured cost on two large typed libraries; a loader declaring its
-names in another module is still a documented trade-off. A kept type-only import may never run, so its edge
-is flagged `type_only` and only reaches (`graph["type_only_edges"]`, `graph["unresolved_type_only"]` for
-`link_changed_files`): placing, an `__init__`'s hint made a conftest's helper application code, its rule
-opt-in — fewer tests than with the import left out. Keep
+names in another module is still a documented trade-off. What the option keeps behaves exactly as without
+it, placement included: a helper outside the analysed directories that an `__init__` imports for a hint is
+application code, so a conftest importing it is under the `--impacted-conftest-imports` opt-in again. A
+reach-only `type_only` edge flag avoided that, but threaded through parsing, linking and placement for a
+case found nowhere, and each review round found a new interaction: the maintainer chose the trade-off. Keep
 it a rule about how names are used, never a list of idioms: skipping every type-only
 import lost tests through a large typed library's lazy `__init__` (exports declared under
 `TYPE_CHECKING`, loaded by `__getattr__`), and a list of lazy-loading signs that replaced it missed
@@ -113,8 +114,8 @@ only under an assumed root is named as its path reads from an implied root (`bac
 `redis`): its relative imports resolve from that name — and that name is still looked up when an
 import spells it, since it may mean another file under another root. Being on `sys.path` is still a guess, and
 a bare name may match by coincidence, so such an import is an edge flagged `assumed_root` that,
-like `runs_init`, only reaches: `_changes_by_role` ignores it (it looks when `graph["runs_init"]`,
-`graph["assumed_roots"]`, `graph["basedir_edges"]` or `graph["type_only_edges"]` is set), or a test helper the match leads to would become
+like `runs_init`, only reaches: `_changes_by_role` ignores it (it looks when `graph["runs_init"]`
+or `graph["assumed_roots"]` is set), or a test helper the match leads to would become
 application code and its conftest rule opt-in — fewer tests. That holds inside
 the analysed package too: an app module importing a walked test helper as `app.tests.h` must not
 lead placement through it, and a deleted `app.gone` is test code, so a conftest reaching it

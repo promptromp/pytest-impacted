@@ -272,17 +272,22 @@ PLACEMENT_FILES = {
         "import pytest\nfrom testing.factories import Factory\n\n"
         "@pytest.fixture\ndef factory():\n    return Factory()\n"
     ),
-    "suite/test_one.py": "def test_one(factory):\n    assert factory\n",
-    "suite/test_two.py": "def test_two():\n    pass\n",
+    "suite/test_app.py": "import app\n\ndef test_app():\n    pass\n",
+    "suite/test_fixture.py": "def test_fixture(factory):\n    assert factory\n",
 }
 
 
-def test_a_type_only_import_the_option_keeps_reaches_but_does_not_place(make_git_project):
-    """``testing/factories.py``, outside both analysed directories, is test code: only a conftest imports it at
-    runtime, so an edit selects the conftest's directory. The ``__init__``'s type-only import of it is kept, as
-    every ``__init__``'s is, but may be no runtime import: it reaches the ``__init__``'s importers, and does not
-    make the module application code, whose conftest rule is opt-in (fewer tests)."""
+@pytest.mark.parametrize("flags", [(), (FLAG,)], ids=["default", "ignoring"])
+def test_what_an_init_keeps_counts_as_without_the_option(make_git_project, flags):
+    """The documented trade-off: an ``__init__``'s type-only import is kept exactly as without the option, so
+    ``testing/factories.py``, outside both analysed directories, is application code through it. An edit selects
+    the ``__init__``'s importers, and the conftest importing it is left to ``--impacted-conftest-imports``,
+    named in the report — with the option as without it."""
     project = make_git_project(PLACEMENT_FILES, INI)
     edit(project, "testing/factories.py")
 
-    run(project, FLAG).assert_outcomes(passed=2)
+    result = run(project, *flags)
+
+    result.assert_outcomes(passed=1, deselected=1)
+    result.stdout.fnmatch_lines(["*conftest.py*--impacted-conftest-imports*", "*suite/test_app.py::test_app PASSED*"])
+    assert run(project, *flags, "--impacted-conftest-imports").parseoutcomes()["passed"] == 2

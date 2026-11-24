@@ -9,7 +9,7 @@ from unittest.mock import patch
 import networkx as nx
 import pytest
 
-from pytest_impacted import _rust, graph, strategies
+from pytest_impacted import _rust, graph
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
 from pytest_impacted.traversal import _Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
 
@@ -2688,131 +2688,6 @@ def test_a_package_init_keeps_its_type_only_imports(tmp_path, init):
     (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / init).resolve())]
     assert dep_tree.has_edge("pkg.models", node)
     assert not dep_tree.has_edge("pkg.models", "pkg.plain")
-
-
-def test_a_type_only_import_the_option_keeps_only_reaches(tmp_path):
-    """An ``__init__``'s type-only import, and test code's, may be no runtime import: kept, it reaches the
-    importer, flagged ``type_only`` so it does not place what it reaches as application code (see
-    strategies._changes_by_role). A runtime import of the same module supersedes the flag."""
-    guarded = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.models import User\n"
-    write_files(
-        tmp_path,
-        {
-            "pkg/__init__.py": guarded + "def check(user: 'User') -> None: ...\n",
-            "pkg/sub/__init__.py": guarded + "import pkg.models\ndef check(user: 'User') -> None: ...\n",
-            "pkg/models.py": "class User: ...\n",
-            "pkg/core.py": "import shared\n",
-            "shared.py": guarded + "def check(user: 'User') -> None: ...\n",  # outside the walks: followed
-            "tests/test_a.py": guarded + "def test_a(user: 'User'): ...\n",
-        },
-    )
-    build = partial(graph.build_dep_tree, "pkg", tests_package="tests", root_dir=tmp_path)
-
-    ignoring, kept = build(ignore_type_checking_imports=True), build()
-
-    assert ignoring.edges["pkg.models", "pkg"].get("type_only") is True
-    assert ignoring.edges["pkg.models", "tests.test_a"].get("type_only") is True
-    assert ignoring.edges["pkg.models", "shared"].get("type_only") is True
-    assert not ignoring.edges["pkg.models", "pkg.sub"].get("type_only")
-    assert ignoring.graph.get("type_only_edges") is True
-    assert not any(data.get("type_only") for _, _, data in kept.edges(data=True))
-    assert not kept.graph.get("type_only_edges")
-
-
-def test_a_missing_module_only_a_kept_type_only_import_names_is_linked_to_reach_only(tmp_path):
-    """A module created (or deleted) after the graph was built is linked to its importers by
-    ``link_changed_files``: through a kept type-only import, flagged ``type_only`` like the graph's own edge."""
-    write_files(
-        tmp_path,
-        {
-            "pkg/__init__.py": (
-                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from shared.gone import Part\n"
-                "def f(part: 'Part') -> None: ...\n"
-            ),
-            "tests/helpers.py": "try:\n    import shared.gone\nexcept ImportError:\n    pass\n",
-            "tests/test_a.py": "import pkg\n",
-        },
-    )
-    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
-
-    (linked,) = graph.link_changed_files(["shared/gone.py"], dep_tree, root_dir=tmp_path)
-
-    assert dep_tree.edges[linked, "pkg"].get("type_only") is True
-    assert not dep_tree.edges[linked, "tests.helpers"].get("type_only")
-    assert dep_tree.graph.get("type_only_edges") is True
-
-
-def test_a_sure_import_of_the_module_supersedes_the_type_only_flag(tmp_path):
-    """A conftest keeps its type-only import of ``pkg.fixtures`` (flagged), and declares it a plugin too, which
-    pytest imports for certain: that edge is sure, whichever comes first."""
-    write_files(
-        tmp_path,
-        {
-            "pkg/__init__.py": "",
-            "pkg/fixtures.py": "class Fixture: ...\n",
-            "tests/conftest.py": (
-                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.fixtures import Fixture\n"
-                "pytest_plugins = ['pkg.fixtures']\ndef make(f: 'Fixture') -> None: ...\n"
-            ),
-        },
-    )
-
-    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
-
-    assert dep_tree.has_edge("pkg.fixtures", "tests.conftest")
-    assert not dep_tree.edges["pkg.fixtures", "tests.conftest"].get("type_only")
-
-
-def test_a_link_through_a_runtime_spelling_too_is_sure(tmp_path):
-    """``src/shared/gone.py`` is ``shared.gone`` from ``src/`` and ``src.shared.gone`` from the rootdir: an
-    importer naming it type-only one way and at runtime the other imports it at runtime, so the link is sure."""
-    write_files(
-        tmp_path,
-        {
-            "src/pkg/__init__.py": (
-                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import shared.gone\n"
-                "try:\n    import src.shared.gone\nexcept ImportError:\n    pass\n"
-                "def f(part: 'shared.gone.Part') -> None: ...\n"
-            ),
-            "src/pkg/typed.py": (
-                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import shared.gone\n"
-                "def f(part: 'shared.gone.Part') -> None: ...\n"
-            ),
-        },
-    )
-    dep_tree = graph.build_dep_tree("src/pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
-
-    (linked,) = graph.link_changed_files(["src/shared/gone.py"], dep_tree, root_dir=tmp_path)
-
-    assert dep_tree.has_edge(linked, "pkg") and not dep_tree.edges[linked, "pkg"].get("type_only")
-    assert "pkg.typed" not in dep_tree.successors(linked), "a plain module loses its type-only import"
-
-
-def test_a_link_through_a_sure_type_only_import_and_a_guessed_runtime_one_only_reaches(tmp_path):
-    """``src/`` holds an ``__init__.py``: ``src/shared/gone.py`` is ``src.shared.gone`` for sure, and
-    ``shared.gone`` only if ``src/`` is on ``sys.path`` (an assumed root, active: ``pkg.a`` imports ``pkg.b``
-    from there). The ``__init__`` imports the sure name only for a hint, the assumed one at runtime: no import
-    of it is both sure and runtime, so the link only reaches, as the edge to an existing file would."""
-    files = {
-        "src/__init__.py": "",
-        "src/pkg/__init__.py": (
-            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import src.shared.gone\n"
-            "try:\n    import shared.gone\nexcept ImportError:\n    pass\n"
-            "def f(part: 'src.shared.gone.Part') -> None: ...\n"
-        ),
-        "src/pkg/a.py": "import pkg.b\n",
-        "src/pkg/b.py": "",
-    }
-    write_files(tmp_path, files)
-    dep_tree = graph.build_dep_tree("src/pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
-
-    (linked,) = graph.link_changed_files(["src/shared/gone.py"], dep_tree, root_dir=tmp_path)
-
-    assert strategies._only_reaches(dep_tree.edges[linked, "src.pkg"])
-    write_files(tmp_path, {**files, "src/shared/__init__.py": "", "src/shared/gone.py": ""})
-    built = graph.build_dep_tree("src/pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
-    (node,) = [name for name in built if built.nodes[name]["path"] == str(tmp_path.resolve() / "src/shared/gone.py")]
-    assert strategies._only_reaches(built.edges[node, "src.pkg"])
 
 
 def test_a_cycle_an_init_closes_stays(tmp_path):
