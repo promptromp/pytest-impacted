@@ -134,7 +134,10 @@ def configure_logging(verbose: bool) -> None:
 @click.option(
     "--ignore-type-checking-imports/--no-ignore-type-checking-imports",
     default=False,
-    help="Leave the imports in an 'if TYPE_CHECKING:' block out of the dependency graph.",
+    help=(
+        "Leave the imports in an 'if TYPE_CHECKING:' block out of the dependency graph, "
+        + "except in a module that loads lazily (a module __getattr__, or one replaced in sys.modules)."
+    ),
 )
 @click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
 @click.pass_context

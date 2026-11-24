@@ -14,7 +14,13 @@ Separately, changes to dependency and test-config files (`uv.lock`, `requirement
 The philosophy is to **err on the side of caution**: false positives (running a test
 that did not need to run) are preferred over false negatives. Exceptions are deliberate,
 documented and opt-back-in-able — chiefly `--impacted-conftest-imports` (below); never
-add a new one silently.
+add a new one silently. `--impacted-ignore-type-checking-imports` is one only on request (off by
+default): an `if TYPE_CHECKING:` import never runs, but a module that loads lazily (a module-level
+`__getattr__`, PEP 562, or an assignment into `sys.modules`) imports at runtime what its type-only
+imports declare, so it keeps them (`parsing._loads_lazily`). A large typed library's `__init__`
+declares its exports that way: ignored, they lost tests, which only checking each dropped (module,
+test) pair against what the test file loads at collection showed — "every removal traces to a
+type-only import" passed. Over-matching the lazy markers only keeps edges; under-matching loses tests.
 
 ## Gotchas
 
@@ -368,7 +374,15 @@ moving it reinterprets an explicit `--module` (two review rounds oscillated on t
 changes which tests run under the `fast` extra. Known parity points: read with `utf-8-sig`
 so a BOM is not a syntax error, and scan `match`/`case` bodies.
 `test_parse_file_imports_matches_rust_backend` pins it and CI runs both backends across
-3.11–3.14 — change one backend, change the other.
+3.11–3.14 — change one backend, change the other. So are which `if` bodies are type-only (an
+`elif TYPE_CHECKING:` is a nested `If` in astroid's `orelse`, a clause with its own test in ruff's
+`elif_else_clauses`) and which modules load lazily (`_loads_lazily` / `loads_lazily`: the same
+module-level blocks, never a function or class body), each pinned by its own parity test.
+The extension is a separate distribution and the `fast` extra is unpinned, so an install may hold an
+older one: a new keyword to `parse_all_imports` defaults off and is passed only when set, and
+`_rust.py` probes the signature once at import (`RUST_IGNORES_TYPE_CHECKING`); `uses_rust` leaves
+the parsing to astroid when the extension cannot honour the options, and `backend=` in the header
+says so — never a TypeError, never an option dropped unseen.
 
 **Logging: every module that logs declares `logger = logging.getLogger(__name__)`.**
 Never call `logging.info(...)` and friends — those hit the root logger and are

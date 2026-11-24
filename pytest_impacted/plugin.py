@@ -238,7 +238,8 @@ def pytest_addoption(parser: Parser):
         dest="impacted_ignore_type_checking_imports",
         help=(
             "Leave the imports in an 'if TYPE_CHECKING:' block out of the dependency graph: they never run, "
-            + "but often close import cycles. Off by default, as a type checker, or code evaluating "
+            + "but often close import cycles. A module that loads lazily (a module-level __getattr__, or one "
+            + "replaced in sys.modules) keeps them. Off by default, as a type checker, or code evaluating "
             + "annotations, may still read the modules they name."
         ),
     )
