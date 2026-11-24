@@ -2671,6 +2671,45 @@ def test_only_application_code_loses_its_type_only_imports(tmp_path, importer):
     assert dep_tree.has_edge("pkg.models", node)
 
 
+@pytest.mark.parametrize("init", ["pkg/__init__.py", "pkg/sub/__init__.py"])
+def test_a_package_init_keeps_its_type_only_imports(tmp_path, init):
+    """``from pkg import User`` runs the package's ``__init__``, which may provide a name it declares under
+    ``if TYPE_CHECKING:`` at runtime, by a name it computes: a type hint in the same file does not rule that
+    out. A plain module with the same source still loses the import."""
+    guarded = (
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.models import User\n"
+        "def check(user: 'User') -> None: ...\n"
+    )
+    files = {"pkg/__init__.py": "", "pkg/sub/__init__.py": "", "pkg/models.py": "class User: ...\n"}
+    write_files(tmp_path, {**files, init: guarded, "pkg/plain.py": guarded})
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / init).resolve())]
+    assert dep_tree.has_edge("pkg.models", node)
+    assert not dep_tree.has_edge("pkg.models", "pkg.plain")
+
+
+def test_a_cycle_an_init_closes_stays(tmp_path):
+    """The price of keeping an ``__init__``'s type-only imports: a cycle one closes still ties the cycle
+    together. ``pkg/config.py`` imports the package at runtime; the ``__init__`` imports it only for a hint."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": (
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.config import Config\n"
+                "def configure(config: 'Config') -> None: ...\n"
+            ),
+            "pkg/config.py": "import pkg\nclass Config: ...\n",
+            "tests/test_pkg.py": "import pkg\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    assert "tests.test_pkg" in graph.reached_from(["pkg.config"], dep_tree)
+
+
 @pytest.mark.parametrize("importer", ["pkg/tests/test_a.py", "pkg/test_b.py", "pkg/tests/helpers_test.py"])
 def test_a_test_module_inside_the_package_keeps_its_type_only_imports(tmp_path, importer):
     """With no tests dir configured, tests inside the package are test code still: judged by their path, as the

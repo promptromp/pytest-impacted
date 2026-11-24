@@ -179,6 +179,20 @@ LAZY_INITS = {
         "    _module.__path__, _module.__spec__, _module.__file__ = __path__, __spec__, __file__\n"
         "    sys.modules[__name__] = _module\n"
     ),
+    # Loads by a name it computes, mentions ``Model`` in no string, and uses it in a type hint: to the rule, a
+    # type-only import (see test_type_only); kept because the file is a package's ``__init__``.
+    "computed_name_annotated": (
+        "from importlib import import_module\n"
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.models import Model\n"
+        "def __getattr__(name):\n"
+        "    if not name[:1].isupper():\n"
+        "        raise AttributeError(name)\n"
+        "    return getattr(import_module(f'app.{name.lower()}s'), name)\n"
+        "def build(cls: 'type[Model]') -> 'Model':\n"
+        "    return cls()\n"
+    ),
 }
 
 
@@ -243,3 +257,37 @@ def test_a_test_keeps_its_type_only_imports(make_git_project):
 
     result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines(["*suite/test_user.py::test_user PASSED*"])
+
+
+PLACEMENT_FILES = {
+    "app/__init__.py": (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from testing.factories import Factory\n"
+        "def make(factory: 'Factory') -> None: ...\n"
+    ),
+    "testing/__init__.py": "",
+    "testing/factories.py": "class Factory:\n    pass\n",
+    "suite/conftest.py": (
+        "import pytest\nfrom testing.factories import Factory\n\n"
+        "@pytest.fixture\ndef factory():\n    return Factory()\n"
+    ),
+    "suite/test_app.py": "import app\n\ndef test_app():\n    pass\n",
+    "suite/test_fixture.py": "def test_fixture(factory):\n    assert factory\n",
+}
+
+
+@pytest.mark.parametrize("flags", [(), (FLAG,)], ids=["default", "ignoring"])
+def test_what_an_init_keeps_counts_as_without_the_option(make_git_project, flags):
+    """The documented trade-off: an ``__init__``'s type-only import is kept exactly as without the option, so
+    ``testing/factories.py``, outside both analysed directories, is application code through it. An edit selects
+    the ``__init__``'s importers, and the conftest importing it is left to ``--impacted-conftest-imports``,
+    named in the report — with the option as without it."""
+    project = make_git_project(PLACEMENT_FILES, INI)
+    edit(project, "testing/factories.py")
+
+    result = run(project, *flags)
+
+    result.assert_outcomes(passed=1, deselected=1)
+    result.stdout.fnmatch_lines(["*conftest.py*--impacted-conftest-imports*", "*suite/test_app.py::test_app PASSED*"])
+    assert run(project, *flags, "--impacted-conftest-imports").parseoutcomes()["passed"] == 2

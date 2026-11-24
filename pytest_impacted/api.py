@@ -185,9 +185,9 @@ def get_impacted_tests(
     ``ValueError`` under ``-p no:python_path``: no entries then), or
     ``find_pytest_config(root).paths("pythonpath")`` from :mod:`pytest_impacted.ini`, or bare
     imports of the modules in those directories match nothing. ``ignore_type_checking_imports``
-    leaves the type-only imports out of the graph: those under ``if TYPE_CHECKING:`` whose names only
-    annotations use (see :mod:`pytest_impacted.type_only`); it shapes the graph, not the pipeline, so it
-    holds with an explicit ``strategy`` too.
+    leaves application code's type-only imports out of the graph: those under ``if TYPE_CHECKING:`` whose
+    names only annotations use (see :mod:`pytest_impacted.type_only`); test code and package ``__init__.py``
+    files keep theirs. It shapes the graph, not the pipeline, so it holds with an explicit ``strategy`` too.
 
     Returns ``None`` when nothing is impacted, and raises
     :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known
