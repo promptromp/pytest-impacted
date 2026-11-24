@@ -2742,6 +2742,52 @@ def test_a_missing_module_only_a_kept_type_only_import_names_is_linked_to_reach_
     assert dep_tree.graph.get("type_only_edges") is True
 
 
+def test_a_sure_import_of_the_module_supersedes_the_type_only_flag(tmp_path):
+    """A conftest keeps its type-only import of ``pkg.fixtures`` (flagged), and declares it a plugin too, which
+    pytest imports for certain: that edge is sure, whichever comes first."""
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/fixtures.py": "class Fixture: ...\n",
+            "tests/conftest.py": (
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.fixtures import Fixture\n"
+                "pytest_plugins = ['pkg.fixtures']\ndef make(f: 'Fixture') -> None: ...\n"
+            ),
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    assert dep_tree.has_edge("pkg.fixtures", "tests.conftest")
+    assert not dep_tree.edges["pkg.fixtures", "tests.conftest"].get("type_only")
+
+
+def test_a_link_through_a_runtime_spelling_too_is_sure(tmp_path):
+    """``src/shared/gone.py`` is ``shared.gone`` from ``src/`` and ``src.shared.gone`` from the rootdir: an
+    importer naming it type-only one way and at runtime the other imports it at runtime, so the link is sure."""
+    write_files(
+        tmp_path,
+        {
+            "src/pkg/__init__.py": (
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import shared.gone\n"
+                "try:\n    import src.shared.gone\nexcept ImportError:\n    pass\n"
+                "def f(part: 'shared.gone.Part') -> None: ...\n"
+            ),
+            "src/pkg/typed.py": (
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import shared.gone\n"
+                "def f(part: 'shared.gone.Part') -> None: ...\n"
+            ),
+        },
+    )
+    dep_tree = graph.build_dep_tree("src/pkg", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    (linked,) = graph.link_changed_files(["src/shared/gone.py"], dep_tree, root_dir=tmp_path)
+
+    assert dep_tree.has_edge(linked, "pkg") and not dep_tree.edges[linked, "pkg"].get("type_only")
+    assert "pkg.typed" not in dep_tree.successors(linked), "a plain module loses its type-only import"
+
+
 def test_a_cycle_an_init_closes_stays(tmp_path):
     """The price of keeping an ``__init__``'s type-only imports: a cycle one closes still ties the cycle
     together. ``pkg/config.py`` imports the package at runtime; the ``__init__`` imports it only for a hint."""
