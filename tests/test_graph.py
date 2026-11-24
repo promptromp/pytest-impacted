@@ -2529,6 +2529,7 @@ TYPE_ONLY = {
         "    import pkg.gone\n"
         "def f(x: 'X') -> int:\n"
         "    return 1\n"
+        "def g(y: 'shared_types.Alias', z: 'pkg.gone.Part') -> None: ...\n"
     ),
     "pkg/b.py": "class X: ...\n",
     "shared_types.py": "",
@@ -2568,7 +2569,12 @@ def test_a_type_only_import_closing_a_cycle_no_longer_ties_the_cycle_together(tm
         {
             "pkg/__init__.py": "",
             "pkg/a.py": "from pkg.b import helper\n",
-            "pkg/b.py": "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.a import Model\n",
+            "pkg/b.py": (
+                "from typing import TYPE_CHECKING\n"
+                "if TYPE_CHECKING:\n"
+                "    from pkg.a import Model\n"
+                "def describe(model: 'Model') -> str: ...\n"
+            ),
             "tests/test_a.py": "import pkg.a\n",
             "tests/test_b.py": "import pkg.b\n",
         },
@@ -2592,7 +2598,7 @@ def test_an_extension_predating_the_option_leaves_the_parsing_to_python(tmp_path
         return {name: graph.parse_file_imports(path, name, is_package) for path, name, is_package in modules}
 
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
-    monkeypatch.setattr(_rust, "RUST_IGNORES_TYPE_CHECKING", False)
+    monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", False)
     monkeypatch.setattr(_rust, "rust_parse_all_imports", parse_all_imports)
     write_files(tmp_path, TYPE_ONLY)
     build = partial(graph.build_dep_tree, "pkg", tests_package="tests", root_dir=tmp_path)
@@ -2605,16 +2611,38 @@ def test_an_extension_predating_the_option_leaves_the_parsing_to_python(tmp_path
     assert calls, "without the option, the older extension still parses"
 
 
-def test_the_option_probe_reads_the_extension_s_signature():
-    """Resolved once, at import: the extension says what it accepts through its signature."""
-    assert _rust._accepts(lambda modules, *, ignore_type_checking_imports=False: None, "ignore_type_checking_imports")
-    assert not _rust._accepts(lambda modules: None, "ignore_type_checking_imports")
-    assert not _rust._accepts(len, "ignore_type_checking_imports")
-    assert not _rust._accepts(object(), "ignore_type_checking_imports")  # no signature to read
-
-
-def test_the_installed_extension_accepts_the_option():
+def test_the_installed_extension_splits_type_only_imports():
     pytest.importorskip("pytest_impacted_rs")
 
-    assert _rust.RUST_IGNORES_TYPE_CHECKING is True
+    assert _rust.RUST_SPLITS_TYPE_ONLY is True
     assert _rust.uses_rust(ignore_type_checking_imports=True)
+
+
+def test_a_type_only_import_is_still_evidence_of_how_the_project_imports(tmp_path):
+    """Ignoring type-only imports removes their edges and nothing else. ``src/`` holds an ``__init__.py``,
+    so it is an assumed root, looked up only once an import spells the package from there: a type-only
+    ``from app.a import X`` does, and ``import shared`` beside it must still find ``src/shared.py``."""
+    write_files(
+        tmp_path,
+        {
+            "src/__init__.py": "",
+            "src/app/__init__.py": "",
+            "src/app/a.py": "class X: ...\n",
+            "src/app/b.py": (
+                "from typing import TYPE_CHECKING\n"
+                "if TYPE_CHECKING:\n"
+                "    from app.a import X\n"
+                "import shared\n"
+                "def f(x: 'X') -> None: ...\n"
+            ),
+            "src/shared.py": "",
+            "tests/test_b.py": "import src.app.b\n",  # so only the type-only import spells app from src/
+        },
+    )
+    build = partial(graph.build_dep_tree, "src/app", tests_package="tests", root_dir=tmp_path)
+
+    kept, ignored = build(), build(ignore_type_checking_imports=True)
+
+    assert [edge for edge in kept.out_edges("src.shared")] == [edge for edge in ignored.out_edges("src.shared")]
+    assert ignored.out_edges("src.shared"), "the runtime import of shared is an edge"
+    assert not ignored.has_edge("src.app.a", "src.app.b") and kept.has_edge("src.app.a", "src.app.b")

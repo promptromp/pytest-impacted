@@ -16,6 +16,7 @@ from pytest_impacted.parsing import (
     is_test_module,
     parse_file_imports,
     parse_pytest_plugins,
+    split_file_imports,
 )
 from pytest_impacted.traversal import (
     LAST_RESORT_PREFIX,
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 def _parse_all_module_imports(
     submodules: dict[str, str], ignore_type_checking_imports: bool = False
-) -> dict[str, list[str]]:
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Parse imports for all discovered submodules (see :func:`_parse_imports`).
 
     A conftest with no free name is keyed by its last resort (see
@@ -54,32 +55,43 @@ def _parse_all_module_imports(
     bases = {import_base(name): name for name in submodules if name.startswith(LAST_RESORT_PREFIX)}
     if not bases:
         return parse(submodules)
-    result = parse({name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)})
-    parsed = parse({base: submodules[name] for base, name in bases.items()})
-    return result | {bases[base]: imports for base, imports in parsed.items()}
+    runtime, type_only = parse(
+        {name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)}
+    )
+    based_runtime, based_type_only = parse({base: submodules[name] for base, name in bases.items()})
+    return (
+        runtime | {bases[base]: imports for base, imports in based_runtime.items()},
+        type_only | {bases[base]: imports for base, imports in based_type_only.items()},
+    )
 
 
-def _parse_imports(submodules: dict[str, str], ignore_type_checking_imports: bool = False) -> dict[str, list[str]]:
-    """Parse the imports of each ``{name: path}``, resolving relative imports from *name*.
+def _parse_imports(
+    submodules: dict[str, str], ignore_type_checking_imports: bool = False
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """The runtime and the type-only import candidates of each ``{name: path}``, relative imports resolved from *name*.
 
-    Uses the Rust extension (parallel batch via rayon) when available and new enough for the
-    options (:func:`~pytest_impacted._rust.uses_rust`), falling back to sequential astroid parsing.
-    *ignore_type_checking_imports* leaves out the imports under ``if TYPE_CHECKING:``.
+    Every candidate is a runtime one unless *ignore_type_checking_imports* asks for the type-only ones
+    (see :func:`~pytest_impacted.parsing.split_file_imports`). Uses the Rust extension (parallel batch via
+    rayon) when available and new enough for the options (:func:`~pytest_impacted._rust.uses_rust`),
+    falling back to sequential astroid parsing.
     """
     if _rust.uses_rust(ignore_type_checking_imports):
         modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
-        # Passed only when set: an extension older than the option parses as it did without it.
-        options = {"ignore_type_checking_imports": True} if ignore_type_checking_imports else {}
-        return _rust.rust_parse_all_imports(modules_info, **options)
+        if not ignore_type_checking_imports:
+            return _rust.rust_parse_all_imports(modules_info), {}
+        split = _rust.rust_parse_all_imports_split(modules_info)
+        return {name: found for name, (found, _) in split.items()}, {name: typed for name, (_, typed) in split.items()}
 
-    result: dict[str, list[str]] = {}
+    runtime: dict[str, list[str]] = {}
+    type_only: dict[str, list[str]] = {}
     for name, file_path in submodules.items():
         logger.debug("Processing submodule: %s", name)
         is_pkg = file_path.endswith("__init__.py")
-        result[name] = parse_file_imports(
-            file_path, name, is_package=is_pkg, ignore_type_checking_imports=ignore_type_checking_imports
-        )
-    return result
+        if ignore_type_checking_imports:
+            runtime[name], type_only[name] = split_file_imports(file_path, name, is_package=is_pkg)
+        else:
+            runtime[name] = parse_file_imports(file_path, name, is_package=is_pkg)
+    return runtime, type_only
 
 
 def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
@@ -762,13 +774,15 @@ def _parse_project(
     """
     declarations = cache(parse_pytest_plugins)
     parse = partial(_parse_all_module_imports, ignore_type_checking_imports=ignore_type_checking_imports)
-    imports: dict[str, list[str]] = {}
     pending = dict(linker.modules)
-    # What the walked modules import is the evidence for which assumed roots are on sys.path.
-    imports |= parse(pending)
-    linker.activate(candidate for candidates in imports.values() for candidate in candidates)
+    imports, type_only = parse(pending)
+    # What the walked modules import is the evidence for which assumed roots are on sys.path — a type-only
+    # import too, though it is no edge: ignoring type-only imports removes their edges, and nothing else.
+    linker.activate(
+        candidate for found in (imports, type_only) for candidates in found.values() for candidate in candidates
+    )
     while True:
-        imports |= parse({name: path for name, path in pending.items() if name not in imports})
+        imports |= parse({name: path for name, path in pending.items() if name not in imports})[0]
         for name, path in pending.items():
             for candidate in imports[name]:
                 linker.targets(candidate)

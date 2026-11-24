@@ -9,36 +9,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import astroid
-from astroid.nodes import (
-    AnnAssign,
-    Assign,
-    AssignAttr,
-    AssignName,
-    Attribute,
-    Const,
-    DelAttr,
-    ExceptHandler,
-    For,
-    FunctionDef,
-    Global,
-    If,
-    Import,
-    ImportFrom,
-    JoinedStr,
-    Keyword,
-    List,
-    Match,
-    MatchCase,
-    Module,
-    Name,
-    NodeNG,
-    Starred,
-    Try,
-    TryStar,
-    Tuple,
-    While,
-    With,
-)
+from astroid.nodes import Import, ImportFrom
+
+from pytest_impacted.type_only import BLOCK_FIELDS, type_only_imports
 
 
 logger = logging.getLogger(__name__)
@@ -161,9 +134,8 @@ def parse_file_imports(
         file_path: Absolute path to the ``.py`` file.
         module_name: Fully-qualified module name (e.g. ``"pkg.sub.mod"``).
         is_package: ``True`` when the file is an ``__init__.py``.
-        ignore_type_checking_imports: Leave out the imports in the body of an ``if TYPE_CHECKING:``
-            (see :func:`_under_type_checking`), which never run — unless the module loads lazily
-            (see :func:`_loads_lazily`).
+        ignore_type_checking_imports: Leave out the type-only imports, those under ``if TYPE_CHECKING:``
+            whose names only annotations use (see :mod:`pytest_impacted.type_only`).
 
     Returns:
         Sorted list of *candidate* absolute module names. ``from pkg import
@@ -172,12 +144,26 @@ def parse_file_imports(
         callers map them through the graph's aliases and keep those that are nodes;
         :func:`~pytest_impacted.graph.build_dep_tree` also looks the rest up on disk.
     """
+    runtime, _ = split_file_imports(file_path, module_name, is_package, find_type_only=ignore_type_checking_imports)
+    return runtime
+
+
+def split_file_imports(
+    file_path: str, module_name: str, is_package: bool = False, *, find_type_only: bool = True
+) -> tuple[list[str], list[str]]:
+    """The candidates of :func:`parse_file_imports`, split into runtime and type-only ones.
+
+    The type-only ones come from type-only imports (see :mod:`pytest_impacted.type_only`) and no other
+    import; with *find_type_only* false, every candidate is a runtime one. The graph links the runtime ones
+    alone, but counts both as evidence of how the project imports its modules. Mirrors
+    ``parse_file_imports_core`` in the Rust backend.
+    """
     source = read_source(file_path)
     if source is None:
         logger.error("Error reading file %s", file_path)
-        return []
+        return [], []
     if not source.strip():
-        return []
+        return [], []
 
     package = _package_of(module_name, is_package)
 
@@ -186,116 +172,14 @@ def parse_file_imports(
             tree = astroid.parse(source)
     except astroid.exceptions.AstroidSyntaxError:
         logger.warning("Syntax error while parsing %s", file_path)
-        return []
+        return [], []
 
-    ignore = ignore_type_checking_imports and not _loads_lazily(tree)
-    typing_names = _bound_to(tree, ("typing", "typing_extensions")) if ignore else frozenset()
-    imports: set[str] = set()
+    type_only = {id(node) for node in type_only_imports(tree)} if find_type_only else set()
+    runtime: set[str] = set()
+    typed: set[str] = set()
     for node in tree.nodes_of_class((Import, ImportFrom)):
-        if not (ignore and _under_type_checking(node, typing_names)):
-            imports.update(_extract_imports_from_node(node, package))
-
-    return sorted(imports)
-
-
-def _bound_to(tree: Module, modules: tuple[str, ...]) -> frozenset[str]:
-    """The names *modules* go by in *tree*: their own, and each ``import <module> as X`` anywhere in it."""
-    aliases = (alias or name for node in tree.nodes_of_class(Import) for name, alias in node.names if name in modules)
-    return frozenset((*modules, *aliases))
-
-
-def _under_type_checking(node: NodeNG, typing_names: frozenset[str]) -> bool:
-    """Whether *node* sits in the body of an ``if TYPE_CHECKING:``, which is false at runtime (PEP 484).
-
-    The test must be the name ``TYPE_CHECKING`` alone, or that attribute of ``typing`` or ``typing_extensions``
-    (*typing_names*, their aliases included: ``t.TYPE_CHECKING`` after ``import typing as t``). Anything else may
-    run: an ``else``, ``not TYPE_CHECKING``, ``TYPE_CHECKING or X``, an alias of the name, another object's
-    ``TYPE_CHECKING`` (a project's flag may be true). An ``elif TYPE_CHECKING:`` is an ``if`` nested in the
-    ``orelse``, so it counts too. Mirrors ``is_type_checking`` in the Rust backend.
-    """
-    child = node
-    for ancestor in node.node_ancestors():
-        if (
-            isinstance(ancestor, If)
-            and _is_type_checking(ancestor.test, typing_names)
-            and any(child is s for s in ancestor.body)
-        ):
-            return True
-        child = ancestor
-    return False
-
-
-def _is_type_checking(test: NodeNG, typing_names: frozenset[str]) -> bool:
-    if isinstance(test, Attribute):
-        return test.attrname == "TYPE_CHECKING" and isinstance(test.expr, Name) and test.expr.name in typing_names
-    return isinstance(test, Name) and test.name == "TYPE_CHECKING"
-
-
-_ASTROID_BLOCKS = (If, Try, TryStar, With, ExceptHandler, Match, MatchCase, For, While)
-_LAZY_SIGNALS = (Global, ImportFrom, Const, Keyword, Attribute, AssignAttr, DelAttr)
-
-
-def _loads_lazily(tree: Module) -> bool:
-    """Whether the module may load names lazily, at runtime, from what its ``if TYPE_CHECKING:`` imports declare.
-
-    A module ``__getattr__`` (PEP 562) runs ``import_module`` when ``from pkg import Thing`` asks, and so does a
-    module replaced in ``sys.modules`` (``sys.modules[__name__] = _LazyModule(...)``) or given a new class. Each
-    is spelt many ways, so anything that may do either counts, since over-matching only keeps edges:
-    ``__getattr__`` bound at module level (``def``, assigned, imported; in any block but a function or class
-    body), declared ``global``, set or deleted as an attribute, passed as a keyword or named in a string
-    (``globals()["__getattr__"]``); ``sys.modules`` mentioned at all (``import sys as s`` too), or imported
-    (``from sys import modules``); a star import, which may bring a ``__getattr__``. A class's ``__getattr__``,
-    or reading one, loads nothing. Mirrors ``loads_lazily`` in the Rust backend.
-    """
-    if any(_marks_lazy(stmt) for stmt in _astroid_module_statements(tree.body)):
-        return True
-    sys_names = _bound_to(tree, ("sys",))
-    return any(_signals_lazy(node, sys_names) for node in tree.nodes_of_class(_LAZY_SIGNALS))
-
-
-def _astroid_module_statements(body: list) -> Iterator[NodeNG]:
-    """:func:`_module_level_statements` for astroid's tree, whose blocks have the same fields."""
-    for stmt in body:
-        yield stmt
-        if isinstance(stmt, _ASTROID_BLOCKS):
-            for field in _BLOCK_FIELDS:
-                yield from _astroid_module_statements(getattr(stmt, field, None) or [])
-
-
-def _marks_lazy(stmt: NodeNG) -> bool:
-    """Whether a module-level statement binds ``__getattr__``."""
-    if isinstance(stmt, FunctionDef):  # AsyncFunctionDef too, its subclass
-        return stmt.name == "__getattr__"
-    if isinstance(stmt, ImportFrom):
-        return any((alias or name) == "__getattr__" for name, alias in stmt.names)
-    targets = stmt.targets if isinstance(stmt, Assign) else [stmt.target] if isinstance(stmt, AnnAssign) else []
-    return any(_binds_getattr(target) for target in targets)
-
-
-def _binds_getattr(target: NodeNG) -> bool:
-    if isinstance(target, AssignName):
-        return target.name == "__getattr__"
-    if isinstance(target, Tuple | List):
-        return any(_binds_getattr(element) for element in target.elts)
-    return isinstance(target, Starred) and _binds_getattr(target.value)
-
-
-def _signals_lazy(node: NodeNG, sys_names: frozenset[str]) -> bool:
-    """Whether a node anywhere in the module may install a module ``__getattr__`` or replace the module."""
-    if isinstance(node, Global):
-        return "__getattr__" in node.names
-    if isinstance(node, ImportFrom):
-        return any(
-            name == "*" or (node.modname == "sys" and not node.level and name == "modules") for name, _ in node.names
-        )
-    if isinstance(node, Const):  # an f-string's text is no string of its own, nor is it to ruff
-        return node.value == "__getattr__" and not isinstance(node.parent, JoinedStr)
-    if isinstance(node, Keyword):
-        return node.arg == "__getattr__"
-    # Attribute (read), AssignAttr or DelAttr: ``sys.modules`` used at all, or a ``__getattr__`` set or deleted.
-    if node.attrname == "modules":
-        return isinstance(node.expr, Name) and node.expr.name in sys_names
-    return node.attrname == "__getattr__" and not isinstance(node, Attribute)
+        (typed if id(node) in type_only else runtime).update(_extract_imports_from_node(node, package))
+    return sorted(runtime), sorted(typed - runtime)
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:
@@ -322,7 +206,6 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
         return []
 
 
-_BLOCK_FIELDS = ("body", "cases", "handlers", "orelse", "finalbody")  # source order
 _BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.ExceptHandler, ast.Match, ast.match_case, ast.For, ast.While)
 
 
@@ -332,7 +215,7 @@ def _module_level_statements(body: list) -> Iterator[ast.stmt]:
         if isinstance(stmt, ast.stmt):
             yield stmt
         if isinstance(stmt, _BLOCKS):
-            for field in _BLOCK_FIELDS:
+            for field in BLOCK_FIELDS:
                 yield from _module_level_statements(getattr(stmt, field, []))
 
 
