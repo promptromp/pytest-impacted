@@ -7,6 +7,7 @@ pure-Python astroid-based implementation is used as a fallback.
 
 __all__ = [
     "RUST_AVAILABLE",
+    "RUST_LITERAL_DYNAMIC_IMPORTS",
     "RUST_SPLITS_TYPE_ONLY",
     "outdated_for",
     "rust_parse_all_imports",
@@ -34,9 +35,17 @@ except ImportError:
     RUST_SPLITS_TYPE_ONLY = False
 
 
+try:
+    from pytest_impacted_rs import LITERAL_DYNAMIC_IMPORTS as RUST_LITERAL_DYNAMIC_IMPORTS
+except ImportError:
+    RUST_LITERAL_DYNAMIC_IMPORTS = False
+
+
 def uses_rust(ignore_type_checking_imports: bool = False) -> bool:
     """Whether the Rust extension parses with these options: installed, and new enough for them."""
-    return RUST_AVAILABLE and (RUST_SPLITS_TYPE_ONLY or not ignore_type_checking_imports)
+    return (
+        RUST_AVAILABLE and RUST_LITERAL_DYNAMIC_IMPORTS and (RUST_SPLITS_TYPE_ONLY or not ignore_type_checking_imports)
+    )
 
 
 def outdated_for(ignore_type_checking_imports: bool) -> str | None:
@@ -45,6 +54,11 @@ def outdated_for(ignore_type_checking_imports: bool) -> str | None:
     The ``fast`` extra stays unpinned: the extension's version is stamped from the release tag, and a
     development build is ``0.1.0``, which a pin would refuse. So it is said instead, by whoever reports.
     """
+    if RUST_AVAILABLE and not RUST_LITERAL_DYNAMIC_IMPORTS:
+        return (
+            "the installed pytest-impacted-rs predates literal dynamic imports; "
+            "using the Python parser. Upgrade pytest-impacted-rs."
+        )
     if RUST_AVAILABLE and not uses_rust(ignore_type_checking_imports):
         return (
             "the installed pytest-impacted-rs predates ignoring type-only imports, so the slower pure-Python "

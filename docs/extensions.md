@@ -507,3 +507,7 @@ def test_extension_discovered_by_plugin(mock_eps, pytester):
 ```
 
 See `tests/test_extensions.py` and `tests/test_extension_integration.py` in the pytest-impacted repo for the canonical patterns used by the built-in test suite.
+
+Literal dynamic imports are native graph edges, like import statements; extensions
+receive them in `dep_tree`. Computed loader targets still need explicit mapping or
+a domain-specific strategy. No parsing API signature changes are required.

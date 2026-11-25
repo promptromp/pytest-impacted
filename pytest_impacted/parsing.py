@@ -11,6 +11,7 @@ from pathlib import Path
 import astroid
 from astroid.nodes import Import, ImportFrom
 
+from pytest_impacted.dynamic_imports import literal_imports
 from pytest_impacted.type_only import BLOCK_FIELDS, type_only_imports
 
 
@@ -175,7 +176,7 @@ def split_file_imports(
         return [], []
 
     type_only = {id(node) for node in type_only_imports(tree)} if find_type_only else set()
-    runtime: set[str] = set()
+    runtime: set[str] = literal_imports(tree, package)
     typed: set[str] = set()
     for node in tree.nodes_of_class((Import, ImportFrom)):
         (typed if id(node) in type_only else runtime).update(_extract_imports_from_node(node, package))

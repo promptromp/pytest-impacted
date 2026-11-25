@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 
+mod dynamic_imports;
 mod type_only;
 
 /// Resolve a relative import to its absolute module path.
@@ -227,6 +228,15 @@ fn parse_file_imports_core(
         typed: HashSet::new(),
     };
     collect_imports_from_stmts(&suite, &mut walk);
+    let package = if is_package {
+        module_name
+    } else {
+        module_name
+            .rsplit_once('.')
+            .map_or("", |(parent, _)| parent)
+    };
+    walk.runtime
+        .extend(dynamic_imports::literal_imports(&suite, package));
 
     let mut runtime: Vec<String> = walk.runtime.iter().cloned().collect();
     runtime.sort();
@@ -294,6 +304,7 @@ fn parse_all_imports_split(
 /// Python module definition.
 #[pymodule]
 fn pytest_impacted_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("LITERAL_DYNAMIC_IMPORTS", true)?;
     m.add_function(wrap_pyfunction!(parse_file_imports, m)?)?;
     m.add_function(wrap_pyfunction!(parse_all_imports, m)?)?;
     m.add_function(wrap_pyfunction!(parse_all_imports_split, m)?)?;

@@ -553,3 +553,9 @@ pip install maturin && cd rust && maturin develop --release
 
 Python 3.11+; CI matrix covers 3.11–3.14 against both the pure-Python and `fast`
 (Rust) backends.
+
+**Literal loader calls are import candidates.** `dynamic_imports.py` and
+`rust/src/dynamic_imports.rs` mirror literal `importlib.import_module` / `__import__`
+handling. Alias bindings union across scopes, never last-binding-wins. Never evaluate
+computed names or import project code. The extension advertises `LITERAL_DYNAMIC_IMPORTS`;
+older extensions fall back to Python with a notice rather than silently missing edges.

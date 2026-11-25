@@ -2598,6 +2598,7 @@ def test_an_extension_predating_the_option_leaves_the_parsing_to_python(tmp_path
         return {name: graph.parse_file_imports(path, name, is_package) for path, name, is_package in modules}
 
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
+    monkeypatch.setattr(_rust, "RUST_LITERAL_DYNAMIC_IMPORTS", True)
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", False)
     monkeypatch.setattr(_rust, "rust_parse_all_imports", parse_all_imports)
     write_files(tmp_path, TYPE_ONLY)

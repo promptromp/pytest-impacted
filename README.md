@@ -318,3 +318,9 @@ uv run python -m benchmarks.bench_parsing
 ## License
 
 [MIT](https://github.com/promptromp/pytest-impacted/blob/main/LICENSE)
+
+### Literal dynamic imports
+
+Dependency inference also follows literal `importlib.import_module("app.module")`
+and `__import__("app.module")` calls, including imported aliases. Computed module
+names are not evaluated; declare those dependencies with `--impacted-map` when needed.

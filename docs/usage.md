@@ -487,3 +487,16 @@ python -m benchmarks.bench_parsing --module my_package --tests-dir tests
 
 !!! note
     The Rust extension is **completely optional**. When not installed, the pure-Python (astroid) implementation is used automatically. Apart from the grammar difference above, both modes select the same tests.
+
+## Literal dynamic imports
+
+The import graph includes literal `importlib.import_module` and builtin `__import__`
+calls, including module/function aliases. Relative `import_module` names require a
+literal package argument or `__package__`; literal `__import__` list/tuple from-lists add candidate
+submodules. Aliases shared by different scopes are conservatively combined. No
+application code executes during analysis.
+
+Computed names, computed from-lists, and relative `__import__` calls are not inferred.
+Use explicit file mappings (`--impacted-map`) for dependencies the source cannot
+identify. An older Rust extension lacking literal-import support falls back to
+Python parsing with a notice; upgrade `pytest-impacted-rs` to restore acceleration.

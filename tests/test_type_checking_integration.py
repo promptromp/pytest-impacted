@@ -220,6 +220,7 @@ def test_a_lazily_loading_package_keeps_its_type_only_imports(make_git_project, 
 def test_the_cli_warns_when_an_older_extension_leaves_the_parsing_to_python(project, monkeypatch):
     """An older pytest-impacted-rs cannot leave type-only imports out: the slower parser does, and says so."""
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
+    monkeypatch.setattr(_rust, "RUST_LITERAL_DYNAMIC_IMPORTS", True)
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", False)
     edit(project, "app/b.py")
 

@@ -115,6 +115,7 @@ def test_the_header_names_the_parser_the_options_leave(
     """An installed pytest-impacted-rs older than the option leaves the parsing to astroid, many times slower
     on a large project: the header warns, as it does when git is missing (the controller writes it)."""
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", available)
+    monkeypatch.setattr(_rust, "RUST_LITERAL_DYNAMIC_IMPORTS", True)
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", accepts)
     monkeypatch.setattr(pytestconfig.option, "impacted", True)
     monkeypatch.setattr(pytestconfig.option, "impacted_ignore_type_checking_imports", ignore)
