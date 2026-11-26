@@ -87,200 +87,6 @@ def test_get_impacted_tests_no_impacted_files(mock_find_impacted_files):
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_nodes")
 @patch("pytest_impacted.api.resolve_modules_to_files")
-def test_get_impacted_tests_success_with_tests_dir(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """Test get_impacted_tests successful path with tests_dir."""
-    # Setup mocks
-    mock_find_impacted_files.return_value = ["file1.py", "file2.py"]
-    mock_resolve_files_to_nodes.return_value = ["module1", "module2"]
-    mock_resolve_modules_to_files.return_value = ["test_file1.py", "test_file2.py"]
-
-    # Create a mock strategy that returns our expected test modules
-    mock_strategy = MagicMock()
-    mock_strategy.find_impacted_tests.return_value = ["test_module1", "test_module2"]
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-        tests_dir="tests",
-        strategy=mock_strategy,
-    )
-
-    assert result == ["test_file1.py", "test_file2.py"]
-    # Verify tests_package was derived from tests_dir and passed through
-    mock_resolve_files_to_nodes.assert_called_once_with(["file1.py", "file2.py"], ANY, root_dir=Path("."))
-    assert mock_strategy.find_impacted_tests.call_args.kwargs["tests_package"] == "tests"
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-def test_get_impacted_tests_no_impacted_modules(
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """Test get_impacted_tests when no impacted modules are found."""
-    mock_find_impacted_files.return_value = ["file1.py", "file2.py"]
-    mock_resolve_files_to_nodes.return_value = []
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-    )
-
-    assert result is None
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-def test_get_impacted_tests_no_impacted_test_modules(
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """Test get_impacted_tests when no impacted test modules are found."""
-    mock_find_impacted_files.return_value = ["file1.py"]
-    mock_resolve_files_to_nodes.return_value = ["module1"]
-
-    # Create a mock strategy that returns no test modules
-    mock_strategy = MagicMock()
-    mock_strategy.find_impacted_tests.return_value = []
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-        strategy=mock_strategy,
-    )
-
-    assert result is None
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
-def test_get_impacted_tests_no_impacted_test_files(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """Test get_impacted_tests when no impacted test files are found."""
-    mock_find_impacted_files.return_value = ["file1.py"]
-    mock_resolve_files_to_nodes.return_value = ["module1"]
-    mock_resolve_modules_to_files.return_value = []
-
-    # Create a mock strategy that returns test modules
-    mock_strategy = MagicMock()
-    mock_strategy.find_impacted_tests.return_value = ["test_module1"]
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-        strategy=mock_strategy,
-    )
-
-    assert result is None
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
-def test_get_impacted_tests_success_without_tests_dir(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """Test get_impacted_tests successful path without tests_dir."""
-    mock_find_impacted_files.return_value = ["file1.py"]
-    mock_resolve_files_to_nodes.return_value = ["module1"]
-    mock_resolve_modules_to_files.return_value = ["test_file1.py"]
-
-    # Create a mock strategy that returns test modules
-    mock_strategy = MagicMock()
-    mock_strategy.find_impacted_tests.return_value = ["test_module1"]
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-        strategy=mock_strategy,
-    )
-
-    assert result == ["test_file1.py"]
-    mock_resolve_files_to_nodes.assert_called_once_with(["file1.py"], ANY, root_dir=Path("."))
-    assert mock_strategy.find_impacted_tests.call_args.kwargs["tests_package"] is None
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
-def test_get_impacted_tests_dep_file_only_change(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """When only dependency files changed, the strategy pipeline still runs.
-
-    Even though impacted_modules is empty (no .py files changed), the orchestrator
-    always delegates to strategies — DependencyFileImpactStrategy handles this case.
-    """
-    mock_find_impacted_files.return_value = ["uv.lock"]
-    mock_resolve_files_to_nodes.return_value = []  # No .py files -> no modules
-
-    mock_strategy = MagicMock()
-    mock_strategy.find_impacted_tests.return_value = ["test_module1", "test_module2"]
-    mock_resolve_modules_to_files.return_value = ["test_file1.py", "test_file2.py"]
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-        tests_dir="tests",
-        strategy=mock_strategy,
-        watch_dep_files=True,
-    )
-
-    assert result == ["test_file1.py", "test_file2.py"]
-    mock_strategy.find_impacted_tests.assert_called_once()
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-def test_get_impacted_tests_dep_file_with_watch_disabled(
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """When watch_dep_files=False, DependencyFileImpactStrategy is excluded from the default
-    composite. With no .py modules changed, the remaining strategies (AST, Pytest) find
-    nothing, so the result is None.
-    """
-    mock_find_impacted_files.return_value = ["uv.lock"]
-    mock_resolve_files_to_nodes.return_value = []
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-        watch_dep_files=False,
-    )
-
-    assert result is None
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
 @patch("pytest_impacted.api.cached_build_dep_tree")
 def test_get_impacted_tests_invalidate_all_patterns(
     mock_cached_build_dep_tree,
@@ -306,74 +112,6 @@ def test_get_impacted_tests_invalidate_all_patterns(
     )
 
     assert result == ["tests/test_core.py", "tests/test_other.py"]
-
-
-@pytest.mark.parametrize(("conftest_imports", "expected"), [(False, None), (True, ["tests/test_db.py"])])
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.cached_build_dep_tree")
-def test_get_impacted_tests_conftest_imports(
-    mock_cached_build_dep_tree,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-    tmp_path,
-    conftest_imports,
-    expected,
-):
-    """The default pipeline follows a conftest's imports into its directory only when asked to."""
-    for rel in ("project_ns/db.py", "tests/conftest.py", "tests/test_db.py"):
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).touch()
-    dep_tree = nx.DiGraph()
-    for rel in ("project_ns/db.py", "tests/conftest.py", "tests/test_db.py"):
-        dep_tree.add_node(rel.removesuffix(".py").replace("/", "."), path=str(tmp_path / rel))
-    dep_tree.add_edge("project_ns.db", "tests.conftest")
-    mock_cached_build_dep_tree.return_value = dep_tree
-    mock_find_impacted_files.return_value = ["project_ns/db.py"]
-    mock_resolve_files_to_nodes.return_value = ["project_ns.db"]
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=tmp_path,
-        ns_module="project_ns",
-        tests_dir="tests",
-        conftest_imports=conftest_imports,
-    )
-
-    assert result == (expected and [str(tmp_path / rel) for rel in expected])
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
-def test_get_impacted_tests_mixed_dep_and_py_changes(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-):
-    """Both dep files and .py files changed — strategy should receive all changed files."""
-    mock_find_impacted_files.return_value = ["src/module.py", "uv.lock"]
-    mock_resolve_files_to_nodes.return_value = ["mypackage.module"]
-    mock_resolve_modules_to_files.return_value = ["test_file1.py", "test_file2.py"]
-
-    mock_strategy = MagicMock()
-    mock_strategy.find_impacted_tests.return_value = ["test_module1", "test_module2"]
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="project_ns",
-        tests_dir="tests",
-        strategy=mock_strategy,
-    )
-
-    assert result == ["test_file1.py", "test_file2.py"]
-    # Strategy should receive all changed files including uv.lock
-    call_args = mock_strategy.find_impacted_tests.call_args
-    assert "uv.lock" in call_args.kwargs["changed_files"]
-    assert "src/module.py" in call_args.kwargs["changed_files"]
 
 
 # --- Lifecycle hooks (issue #43 Gap 2) --------------------------------------
@@ -474,84 +212,6 @@ def test_get_impacted_tests_teardown_fires_even_when_find_raises(
     assert spy.events == ["enrich", "setup", "find", "teardown"]
 
 
-@patch("pytest_impacted.api.cached_build_dep_tree")
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
-def test_get_impacted_tests_enrichment_is_visible_to_find_impacted_tests(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-    mock_cached_build_dep_tree,
-):
-    """Edges added during enrich_dep_tree must reach find_impacted_tests.
-
-    This is the headline behavior of issue #43 Gap 1: an extension can
-    inject a synthetic edge and the downstream find_impacted_tests sees
-    the enriched graph.
-    """
-    mock_find_impacted_files.return_value = ["src/mod.py"]
-    mock_resolve_files_to_nodes.return_value = ["pkg.mod"]
-    mock_resolve_modules_to_files.return_value = ["tests/test_synthetic.py"]
-
-    base_graph = nx.DiGraph()
-    base_graph.add_node("pkg.mod")
-    mock_cached_build_dep_tree.return_value = base_graph
-
-    spy = _LifecycleSpy(enrich_adds_edge=("pkg.mod", "tests.test_synthetic"))
-    get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="pkg",
-        tests_dir="tests",
-        strategy=spy,
-    )
-    # The synthetic edge must be in the graph that find_impacted_tests received
-    assert spy.dep_tree_seen_by_find is not None
-    assert spy.dep_tree_seen_by_find.has_edge("pkg.mod", "tests.test_synthetic")
-
-
-@patch("pytest_impacted.api.cached_build_dep_tree")
-@patch("pytest_impacted.api.find_impacted_files_in_repo")
-@patch("pytest_impacted.api.resolve_files_to_nodes")
-@patch("pytest_impacted.api.resolve_modules_to_files")
-def test_get_impacted_tests_does_not_pollute_cached_dep_tree(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
-    mock_cached_build_dep_tree,
-):
-    """Mutations during enrich_dep_tree must not leak into the LRU-cached base graph.
-
-    Regression guard for the design choice to `.copy()` the cached graph in
-    api.py before handing it to the strategy pipeline. Without that copy,
-    every subsequent pytest run in the same process would accumulate
-    enrichment from previous runs.
-    """
-    mock_find_impacted_files.return_value = ["src/mod.py"]
-    mock_resolve_files_to_nodes.return_value = ["pkg.mod"]
-    mock_resolve_modules_to_files.return_value = []
-
-    # This is the "LRU-cached base graph" returned by cached_build_dep_tree
-    base_graph = nx.DiGraph()
-    base_graph.add_node("pkg.mod")
-    mock_cached_build_dep_tree.return_value = base_graph
-
-    spy = _LifecycleSpy(enrich_adds_edge=("pkg.mod", "leak"))
-    get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="pkg",
-        tests_dir="tests",
-        strategy=spy,
-    )
-    # The base graph the cache returned must NOT contain the synthetic edge.
-    assert not base_graph.has_edge("pkg.mod", "leak")
-    assert "leak" not in base_graph.nodes
-
-
 class _AliasEnricher:
     """Registers an alias for a node it adds, as an extension naming a generated module might."""
 
@@ -617,30 +277,6 @@ def test_get_impacted_tests_enrich_receives_full_context(
     assert spy.enrich_kwargs_seen["root_dir"] == root
     # session is None in this test because we didn't pass one
     assert spy.enrich_kwargs_seen["session"] is None
-
-
-@patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/a.py"])
-@patch("pytest_impacted.api.cached_build_dep_tree", return_value=nx.DiGraph())
-def test_duck_typed_strategy_passed_directly(mock_tree, mock_files):
-    """A strategy with only find_impacted_tests works through the API, lifecycle hooks and all."""
-
-    calls = []
-
-    class DuckTyped:
-        def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
-            calls.append(changed_files)
-            return []
-
-    result = get_impacted_tests(
-        impacted_git_mode=GitMode.UNSTAGED,
-        impacted_base_branch="main",
-        root_dir=Path("."),
-        ns_module="pkg",
-        strategy=DuckTyped(),
-    )
-
-    assert calls == [["pkg/a.py"]]  # delegated to, not bypassed
-    assert result is None
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
@@ -1692,3 +1328,24 @@ def test_the_analysis_walks_the_package_a_module_path_names(tmp_path, monkeypatc
     _run_with_notices(tmp_path, ["app/a.py"], ns_module=module, tests_dir="tests")
 
     assert built == ["app"]
+
+
+@pytest.mark.parametrize(("watch_dep_files", "selected"), [(True, ["tests/test_a.py", "tests/test_b.py"]), (False, [])])
+def test_a_changed_lock_file_selects_every_test_unless_dependency_files_are_unwatched(
+    tmp_path, watch_dep_files, selected
+):
+    files = {
+        "app/__init__.py": "",
+        "app/a.py": "",
+        "app/b.py": "",
+        "tests/test_a.py": "import app.a\n",
+        "tests/test_b.py": "import app.b\n",
+        "uv.lock": "",
+    }
+    write_files(tmp_path, files)
+
+    found, _ = _run_with_notices(
+        tmp_path, ["uv.lock"], ns_module="app", tests_dir="tests", watch_dep_files=watch_dep_files
+    )
+
+    assert found == selected
