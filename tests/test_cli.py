@@ -88,9 +88,10 @@ class Cli(NamedTuple):
 
 
 @pytest.fixture
-def cli(tmp_path, monkeypatch):
+def cli(tmp_path, monkeypatch, entry_points):
     """Run from an empty directory holding ``test_ns/`` and ``tests/``, so ``--root-dir .`` (the default) lands there
-    and no pytest configuration is found; two impacted tests unless a test sets ``cli.run``'s result."""
+    and no pytest configuration is found, and no strategy extension is installed; two impacted tests unless a test
+    sets ``cli.run``'s result."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "test_ns").mkdir()
     (tmp_path / "tests").mkdir()
@@ -104,29 +105,43 @@ def cli(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("args", "call"),
+    ("args", "call", "echoed"),
     [
-        pytest.param([], {}, id="defaults"),
-        pytest.param(["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", "."], {}, id="defaults spelled"),
+        pytest.param([], {}, ["git-mode: unstaged", "base-branch: main", "tests-dir: None"], id="defaults"),
+        pytest.param(
+            ["--git-mode", "unstaged", "--base-branch", "main", "--root-dir", "."],
+            {},
+            ["git-mode: unstaged", "base-branch: main", "root-dir: ."],
+            id="defaults spelled",
+        ),
         pytest.param(
             ["--git-mode", "branch", "--base-branch", "develop", "--tests-dir", "tests"],
             {"impacted_git_mode": GitMode.BRANCH, "impacted_base_branch": "develop", "tests_dir": "tests"},
+            ["git-mode: branch", "base-branch: develop", "tests-dir: tests"],
             id="branch mode, a tests dir",
         ),
         pytest.param(
             ["--git-mode", "branch", "--no-merge-base"],
             {"impacted_git_mode": GitMode.BRANCH, "use_merge_base": False},
+            ["git-mode: branch", "no-merge-base: True"],
             id="no merge base",
         ),
-        pytest.param(["--ignore-type-checking-imports"], {"ignore_type_checking_imports": True}, id="type-only"),
+        pytest.param(
+            ["--ignore-type-checking-imports"],
+            {"ignore_type_checking_imports": True},
+            ["ignore-type-checking-imports: True"],
+            id="type-only",
+        ),
     ],
 )
-def test_the_cli_hands_the_analysis_its_options(cli, args, call):
+def test_the_cli_hands_the_analysis_its_options_and_says_so(cli, args, call, echoed):
     result = cli.invoke(*args)
 
     assert result.exit_code == 0, result.output
     cli.run.assert_called_once_with(**(DEFAULT_CALL | call))
     assert isinstance(cli.run.call_args.kwargs["strategy"], CompositeImpactStrategy)
+    for line in ["impacted-tests", "module: test_ns", *echoed]:
+        assert line in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -154,8 +169,9 @@ def test_the_cli_hands_the_strategy_builder_its_options_and_says_so(cli, args, s
 
 @pytest.mark.parametrize("verbose", [True, False])
 def test_the_cli_logs_verbosely_on_request(cli, verbose):
-    cli.invoke(*(["--verbose"] if verbose else []))
+    result = cli.invoke(*(["--verbose"] if verbose else []))
 
+    assert result.exit_code == 0, result.output
     cli.logging.assert_called_once_with(verbose=verbose)
 
 

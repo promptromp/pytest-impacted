@@ -1,6 +1,7 @@
 """Integration tests for the extension system using pytester."""
 
 import importlib
+from importlib.metadata import entry_points as installed_entry_points  # before any test patches it
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
@@ -204,8 +205,9 @@ class TestAnExtensionsSettings:
                 args = ["--root-dir", str(tmp_path), "--module", "pkg", "--impacted-ext-flagged-label", "x"]
                 result = CliRunner().invoke(command, args)
         finally:
-            entry_points.return_value = []
-            clear_extension_cache()  # before the re-import, or it would register the extension's options again
+            # Re-imported as the process had it: the extensions really installed, discovered afresh.
+            entry_points.side_effect = installed_entry_points
+            clear_extension_cache()
             importlib.reload(cli_module)
 
         assert result.exit_code == 0, result.output
