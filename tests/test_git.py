@@ -1099,7 +1099,6 @@ def test_a_submodule_that_cannot_be_read_never_fails_the_run(repo_with_submodule
 def test_many_deleted_files_beside_a_submodule_are_never_asked_about(repo_with_submodule, monkeypatch):
     """A deleted file is no directory, so no submodule: thousands of them overflowed git's command line."""
     repo, root = repo_with_submodule
-    base = repo.active_branch.name
     repo.git.checkout("-b", "feature")
     for index in range(300):
         (root / "pkg" / f"gone{index}.py").write_text("")
