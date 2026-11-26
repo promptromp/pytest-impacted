@@ -25,6 +25,7 @@ from pytest_impacted.graph import (
     reached_from,
     resolve_impacted_tests,
 )
+from pytest_impacted.graph_keys import Node, may_hold_reach_only_edges, only_reaches
 from pytest_impacted.parsing import is_conftest_module, normalize_path
 from pytest_impacted.traversal import (
     canonical_root,
@@ -310,7 +311,7 @@ def _module_path(module: str, dep_tree: nx.DiGraph, root_dir: Path) -> Path | No
     ``path`` that is no path: then it is placed by its dotted name — unless the node is not a
     string (any hashable), which places nothing.
     """
-    path = dep_tree.nodes[module].get("path")
+    path = dep_tree.nodes[module].get(Node.PATH)
     if path and isinstance(path, str | os.PathLike):
         return Path(path)
     return _test_module_path(module, root_dir) if isinstance(module, str) else None
@@ -404,7 +405,7 @@ def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any)
     - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
     """
     session_plugins = nodes_named(_session_plugins(session), dep_tree)
-    plugins = {node for node in reached if dep_tree.nodes[node].get("pytest_plugin")} | (session_plugins & reached)
+    plugins = {node for node in reached if dep_tree.nodes[node].get(Node.PYTEST_PLUGIN)} | (session_plugins & reached)
     return sorted(plugins, key=str)  # an extension may add nodes that are not strings
 
 
@@ -706,27 +707,24 @@ def _changes_by_role(
         # its sure imports alone. Three kinds of edge only reach, never place: a changed __init__'s
         # ``runs_init`` link, an import found only under an assumed import root, and one through
         # pytest's test basedirs (``basedir``: which file it means depends on the collection order).
-        sources = [node for node in dep_tree if not dep_tree.nodes[node].get("external") and is_application_file(node)]
+        sources = [
+            node for node in dep_tree if not dep_tree.nodes[node].get(Node.EXTERNAL) and is_application_file(node)
+        ]
         imports = dep_tree
         graph = dep_tree.graph
-        if graph.get("runs_init") or graph.get("assumed_roots") or graph.get("basedir_edges"):  # few have any to skip
+        if may_hold_reach_only_edges(graph):  # few have any to skip
             # Found once, then hidden by a set lookup: a filter reading every edge's attributes was the walk's cost.
             imports = nx.restricted_view(
-                dep_tree, [], [(u, v) for u, v, data in dep_tree.edges(data=True) if _only_reaches(data)]
+                dep_tree, [], [(u, v) for u, v, data in dep_tree.edges(data=True) if only_reaches(data)]
             )
         return set().union(*nx.bfs_layers(nx.reverse_view(imports), sources))
 
     def is_application_code(module: str) -> bool:
-        if not dep_tree.nodes[module].get("external"):
+        if not dep_tree.nodes[module].get(Node.EXTERNAL):
             return is_application_file(module)
         return module in application_depends_on()
 
     return [module for module in impacted_modules if module in dep_tree and is_application_code(module) == application]
-
-
-def _only_reaches(edge: dict) -> bool:
-    """Whether a graph edge links a dependent without saying that application code imports the module."""
-    return bool(edge.get("runs_init") or edge.get("assumed_root") or edge.get("basedir"))
 
 
 class DependencyFileImpactStrategy(ImpactStrategy):

@@ -12,6 +12,7 @@ import networkx as nx
 
 from pytest_impacted.backends import Backend, Source, resolve_backend
 from pytest_impacted.dynamic_imports import DynamicImports
+from pytest_impacted.graph_keys import Edge, Graph, Node
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_package_file,
@@ -77,9 +78,9 @@ def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
     """
     attributes = dep_tree.nodes[node]
     if "test" in attributes:
-        return bool(attributes["test"])
-    path = attributes.get("path")
-    by_file = bool(attributes.get("external") and isinstance(path, str | os.PathLike)) and is_test_module(
+        return bool(attributes[Node.TEST])
+    path = attributes.get(Node.PATH)
+    by_file = bool(attributes.get(Node.EXTERNAL) and isinstance(path, str | os.PathLike)) and is_test_module(
         _importable_stem(Path(path))
     )
     return (isinstance(node, str) and is_test_module(node)) or by_file
@@ -186,7 +187,7 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     # of every impacted module (all of 0.33.0's had one).
     paths = {
         node: _canonical(os.fspath(path), root)
-        for node, path in dep_tree.nodes(data="path")
+        for node, path in dep_tree.nodes(data=Node.PATH)
         if isinstance(node, str) and isinstance(path, str | os.PathLike)
     }
     members = set(nodes_under(directories, paths))
@@ -200,7 +201,9 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
     members |= {node for node in paths if inside_a_package(node)}
     # ``app/core/linked -> ../other``: ``app.other.m`` is imported as ``app.core.linked.m`` too.
     members |= {
-        node for alias, node in dep_tree.graph.get("aliases", {}).items() if node in paths and inside_a_package(alias)
+        node
+        for alias, node in dep_tree.graph.get(Graph.ALIASES, {}).items()
+        if node in paths and inside_a_package(alias)
     }
     return sorted(members)
 
@@ -267,7 +270,7 @@ def _nodes_by_path(dep_tree: nx.DiGraph) -> dict[str, str]:
     """
     return {
         os.fspath(path): node
-        for node, path in dep_tree.nodes(data="path")
+        for node, path in dep_tree.nodes(data=Node.PATH)
         if isinstance(node, str) and path and isinstance(path, str | os.PathLike)
     }
 
@@ -289,7 +292,7 @@ def nodes_named_each(names: Iterable[str], dep_tree: nx.DiGraph) -> dict[str, se
     names = [name for name in names if isinstance(name, str)]
     if not names:
         return {}
-    aliases = dep_tree.graph.get("aliases", {})
+    aliases = dep_tree.graph.get(Graph.ALIASES, {})
     implied, assumed = _import_roots_of(dep_tree)
     by_path = cache(lambda: _nodes_by_path(dep_tree))
     # A file deleted since is no longer on disk to look up, but each of its names still means it.
@@ -310,7 +313,7 @@ def _deleted_by_name(
     """``{name: nodes}`` for the linked files no longer on disk, by every name they are imported under."""
     deleted: dict[str, set[str]] = {}
     for path, node in by_path.items():
-        if dep_tree.nodes[node].get("external") and not os.path.exists(path):
+        if dep_tree.nodes[node].get(Node.EXTERNAL) and not os.path.exists(path):
             for name in _names_of(Path(path), implied, assumed):
                 deleted.setdefault(name, set()).add(node)
     return deleted
@@ -376,10 +379,10 @@ def _import_roots_of(dep_tree: nx.DiGraph, root: Path | None = None) -> tuple[li
     """The graph's import roots: those the names imply, rootdir first, and the assumed ones."""
     assumed = {
         Path(base): _Assumed(frozenset(how["gateways"]), how["active"], how.get("certain", False))
-        for base, how in dep_tree.graph.get("assumed_roots", {}).items()
+        for base, how in dep_tree.graph.get(Graph.ASSUMED_ROOTS, {}).items()
     }
     default = [str(root)] if root is not None else []
-    implied = [Path(base) for base in dep_tree.graph.get("import_roots", default) if Path(base) not in assumed]
+    implied = [Path(base) for base in dep_tree.graph.get(Graph.IMPORT_ROOTS, default) if Path(base) not in assumed]
     return implied, assumed
 
 
@@ -602,12 +605,12 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     by_path = _nodes_by_path(dep_tree)
     aliases = dep_tree.graph.setdefault("aliases", {})
     taken = set(dep_tree) | set(aliases)
-    unresolved = dep_tree.graph.get("unresolved", {})
+    unresolved = dep_tree.graph.get(Graph.UNRESOLVED, {})
     implied, assumed = _import_roots_of(dep_tree, root)
     implied = sorted(implied, key=lambda directory: -len(directory.parts))
     inside = cache(lambda: _importers_inside(unresolved))
     basedir_of.cache_clear()  # the graph may be cached from before an __init__.py came or went
-    basedir_paths = [Path(directory) for directory in dep_tree.graph.get("rootless_test_dirs", ())]
+    basedir_paths = [Path(directory) for directory in dep_tree.graph.get(Graph.ROOTLESS_TEST_DIRS, ())]
     added = []
     for file in filenames:
         path = real_path(root / file)  # git reports an untracked symlink loop, whatever its name
@@ -640,19 +643,19 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
             aliases.update({name: node for name in names if name != node and name not in taken})
             taken.update(names)
             taken.add(node)
-            dep_tree.add_node(node, path=str(path), external=True, test=_is_test_file(path, root))
+            dep_tree.add_node(node, **{Node.PATH: str(path), Node.EXTERNAL: True, Node.TEST: _is_test_file(path, root)})
             dep_tree.add_edges_from((node, importer) for importer in importers - guessed)
-            dep_tree.add_edges_from(((node, importer) for importer in guessed), assumed_root=True)
+            dep_tree.add_edges_from(((node, importer) for importer in guessed), **{Edge.ASSUMED_ROOT: True})
             if neighbours:
-                dep_tree.add_edges_from(((node, importer) for importer in neighbours), basedir=True)
-                dep_tree.graph["basedir_edges"] = True
+                dep_tree.add_edges_from(((node, importer) for importer in neighbours), **{Edge.BASEDIR: True})
+                dep_tree.graph[Graph.BASEDIR_EDGES] = True
             by_path[str(path)] = node
             added.append(node)
         # Only to reach them (``runs_init``), never to place the package as application code or test
         # code (see strategies._changes_by_role): that could make a conftest rule opt-in, fewer tests.
         if runs := [runner for runner in runners if runner != node and not dep_tree.has_edge(node, runner)]:
-            dep_tree.add_edges_from(((node, runner) for runner in runs), runs_init=True)
-            dep_tree.graph["runs_init"] = True
+            dep_tree.add_edges_from(((node, runner) for runner in runs), **{Edge.RUNS_INIT: True})
+            dep_tree.graph[Graph.RUNS_INIT] = True
     return added
 
 
@@ -894,10 +897,10 @@ def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: boo
     """
     if not guessed:
         digraph.add_edge(importer, module)
-        digraph.edges[importer, module].pop("assumed_root", None)
-        digraph.edges[importer, module].pop("basedir", None)
+        digraph.edges[importer, module].pop(Edge.ASSUMED_ROOT, None)
+        digraph.edges[importer, module].pop(Edge.BASEDIR, None)
     elif not digraph.has_edge(importer, module):
-        digraph.add_edge(importer, module, assumed_root=True)
+        digraph.add_edge(importer, module, **{Edge.ASSUMED_ROOT: True})
 
 
 def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
@@ -985,7 +988,7 @@ def build_dep_tree(
     unresolved: dict[str, set[str]] = {}
     basedir_edges = False
     for name, file_path in linker.modules.items():
-        digraph.add_node(name, path=file_path)
+        digraph.add_node(name, **{Node.PATH: file_path})
         for candidate in imports[name]:
             # A name conftests above the package contest is an import of each of them too.
             guessed = linker.only_assumed(candidate)
@@ -996,7 +999,7 @@ def build_dep_tree(
             if linker.looks_locally(file_path, candidate):  # not for most imports of most modules
                 for target in linker.local_targets(file_path, candidate):
                     if target != name and not digraph.has_edge(name, target):
-                        digraph.add_edge(name, target, basedir=True)
+                        digraph.add_edge(name, target, **{Edge.BASEDIR: True})
                         basedir_edges = True
             if _may_name_a_module(candidate, discovered):
                 unresolved.setdefault(candidate, set()).add(name)
@@ -1005,20 +1008,20 @@ def build_dep_tree(
             _add_import(digraph, name, plugin, guessed=False)
     # pytest registers plugins for the whole session; see PytestImpactStrategy.
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
-        digraph.nodes[plugin]["pytest_plugin"] = True
+        digraph.nodes[plugin][Node.PYTEST_PLUGIN] = True
     for name in linker.external:
         digraph.nodes[name].update(external=True, test=_is_test_file(Path(linker.modules[name]), root))
     # Other names each module imports under (see discover_project_modules), for names
     # that come from outside the source, such as ``-p`` plugins.
-    digraph.graph["aliases"] = linker.aliases
+    digraph.graph[Graph.ALIASES] = linker.aliases
     # For a changed file the graph lacks — deleted, or created since — see link_changed_files.
-    digraph.graph["unresolved"] = {name: sorted(importers) for name, importers in unresolved.items()}
-    digraph.graph["import_roots"] = [str(directory) for directory in (*roots, *linker.assumed)]
+    digraph.graph[Graph.UNRESOLVED] = {name: sorted(importers) for name, importers in unresolved.items()}
+    digraph.graph[Graph.IMPORT_ROOTS] = [str(directory) for directory in (*roots, *linker.assumed)]
     # For a file created or deleted in one of them since (link_changed_files): neighbours import it by its bare name.
-    digraph.graph["rootless_test_dirs"] = [str(directory) for directory in basedirs]
+    digraph.graph[Graph.ROOTLESS_TEST_DIRS] = [str(directory) for directory in basedirs]
     if basedir_edges:  # strategies._changes_by_role skips reach-only edges only when a graph has some
-        digraph.graph["basedir_edges"] = True
-    digraph.graph["assumed_roots"] = {
+        digraph.graph[Graph.BASEDIR_EDGES] = True
+    digraph.graph[Graph.ASSUMED_ROOTS] = {
         # ``certain`` only when set: a graph without pythonpath entries reads as it always did.
         str(base): {"gateways": sorted(how.gateways), "active": how.active} | ({"certain": True} if how.certain else {})
         for base, how in linker.assumed.items()
