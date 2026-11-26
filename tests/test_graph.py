@@ -2834,3 +2834,33 @@ def test_an_outdated_extension_is_named_with_what_it_lacks(monkeypatch, installe
     message = _rust.outdated_for(ignore)
 
     assert message is None if says is None else says in message
+
+
+STAR = {
+    "app/__init__.py": "__all__ = ['mod', 'helper']\n__all__ += ['other']\n\ndef helper():\n    pass\n",
+    "app/mod.py": "X = 1\n",
+    "app/other.py": "Y = 1\n",
+    "app/unlisted.py": "Z = 1\n",
+}
+
+
+@pytest.mark.parametrize(
+    ("importer", "source", "linked"),
+    [
+        ("tests/test_star.py", "from app import *\n", {"app.mod", "app.other"}),
+        ("app/sub/user.py", "from .. import *\n", {"app.mod", "app.other"}),
+        ("tests/test_plain.py", "import app\n", set()),  # no star: the submodules are not loaded
+        ("tests/test_named.py", "from app import mod\n", {"app.mod"}),
+    ],
+    ids=["a star import", "a relative one", "a plain import", "a named import"],
+)
+@pytest.mark.usefixtures("import_backend")
+def test_a_star_import_loads_the_submodules_all_names(tmp_path, importer, source, linked):
+    """``from pkg import *`` imports each submodule ``pkg.__all__`` lists, even one the ``__init__`` never imports."""
+    write_files(tmp_path, {**STAR, "app/sub/__init__.py": "", importer: source})
+    module = importer.removesuffix(".py").replace("/", ".")
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    submodules = {"app.mod", "app.other", "app.unlisted"}
+    assert {node for node in submodules if dep_tree.has_edge(node, module)} == linked

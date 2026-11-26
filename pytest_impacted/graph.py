@@ -16,9 +16,12 @@ from pytest_impacted.parsing import (
     is_conftest_module,
     is_package_file,
     is_test_module,
+    parse_all_names,
     parse_file_imports,
-    parse_pytest_plugins,
+    pytest_plugins_in,
+    read_source,
     split_file_imports,
+    star_imports_in,
 )
 from pytest_impacted.traversal import (
     LAST_RESORT_PREFIX,
@@ -809,7 +812,10 @@ def _parse_project(
     *ignore_type_checking_imports*, the type-only imports of the files in *narrowed* are none
     (see :func:`_parse_by_role`).
     """
-    declarations = cache(parse_pytest_plugins)
+    # Each file read once for the stdlib passes (pytest_plugins declarations, star imports), for this build only.
+    texts = cache(read_source)
+    declarations = cache(lambda path: pytest_plugins_in(texts(path)))
+    exported = cache(parse_all_names)
     parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, narrowed=narrowed)
     pending = dict(linker.modules)
     imports, type_only = parse(pending)
@@ -823,7 +829,10 @@ def _parse_project(
         by_name = _parse_all_dynamic_imports(pending)
         for name, path in pending.items():
             # Once each, as the roots are settled: where an object's module ends is found through them.
-            imports[name] = sorted({*imports[name], *_imports_by_name(linker, by_name[name])})
+            stars = star_imports_in(texts(path), import_base(name), is_package_file(path))
+            imports[name] = sorted(
+                {*imports[name], *_imports_by_name(linker, by_name[name]), *_star_names(linker, stars, exported)}
+            )
             for candidate in imports[name]:
                 linker.targets(candidate)
                 # In the fixpoint: what it finds no walk named is parsed in turn.
@@ -833,6 +842,19 @@ def _parse_project(
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
             return imports, plugin_edges
+
+
+def _star_names(linker: _Linker, packages: list[str], exported: Callable[[str], list[str]]) -> list[str]:
+    """The candidates ``from pkg import *`` adds for each of *packages*: ``pkg.<name>`` for each name its
+    ``__init__.py``'s literal ``__all__`` lists, a submodule the star import loads even if the ``__init__`` never
+    imports it. Names that are no module link nothing."""
+    return [
+        f"{package}.{name}"
+        for package in packages
+        for target in linker.targets(package)
+        if is_package_file(path := linker.modules.get(target, ""))
+        for name in exported(path)
+    ]
 
 
 def _imports_by_name(linker: _Linker, found: DynamicImports) -> list[str]:
