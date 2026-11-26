@@ -80,6 +80,7 @@ class TestMatchesDependencyFile:
         pytest.param(["src/module.py", "tests/test_foo.py"], None, False, id="none"),
         pytest.param([], None, False, id="nothing changed"),
         pytest.param(["uv.lock"], (), False, id="no patterns"),
+        pytest.param(["requirements-dev.txt"], (), False, id="no globs either"),
         pytest.param(["custom.lock"], ("custom.lock",), True, id="a custom pattern"),
     ],
 )
@@ -98,10 +99,12 @@ EVERY_TEST = ["tests.test_api", "tests.test_m", "tests.test_z"]
     ("changed", "impacted", "patterns", "expected"),
     [
         pytest.param(["uv.lock"], [], None, EVERY_TEST, id="a lock file: every test, sorted"),
-        pytest.param(["pyproject.toml", "uv.lock"], [], None, EVERY_TEST, id="dependency files alone"),
+        pytest.param(["pyproject.toml"], [], None, EVERY_TEST, id="the project file"),
+        pytest.param(["requirements-dev.txt"], [], None, EVERY_TEST, id="a requirements glob"),
         pytest.param(["src/api.py", "requirements.txt"], ["mypackage.api"], None, EVERY_TEST, id="with code"),
         pytest.param(["src/api.py"], ["mypackage.api"], None, [], id="code alone: nothing"),
         pytest.param(["uv.lock"], [], ("custom.lock",), [], id="custom patterns replace the defaults"),
+        pytest.param(["requirements-dev.txt"], [], ("custom.lock",), [], id="and the default globs"),
         pytest.param(["custom.lock"], [], ("custom.lock",), EVERY_TEST, id="a custom pattern"),
     ],
 )

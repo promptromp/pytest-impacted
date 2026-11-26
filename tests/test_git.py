@@ -1,5 +1,6 @@
 """Unit tests for the git module."""
 
+import os
 import shutil
 import sys
 from pathlib import Path, PureWindowsPath
@@ -41,7 +42,8 @@ class DummyRepo:
         # The base has not moved since the fork, so the fork point *is* the base ref
         # (merge-base is called as: --all --end-of-options <base> <head>).
         self.git.merge_base = MagicMock(side_effect=lambda *args: args[-2])
-        self.working_tree_dir = working_tree_dir or str(Path.cwd())
+        # No directory there, so no .gitmodules: never the working directory, which may be a real repository.
+        self.working_tree_dir = working_tree_dir or str(Path(os.devnull).parent / "no-such-dummy-repository")
         self._staged, self._unstaged, self._branch = staged, unstaged, diff_branch_result
 
     def _diff(self, *args):

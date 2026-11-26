@@ -11,7 +11,6 @@ import pytest
 
 from pytest_impacted.graph import build_dep_tree
 from pytest_impacted.strategies import (
-    CompositeImpactStrategy,
     ConftestImportImpactStrategy,
     PytestImpactStrategy,
 )
@@ -49,12 +48,6 @@ def find(strategy, root: Path, changed: str, *, tests_package: str | None = "sui
         root_dir=root,
         dep_tree=build_dep_tree(ns_module, tests_package, root_dir=root),
     )
-
-
-def notices(strategies, root: Path, changed: str, caplog) -> str:
-    with caplog.at_level(logging.INFO, logger="pytest_impacted.display"):
-        find(CompositeImpactStrategy(strategies), root, changed)
-    return caplog.text
 
 
 @pytest.fixture

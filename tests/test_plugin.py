@@ -168,32 +168,35 @@ def test_validate_config_branch_mode_missing_base(pytestconfig, monkeypatch):
         validate_config(pytestconfig)
 
 
-def test_validate_module_hyphen_suggests_underscore():
-    """Test that a hyphenated module name suggests the underscore version."""
-    with pytest.raises(pytest.UsageError, match="Did you mean: --impacted-module=pytest_impacted"):
-        validate_module("pytest-impacted", Path.cwd())
+@pytest.fixture
+def project_dirs(tmp_path):
+    """A rootdir holding a package ``my_package/`` and a ``tests/`` directory."""
+    (tmp_path / "my_package").mkdir()
+    (tmp_path / "tests").mkdir()
+    return tmp_path
 
 
-def test_validate_module_nonexistent():
-    """Test that a completely unknown module gives a helpful error."""
+def test_validate_module_hyphen_suggests_underscore(project_dirs):
+    with pytest.raises(pytest.UsageError, match="Did you mean: --impacted-module=my_package"):
+        validate_module("my-package", project_dirs)
+
+
+def test_validate_module_nonexistent(project_dirs):
     with pytest.raises(pytest.UsageError, match="Module 'doesnotexist' not found"):
-        validate_module("doesnotexist", Path.cwd())
+        validate_module("doesnotexist", project_dirs)
 
 
-def test_validate_module_valid():
-    """Test that a valid module name passes validation."""
-    validate_module("pytest_impacted", Path.cwd())  # Should not raise
+def test_validate_module_valid(project_dirs):
+    validate_module("my_package", project_dirs)  # Should not raise
 
 
-def test_validate_tests_dir_nonexistent():
-    """Test that a non-existent tests directory gives a helpful error."""
+def test_validate_tests_dir_nonexistent(project_dirs):
     with pytest.raises(pytest.UsageError, match="Tests directory 'nonexistent_dir' does not exist"):
-        validate_tests_dir("nonexistent_dir", Path.cwd())
+        validate_tests_dir("nonexistent_dir", project_dirs)
 
 
-def test_validate_tests_dir_valid():
-    """Test that a valid tests directory passes validation."""
-    validate_tests_dir("tests", Path.cwd())  # Should not raise
+def test_validate_tests_dir_valid(project_dirs):
+    validate_tests_dir("tests", project_dirs)  # Should not raise
 
 
 @pytest.mark.parametrize("tests_dir", ["tests.unit", ".tests", "../tests", "{outside}"])
