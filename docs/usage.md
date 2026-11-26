@@ -477,7 +477,7 @@ For large codebases with many modules, import parsing can become a bottleneck. A
 
 ### Installation
 
-Install with the `fast` extra to get pre-built Rust wheels (no Rust toolchain needed):
+Install with the `fast` extra to get pre-built Rust wheels (no Rust toolchain needed), for CPython 3.11 and later on Linux (glibc and musl, x86_64 and aarch64), macOS (Intel and Apple Silicon) and Windows (x86_64 and ARM64):
 
 ```bash
 pip install pytest-impacted[fast]
