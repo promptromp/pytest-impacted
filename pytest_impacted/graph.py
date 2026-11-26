@@ -11,6 +11,7 @@ from typing import NamedTuple
 import networkx as nx
 
 from pytest_impacted import _rust
+from pytest_impacted.dynamic_imports import parse_dynamic_imports
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_test_module,
@@ -770,7 +771,8 @@ def _parse_project(
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """The import candidates of every module, and the ``pytest_plugins`` edges.
 
-    Imports and declarations that name a module outside the walks add it (see
+    A module's candidates are its import statements' and those of its calls that import by name (see
+    :func:`_imports_by_name`). Imports and declarations that name a module outside the walks add it (see
     :class:`_Linker`), and its own imports and declarations are followed in turn. With
     *ignore_type_checking_imports*, the type-only imports of the files in *narrowed* are none
     (see :func:`_parse_by_role`).
@@ -787,6 +789,8 @@ def _parse_project(
     while True:
         imports |= parse({name: path for name, path in pending.items() if name not in imports})[0]
         for name, path in pending.items():
+            # Once each, as the roots are settled: where an object's module ends is found through them.
+            imports[name] = sorted({*imports[name], *_imports_by_name(linker, name, path)})
             for candidate in imports[name]:
                 linker.targets(candidate)
                 # In the fixpoint: what it finds no walk named is parsed in turn.
@@ -796,6 +800,41 @@ def _parse_project(
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
             return imports, plugin_edges
+
+
+def _imports_by_name(linker: _Linker, name: str, path: str) -> list[str]:
+    """The import candidates of the calls in module *name* that import by name (see
+    :mod:`~pytest_impacted.dynamic_imports`): each read as the import statement that imports the same.
+
+    A module named is ``import pkg.mod``. An object path, ``resolve_name("pkg.mod.Class")``, is
+    ``from pkg.mod import Class``, its module being the longest prefix naming a module in the project, as
+    ``pkgutil.resolve_name`` imports the longest one it can. An attribute path, ``patch("pkg.mod.Class.method")``,
+    is the same with the module among the prefixes before its last part (see :func:`_import_of`).
+    """
+    found = parse_dynamic_imports(path, import_base(name), os.path.basename(path) == "__init__.py")
+    return [
+        *found.modules,
+        *(candidate for found_path in found.objects for candidate in _import_of(linker, found_path)),
+        *(candidate for found_path in found.attributes for candidate in _import_of(linker, found_path, attribute=True)),
+    ]
+
+
+def _import_of(linker: _Linker, object_path: str, *, attribute: bool = False) -> list[str]:
+    """The candidates of *object_path*: its longest prefix naming a module in the project, and every longer one.
+
+    An *attribute*'s module is a prefix of the path before it: ``patch("app.utils.helper")`` replaces ``helper``
+    on ``app.utils``, which is ``app/utils.py`` even beside an ``app/utils/helper.py`` (linked too, as by
+    ``from app.utils import helper``). The longer ones link whatever module they name, usually none, and keep
+    their names in ``graph["unresolved"]`` for a module deleted since: which part of ``helpers.Factory.make``
+    the deleted module was, only the import statement could tell. A path
+    that no module of the project starts, such as ``os.environ``, keeps all its prefixes, its first part
+    included: like every candidate, that one is looked up beside the importer too (pytest's basedirs:
+    ``helpers.func`` beside a test).
+    """
+    parts = object_path.split(".")
+    longest = len(parts) - 1 if attribute else len(parts)
+    end = next((end for end in range(longest, 1, -1) if linker.targets(".".join(parts[:end]))), 1)
+    return [".".join(parts[:longer]) for longer in range(end, len(parts) + 1)]
 
 
 def _parse_by_role(
@@ -881,7 +920,10 @@ def build_dep_tree(
     ``external`` (see :class:`_Linker`). Every node carries its absolute file in the
     ``path`` attribute. Modules named in a ``pytest_plugins`` declaration count as
     imports (see :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are
-    flagged with the ``pytest_plugin`` attribute. Every import the walks do not
+    flagged with the ``pytest_plugin`` attribute. A call that imports by name counts as the import
+    statement that imports the same: ``importlib.import_module("pkg.mod")`` as ``import pkg.mod``,
+    ``mock.patch("pkg.mod.func")`` as ``from pkg.mod import func`` (see :func:`_imports_by_name`).
+    Every import the walks do not
     define — found on disk or not — is kept in ``graph["unresolved"]`` with its
     importers, for :func:`link_changed_files`. An import found only under an assumed
     import root (``graph["assumed_roots"]``, see

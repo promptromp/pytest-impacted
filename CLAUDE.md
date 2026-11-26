@@ -49,7 +49,8 @@ name, as type checkers do, or as the attribute of a module-level `import`.
 and AST parsing. Importing a module to inspect it would execute module-level code —
 monkey patching, DB connections, app factories. If you find yourself reaching for
 `importlib`, you are solving the problem the wrong way — `importlib.util.find_spec`
-in particular, which imports every parent package to answer.
+in particular, which imports every parent package to answer. (`importlib.util.resolve_name`, which only
+manipulates strings, is the one exception: `dynamic_imports` resolves a relative `import_module` name with it.)
 
 **`parsing.py` imports node classes from `astroid.nodes`**, not `astroid` — required
 since astroid v4.
@@ -370,6 +371,19 @@ emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg
 `build_dep_tree` maps candidates to the discovered modules and aliases, and looks the rest up on
 disk (`_Linker`), instead. The apparent
 over-emission is the design, not a bug.
+
+**Imports by name are import candidates** (`dynamic_imports.py`): the literal arguments of the calls in the
+`LOADERS` table, each read as the import statement that imports the same (`graph._imports_by_name`), so placement,
+deleted targets and basedirs behave as for that statement. Add an API as a row, never as a branch. The maintainer
+chose this curated table over a broad rule ("any string spelling a project module"), which measured +13% tests on
+pydantic, about 99% of it noise. The rows without a module (`patch`, `patch.dict`, `patch.multiple`, `setattr`,
+`delattr`) match any receiver, so another API's method of that name with a matching literal becomes a plain edge.
+From application code, that edge could place a test helper as application code, turning its conftest rule opt-in.
+That never happened in six measured projects, where application code's by-name edges all reach application
+modules: a documented trade-off, not a reach-only flag. An object path keeps every prefix longer than its module
+as a candidate, so a deleted module is linked whichever part it was. By-name candidates are added after
+`linker.activate`: only static imports are evidence of an assumed root. It is parsed with stdlib `ast` outside
+the backends, like `parse_pytest_plugins`. Only literals count; a computed name is no import.
 
 **The `impacted-tests` CLI reads the pytest configuration through `ini.py`, never a pytest
 `Config`**: building one imports the initial conftests, which is running project code. `ini.py`
