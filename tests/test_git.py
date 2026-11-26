@@ -966,3 +966,55 @@ def test_normalize_git_paths_emits_posix_paths_for_windows_paths():
     )
 
     assert result == ["src/m.py", "C:/repo/frontend/a.js"]
+
+
+@pytest.fixture
+def repo_with_submodule(real_repo, tmp_path):
+    """``(repo, root)``: the real repo with a submodule ``vendor`` holding ``lib/core.py`` and ``lib/util.py``."""
+    repo, root = real_repo
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "lib").mkdir()
+    (library / "lib" / "core.py").write_text("x = 1\n")
+    (library / "lib" / "util.py").write_text("y = 1\n")
+    library_repo = Repo.init(library)
+    library_repo.git.add("--all")
+    library_repo.git.commit("-m", "library")
+    repo.git.execute(["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "vendor"])
+    commit_all(repo, "add the submodule")
+    return repo, root
+
+
+def test_an_edit_inside_a_submodule_counts_as_a_change_to_each_of_its_files(repo_with_submodule):
+    """git reports the submodule's own path, which names no module: each file it tracks counts as changed."""
+    _, root = repo_with_submodule
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+
+    assert unstaged(root) == ["vendor", "vendor/lib/core.py", "vendor/lib/util.py"]
+
+
+def test_a_submodule_bumped_on_the_branch_counts_as_a_change_to_each_of_its_files(repo_with_submodule):
+    repo, root = repo_with_submodule
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    commit_all(Repo(root / "vendor"), "bump")
+    commit_all(repo, "bump the submodule")
+
+    assert branch(root, base) == ["vendor", "vendor/lib/core.py", "vendor/lib/util.py"]
+
+
+def test_a_submodule_added_on_the_branch_brings_its_files(real_repo, tmp_path):
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    library = tmp_path / "library"
+    (library / "lib").mkdir(parents=True)
+    (library / "lib" / "core.py").write_text("x = 1\n")
+    library_repo = Repo.init(library)
+    library_repo.git.add("--all")
+    library_repo.git.commit("-m", "library")
+    repo.git.execute(["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "vendor"])
+    commit_all(repo, "add the submodule")
+
+    assert branch(root, base) == [".gitmodules", "vendor", "vendor/lib/core.py"]

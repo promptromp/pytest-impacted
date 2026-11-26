@@ -322,6 +322,7 @@ def _find_impacted_files(
 
     if not impacted_files:
         return None
+    impacted_files = _with_submodule_files(repo, impacted_files)
 
     # Normalize git-root-relative paths to working-dir-relative paths
     if repo.working_tree_dir is not None:
@@ -329,6 +330,31 @@ def _find_impacted_files(
         working_dir = Path(repo_dir).resolve()
         impacted_files = normalize_git_paths(impacted_files, git_root, working_dir)
     return sorted(set(impacted_files))
+
+
+def _with_submodule_files(repo: Repo, paths: list[str]) -> list[str]:
+    """*paths*, each submodule among them followed by every file it tracks, nested submodules' included.
+
+    git reports a change inside a submodule — a commit bumped, or edits not yet committed there — as the
+    submodule's own path (``vendor``), which names no module: every test was deselected. Which of its files
+    changed would take a diff inside it; each counts as changed, which only ever selects more. The path itself
+    stays, for a glob such as ``vendor/**``. A submodule not checked out (no ``.git`` in it) has no files to add.
+    """
+    if repo.working_tree_dir is None:
+        return paths
+    root = Path(repo.working_tree_dir)
+    expanded = list(paths)
+    for path in paths:
+        directory = root / path
+        if not (os.path.isdir(directory) and os.path.exists(directory / ".git")):
+            continue
+        try:
+            listed = Repo(directory).git.ls_files("--recurse-submodules", "-z")
+        except (GitCommandError, InvalidGitRepositoryError, NoSuchPathError):
+            logger.warning("Could not list the files of submodule %s; its own path counts as changed", path)
+            continue
+        expanded.extend(f"{path}/{file}" for file in listed.split("\0") if file)
+    return expanded
 
 
 def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:

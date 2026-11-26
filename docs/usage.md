@@ -55,6 +55,10 @@ pytest --impacted \
 
 The `--impacted-base-branch` flag accepts any valid git ref, including expressions like `HEAD~4`.
 
+### Git submodules
+
+git reports a change inside a submodule — edits not yet committed there, or a new commit the superproject records — as the submodule's own path, which names no module. Since 0.41 every file the submodule tracks counts as changed then (its own submodules' too), so tests depending on any of them are selected; before, a change there selected nothing. Which of its files really changed would take a diff inside it: this can only select more. A submodule holding its own `pyproject.toml` or `pytest.ini` therefore runs every test, through the dependency-file rule.
+
 When there is no fork point — unrelated histories, or a shallow clone whose history stops short of it — pytest-impacted diffs against the base branch's tip instead, which still covers every change on your branch, and prints a warning saying which case applies. In CI, the base ref must be fetched at all: a stock `actions/checkout` (`fetch-depth: 1`) fetches only the checked-out commit, so `--impacted-base-branch=origin/main` is rejected as unknown. `fetch-depth: 0` fetches everything; a shallow `git fetch --depth=N origin main` works too, falling back if the fork point is deeper than `N`. With several fork points (criss-cross merges) it combines the diffs from each. Fetch enough history (`fetch-depth: 0`) for the precise diff. To always diff against the tip (`git diff <base> HEAD`), pass `--impacted-no-merge-base` (ini: `impacted_no_merge_base = true`).
 
 ## External Tests Directory

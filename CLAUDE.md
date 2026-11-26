@@ -280,7 +280,9 @@ mode is the union of three views — `git diff --cached`, `git diff`, and
 `git ls-files --others` — because a staged edit reverted on disk appears in only one of
 them. Deletions count (`_NON_IMPACTFUL_STATUSES` drops only `X`/`B`), so `changed_files`
 routinely names paths that no longer exist, and files outside the project root arrive as
-absolute paths.
+absolute paths. A submodule
+reported by its own path is followed by every file it tracks (`git._with_submodule_files`): its path names no
+module, and which of its files changed would take a diff inside it.
 
 **`canonical_root()` is the single origin for every path.** Discovery, graph building and
 the conftest walk all resolve against `root_dir` (the plugin passes `config.rootpath`),
