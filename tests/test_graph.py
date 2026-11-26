@@ -11,7 +11,7 @@ import pytest
 
 from pytest_impacted import _rust, graph, parsing
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
-from pytest_impacted.traversal import _Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
+from pytest_impacted.traversal import Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
 
 from .git_helpers import write_files
 
@@ -92,7 +92,7 @@ def test_build_dep_tree():
 
     with (
         patch("pytest_impacted._rust.RUST_AVAILABLE", False),
-        patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
+        patch("pytest_impacted.graph.discover_project", return_value=Discovered(mock_submodules, {}, {})),
         patch("pytest_impacted.backends.parse_file_imports") as mock_parse_imports,
     ):
         # Set up mock imports for each module
@@ -1289,7 +1289,7 @@ def test_a_name_that_named_a_new_file_never_becomes_an_alias(tmp_path):
     """The other order: the first root finds a new file, named ``x``; the second finds a walked one."""
     write_files(tmp_path, {"a/x.py": "", "b/x.py": ""})
     walked = str((tmp_path / "b/x.py").resolve())
-    linker = graph._Linker(_Discovered({"b.x": walked}, {}, {}), [tmp_path / "a", tmp_path / "b"], tmp_path.resolve())
+    linker = graph._Linker(Discovered({"b.x": walked}, {}, {}), [tmp_path / "a", tmp_path / "b"], tmp_path.resolve())
 
     assert linker.targets("x") == ["x", "b.x"]
     assert "x" not in linker.aliases

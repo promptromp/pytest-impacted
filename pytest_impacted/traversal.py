@@ -91,7 +91,7 @@ def find_non_package_prefix(fs_path: str, root: Path) -> tuple[str, str]:
     parts = Path(fs_path).parts
     for i in range(len(parts)):
         candidate = Path(*parts[: i + 1])
-        if _is_regular_package(root / candidate):
+        if is_regular_package(root / candidate):
             if i == 0:
                 return "", fs_path
             prefix = str(Path(*parts[:i]))
@@ -361,7 +361,7 @@ class ProjectModules(NamedTuple):
     aliases: dict[str, str]
 
 
-class _Discovered(NamedTuple):
+class Discovered(NamedTuple):
     """:class:`ProjectModules`, plus the importable names that more than one file can have."""
 
     modules: dict[str, str]
@@ -404,7 +404,7 @@ def _conftest_candidate(directory: Path, root: Path) -> _ConftestCandidate:
         return _ConftestCandidate(["conftest"], last_resort)
     _, importable = find_non_package_prefix(str(Path(*parts)), root)
     preferred = f"{path_to_package_name(importable)}.conftest"
-    rooted = _rooted_names(parts, (*parts, "conftest"), root, len(parts) - 1, _is_regular_package)
+    rooted = _rooted_names(parts, (*parts, "conftest"), root, len(parts) - 1, is_regular_package)
     return _ConftestCandidate(list(dict.fromkeys([preferred, *rooted])), last_resort)
 
 
@@ -428,7 +428,7 @@ def _discover_ancestor_conftests(
     *,
     taken: Iterable[str] = (),
     known_paths: Iterable[str] = (),
-) -> _Discovered:
+) -> Discovered:
     """Find the ``conftest.py`` files between *root_dir* and each package directory, and name them.
 
     pytest loads every conftest from the rootdir down to a test file, so one
@@ -464,7 +464,7 @@ def _discover_ancestor_conftests(
     return _name_conftests(candidates, taken=taken)
 
 
-def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterable[str]) -> _Discovered:
+def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterable[str]) -> Discovered:
     """Name each conftest path from its candidates, never with a name in *taken*.
 
     Names are handed out by rank across all conftests, in walk order, so one conftest's
@@ -496,7 +496,7 @@ def _name_conftests(candidates: dict[str, _ConftestCandidate], *, taken: Iterabl
         for wanted in candidates[path].names:
             if wanted != name and aliases.get(wanted) != name:
                 contested.setdefault(wanted, set()).add(name)
-    return _Discovered(modules, aliases, contested)
+    return Discovered(modules, aliases, contested)
 
 
 def discover_project_modules(
@@ -523,13 +523,11 @@ def discover_project_modules(
     last, around every name already in use; one left with no free name is keyed with a
     leading dot (see :class:`ProjectModules`).
     """
-    modules, aliases, _ = _discover_project(package, tests_package, root_dir)
+    modules, aliases, _ = discover_project(package, tests_package, root_dir)
     return ProjectModules(modules, aliases)
 
 
-def _discover_project(
-    package: str, tests_package: str | None = None, root_dir: str | Path | None = None
-) -> _Discovered:
+def discover_project(package: str, tests_package: str | None = None, root_dir: str | Path | None = None) -> Discovered:
     """:func:`discover_project_modules`, with the names the conftests above the package contest."""
     root = canonical_root(root_dir)
     walked = discover_submodules(package, require_init=True, root_dir=root)
@@ -562,7 +560,7 @@ def _discover_project(
     modules = {**ancestors.modules, **modules}
     aliases = {**ancestors.aliases, **aliases}
     aliases = {alias: name for alias, name in aliases.items() if alias not in modules}
-    return _Discovered(modules, aliases, ancestors.contested)
+    return Discovered(modules, aliases, ancestors.contested)
 
 
 def discover_application_files(
@@ -613,7 +611,7 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
     can be on ``sys.path`` too, but gets no alias here: an import rooted there is looked
     up on disk (see :func:`split_import_roots`), which links every file the name may mean.
     """
-    is_regular_package = cache(_is_regular_package)
+    regular = cache(is_regular_package)  # each directory once
     last_root = len(Path(package_name_to_path(package)).parts) - 1
     aliases: dict[str, str] = {}
     for name, path in modules.items():
@@ -621,7 +619,7 @@ def _root_aliases(package: str, modules: dict[str, str], root: Path) -> dict[str
         if not file.is_relative_to(root):
             continue
         relative = file.relative_to(root)
-        for alias in _rooted_names(relative.parent.parts, module_parts(relative), root, last_root, is_regular_package):
+        for alias in _rooted_names(relative.parent.parts, module_parts(relative), root, last_root, regular):
             aliases.setdefault(alias, name)
     return aliases
 
@@ -646,7 +644,7 @@ def _rooted_names(
     return [".".join(parts[start:]) for start in range(min(first_regular, len(parts) - 1) + 1)]
 
 
-def _is_regular_package(directory: Path) -> bool:
+def is_regular_package(directory: Path) -> bool:
     """Whether *directory* has an ``__init__.py``; an unsearchable one has none, rather than raising."""
     return os.path.isfile(directory / "__init__.py")
 
@@ -783,7 +781,7 @@ def split_import_roots(
         if base.is_relative_to(root):  # an absolute path outside it names no directory under it
             steps = base.relative_to(root).parts
             between.update(dict.fromkeys(root.joinpath(*steps[: end + 1]) for end in range(len(steps))))
-    implied = dict.fromkeys([root, *naming, *(d for d in between if not _is_regular_package(d))])
+    implied = dict.fromkeys([root, *naming, *(d for d in between if not is_regular_package(d))])
     assumed = dict.fromkeys(d for d in _directories_above(packages, root) if d not in implied)
     implied.update(dict.fromkeys(d for d in pythonpath_roots(pythonpath, root) if d not in assumed))
     return list(implied), list(assumed)
@@ -868,14 +866,14 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
         # os.path, not Path.is_file(): a file in an unsearchable directory is missing, rather than raising.
         spellings = ((base / relative / "__init__.py", "/__init__.py"), (base / f"{relative}.py", ".py"))
         file = next(
-            (f for f, ending in spellings if os.path.isfile(f) and _spelled_exactly(base, relative + ending)), None
+            (f for f, ending in spellings if os.path.isfile(f) and spelled_exactly(base, relative + ending)), None
         )
         if file is not None and (real := real_path(file)).is_relative_to(root):
             found.append(str(real))
     return list(dict.fromkeys(found))
 
 
-def _spelled_exactly(base: Path, relative: str) -> bool:
+def spelled_exactly(base: Path, relative: str) -> bool:
     """Whether each part of the ``/``-separated *relative* path under *base* has the case of its entry on disk."""
     directory = str(base)
     for part in relative.split("/"):

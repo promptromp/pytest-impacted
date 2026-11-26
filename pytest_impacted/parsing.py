@@ -45,7 +45,7 @@ def read_source(file_path: str) -> str | None:
 
 
 @contextmanager
-def _quiet_parse() -> Iterator[None]:
+def quiet_parse() -> Iterator[None]:
     """Silence warnings while parsing source.
 
     An invalid escape such as ``"\\d"`` is a SyntaxWarning, which ``-W error`` or
@@ -68,7 +68,7 @@ def is_conftest_module(module_name: str) -> bool:
     return module_name.rpartition(".")[2] == "conftest"
 
 
-def _package_of(module_name: str, is_package: bool) -> str:
+def package_of(module_name: str, is_package: bool) -> str:
     """The package that *module_name*'s relative imports resolve against.
 
     A package's own ``__init__.py`` resolves against itself; any other module
@@ -168,7 +168,7 @@ def split_file_imports(
         return [], []
 
     try:
-        with _quiet_parse():
+        with quiet_parse():
             tree = ast.parse(source)
     except (SyntaxError, ValueError):  # ValueError: a null byte, before Python 3.12
         logger.warning("Syntax error while parsing %s", file_path)
@@ -177,7 +177,7 @@ def split_file_imports(
         logger.warning("Could not parse %s: %s", file_path, type(err).__name__)
         return [], []
 
-    package = _package_of(module_name, is_package)
+    package = package_of(module_name, is_package)
     type_only = {id(node) for node in type_only_imports(tree)} if find_type_only else set()
     runtime: set[str] = set()
     typed: set[str] = set()
@@ -207,7 +207,7 @@ def pytest_plugins_in(source: str | None) -> list[str]:
     if source is None or "pytest_plugins" not in source:  # cheap pre-filter
         return []
     try:
-        with _quiet_parse():
+        with quiet_parse():
             tree = ast.parse(source)
         return [name for stmt in module_level(tree.body) for name in _declared_plugins(stmt)]
     # A 3000-term chain: RecursionError (``+``), or MemoryError ("parser stack overflowed", ``**``).
@@ -273,11 +273,11 @@ def star_imports_in(source: str | None, module_name: str, is_package: bool = Fal
     if source is None or not _may_star_import(source):  # cheap pre-filter: few files star-import
         return []
     try:
-        with _quiet_parse():
+        with quiet_parse():
             tree = ast.parse(source)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return []
-    package = _package_of(module_name, is_package)
+    package = package_of(module_name, is_package)
     return sorted(
         {
             _resolve_relative_import(package, node.level, node.module) if node.level else (node.module or "")
@@ -296,7 +296,7 @@ def parse_all_names(file_path: str) -> list[str]:
     if source is None or "__all__" not in source:  # cheap pre-filter
         return []
     try:
-        with _quiet_parse():
+        with quiet_parse():
             tree = ast.parse(source)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return []

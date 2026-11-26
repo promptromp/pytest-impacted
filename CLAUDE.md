@@ -79,7 +79,7 @@ project and not pointing back up the tree. Use `os.path.isfile`/`exists`, never 
 `Path.resolve()` (it raises on a symlink loop before 3.13, and git reports an untracked loop like any file);
 `parsing.is_package_file`, never `endswith("__init__.py")` (`test__init__.py`).
 
-**One file is one graph node, under one canonical name.** `_discover_project` (behind `discover_project_modules`)
+**One file is one graph node, under one canonical name.** `discover_project` (behind `discover_project_modules`)
 is the only place the package walk, tests-dir walk and ancestor conftests merge; `build_dep_tree`,
 `resolve_files_to_modules` and `resolve_modules_to_files` use it. The package walk's name is canonical; any other
 name a file imports under is an *alias* (`tests.x` for `app/tests/x.py`; `company.app.x`, `src.company.app.x`,
@@ -240,12 +240,12 @@ cannot collapse two projects onto one entry. Never `Path.cwd()` in traversal, gr
 `canonical_root`'s `None` default is its only place.
 
 **Conftests above the analysed packages are graph nodes too.** Package discovery misses a root-level
-`conftest.py`, so `_discover_project` adds them (`_discover_ancestor_conftests`; the public
+`conftest.py`, so `discover_project` adds them (`_discover_ancestor_conftests`; the public
 `discover_ancestor_conftests` drops aliases and contested names and skips nothing), named as package discovery
 would (`conftest`, `backend.conftest`, `app.conftest` for `src/app/conftest.py`) so relative imports resolve, and
 around every name in use, aliases included (taking an alias re-points its imports). A contested name (`y.conftest`
 for `y/conftest.py` and `x/y/conftest.py`) names one node, but an import of it is an edge to every ancestor
-conftest that wanted it (`_Discovered.contested`): the file meant depends on `sys.path` and import mode, and any
+conftest that wanted it (`Discovered.contested`): the file meant depends on `sys.path` and import mode, and any
 single-winner rule loses tests in some layout. Only ancestor conftests contest names (tying every service's
 `tests/conftest.py` together would select them all). One with no free name gets a leading dot (`.mysite.conftest`,
 which no import spells) rather than being dropped with all its edges, and is parsed under `import_base(name)`, so
@@ -296,7 +296,7 @@ impacted when a change reaches one, or a `-p` / `PYTEST_PLUGINS` plugin (`_sessi
 registers plugins session-wide. Editing a mere *declarer* is deliberately not session-wide (it over-selected every
 test module with `pytest_plugins = "pytester"`, and cannot see a removed declaration anyway).
 `parse_pytest_plugins` uses stdlib `ast` outside the backend (so it cannot break parity), behind a text pre-filter,
-warnings silenced so `-W error` cannot turn a `SyntaxWarning` into a lost declaration (`_quiet_parse` does the same
+warnings silenced so `-W error` cannot turn a `SyntaxWarning` into a lost declaration (`quiet_parse` does the same
 for imports). `read_source` and `is_conftest_module` are the shared reader and conftest check — don't
 re-implement either.
 
@@ -376,6 +376,9 @@ pin would refuse), so an install may hold an older one: never change an existing
 (`outdated_for`) — never a TypeError, never an option dropped unseen. Call it in
 `.github/scripts/smoke_rust_wheel.py` too, which runs every loadable wheel before publishing: a function missing
 from a wheel would otherwise silently shrink the Rust path.
+
+**A name another module imports is public** (no leading underscore): `test_module_boundaries` fails on
+`from pytest_impacted.x import _y`.
 
 **Logging: every module that logs declares `logger = logging.getLogger(__name__)`.**
 Never call `logging.info(...)` and friends — those hit the root logger and are

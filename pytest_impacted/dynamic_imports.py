@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import NamedTuple
 
-from pytest_impacted.parsing import _package_of, _quiet_parse, read_source
+from pytest_impacted.parsing import package_of, quiet_parse, read_source
 
 
 class Names(Enum):
@@ -133,7 +133,7 @@ def parse_dynamic_imports(file_path: str, module_name: str, is_package: bool = F
     if source is None or not _SPELLED.search(source):  # cheap pre-filter
         return DynamicImports([], [], [])
     try:
-        with _quiet_parse():
+        with quiet_parse():
             tree = ast.parse(source)
         found = set(_imports(tree, module_name, is_package))
     # A 3000-term chain: RecursionError, or MemoryError ("parser stack overflowed") for a right-nested one.
@@ -265,11 +265,11 @@ def _anchor(node: ast.expr | None, module_name: str, is_package: bool) -> str | 
     if (literal := _literal(node)) is not None:
         return literal
     if isinstance(node, ast.Name) and node.id == "__package__":
-        return _package_of(module_name, is_package)
+        return package_of(module_name, is_package)
     if isinstance(node, ast.Name) and node.id == "__name__":
         return module_name
     if isinstance(node, ast.Attribute) and node.attr == "parent" and isinstance(node.value, ast.Name):
-        return _package_of(module_name, is_package) if node.value.id == "__spec__" else None
+        return package_of(module_name, is_package) if node.value.id == "__spec__" else None
     return None
 
 

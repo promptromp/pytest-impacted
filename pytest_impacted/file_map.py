@@ -21,7 +21,7 @@ from pathlib import Path
 from pytest_impacted.display import notify
 from pytest_impacted.git import files_git_knows
 from pytest_impacted.strategies import glob_refusal, matches_any_glob, normalise_glob
-from pytest_impacted.traversal import _spelled_exactly, forget_listings
+from pytest_impacted.traversal import forget_listings, spelled_exactly
 
 
 def parse_file_map(entries: Iterable[str]) -> list[tuple[str, str]]:
@@ -98,7 +98,7 @@ def files_at(path: str, root_dir: Path) -> list[str]:
     path it finds as an untracked file, and Python's import is case-sensitive.
     """
     forget_listings()  # this runs before the graph is built, or found in a cache
-    if path != "." and os.path.lexists(root_dir / path) and not _spelled_exactly(root_dir, path):
+    if path != "." and os.path.lexists(root_dir / path) and not spelled_exactly(root_dir, path):
         return []
     return sorted(files_git_knows(root_dir, path))
 

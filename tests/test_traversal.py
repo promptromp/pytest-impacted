@@ -547,7 +547,7 @@ def test_two_conftests_that_can_take_one_name_are_both_modules(tmp_path):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
 
-    discovered = traversal._discover_project("x/y/pkg", "y/tests", root_dir=tmp_path)
+    discovered = traversal.discover_project("x/y/pkg", "y/tests", root_dir=tmp_path)
 
     names = {path: name for name, path in discovered.modules.items()}
     conftests = {names[str((tmp_path / rel).resolve())] for rel in ("x/y/conftest.py", "y/conftest.py")}

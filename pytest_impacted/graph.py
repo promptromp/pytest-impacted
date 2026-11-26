@@ -25,14 +25,14 @@ from pytest_impacted.parsing import (
 )
 from pytest_impacted.traversal import (
     LAST_RESORT_PREFIX,
-    _discover_project,
-    _Discovered,
-    _is_regular_package,
+    Discovered,
     basedir_of,
     canonical_root,
     discover_application_files,
+    discover_project,
     forget_listings,
     import_base,
+    is_regular_package,
     locate_module,
     module_parts,
     modules_for_files,
@@ -219,7 +219,7 @@ def _runs_for_the_project(directory: Path, root: Path) -> bool:
     if directory.is_relative_to(root):
         return True
     below = [root, *root.parents[: len(root.parents) - len(directory.parents) - 1]]
-    return root.is_relative_to(directory) and all(map(_is_regular_package, below))
+    return root.is_relative_to(directory) and all(map(is_regular_package, below))
 
 
 def _canonical(path: str, root: Path) -> str:
@@ -408,7 +408,7 @@ class _Linker:
 
     def __init__(
         self,
-        discovered: _Discovered,
+        discovered: Discovered,
         roots: list[Path],
         root: Path,
         gateways: dict[Path, frozenset[str]] | None = None,
@@ -905,7 +905,7 @@ def _add_import(digraph: nx.DiGraph, importer: str, module: str, *, guessed: boo
         digraph.add_edge(importer, module, **{Edge.ASSUMED_ROOT: True})
 
 
-def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
+def _may_name_a_module(candidate: str, walked: Discovered) -> bool:
     """Whether *candidate* could name a module no walk names — one that is gone, say.
 
     Judged by the walks alone: a file the lookup found under some import root does not
@@ -964,7 +964,7 @@ def build_dep_tree(
     root = canonical_root(root_dir)
     forget_listings()  # files may have come or gone since a graph was last built in this process
     pythonpath = pythonpath_roots(pythonpath, root)  # once: an iterator reads empty the second time
-    discovered = _discover_project(package, tests_package, root)
+    discovered = discover_project(package, tests_package, root)
     analysed = [name for name in (package, tests_package) if name]
     roots, assumed_roots = split_import_roots(analysed, discovered.modules, discovered.aliases, root, pythonpath)
     # os.path.realpath, not Path.resolve(), which raises on a symlink loop before Python 3.13.
