@@ -1,6 +1,7 @@
 # Build and publish pre-built Rust wheels for pytest-impacted-rs.
-# Triggered on all pushes (each build job is a required check); publish jobs only run on tag pushes, and only once
-# every wheel the runners can load has loaded and parsed a file (.github/scripts/smoke_rust_wheel.py).
+# Triggered on all pushes (the build jobs are required checks); publish jobs only run on tag pushes, and only once
+# every build job passed: each wheel its runner can load (all but macOS x86_64, cross-compiled on an ARM runner)
+# has loaded and parsed a file with each function pytest-impacted uses (.github/scripts/smoke_rust_wheel.py).
 # Version is stamped from the git tag into Cargo.toml before building.
 
 name: Publish Rust Wheels
@@ -25,19 +26,21 @@ jobs:
             target: x86_64-unknown-linux-gnu
             manylinux: auto
             smoke: native
-          # Linux aarch64
-          - os: ubuntu-latest
+          # Linux aarch64, built on an ARM runner, so the wheel can be loaded there
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             manylinux: auto
+            smoke: native
           # Linux x86_64, musl (Alpine)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             manylinux: musllinux_1_2
             smoke: alpine
-          # Linux aarch64, musl (Alpine)
-          - os: ubuntu-latest
+          # Linux aarch64, musl (Alpine), built on an ARM runner
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             manylinux: musllinux_1_2
+            smoke: alpine
           # macOS x86_64 (cross-compiled on ARM runner)
           - os: macos-latest
             target: x86_64-apple-darwin
