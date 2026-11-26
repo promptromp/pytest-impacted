@@ -61,23 +61,28 @@ def files(tmp_path, caplog):
     return {"app.models": str(tmp_path / "models.py"), f"app.{ODD}": str(tmp_path / f"{ODD}.py")}
 
 
+@pytest.mark.parametrize("each", [False, True], ids=["dict functions", "parse_imports_each"])
 @pytest.mark.parametrize("ignore_type_checking_imports", [False, True])
-def test_import_parsing_leaves_an_odd_file_to_python(monkeypatch, files, ignore_type_checking_imports):
+def test_import_parsing_leaves_an_odd_file_to_python(monkeypatch, files, ignore_type_checking_imports, each):
     def by_python(modules):
         runtime, type_only = graph._parse_imports_in_python({name: path for path, name, _ in modules}, True)
         return {name: (runtime[name], type_only[name]) for name in runtime}
 
     plain = pyo3_like(lambda modules: {name: found for name, (found, _) in by_python(modules).items()})
     split = pyo3_like(by_python)
+    in_order = pyo3_like(lambda modules, find_type_only: list(by_python(modules).values()))
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", True)
+    monkeypatch.setattr(_rust, "RUST_PARSES_EACH", each)
     monkeypatch.setattr(_rust, "rust_parse_all_imports", plain)
     monkeypatch.setattr(_rust, "rust_parse_all_imports_split", split)
+    monkeypatch.setattr(_rust, "rust_parse_imports_each", in_order)
 
     runtime, _ = graph._parse_all_module_imports(files, ignore_type_checking_imports)
 
     assert runtime == {"app.models": ["os"], f"app.{ODD}": []}
-    assert (split if ignore_type_checking_imports else plain).handed == ["app.models"]
+    called = in_order if each else split if ignore_type_checking_imports else plain
+    assert called.handed == ["app.models"]
 
 
 def test_finding_imports_by_name_leaves_an_odd_file_to_python(monkeypatch, files):
@@ -98,6 +103,7 @@ def test_the_real_extension_is_never_handed_an_odd_file(monkeypatch, files):
     """The same with the extension itself, whose PyO3 conversion is what raised: it parses the other file."""
     if not (_rust.RUST_AVAILABLE and _rust.RUST_SPLITS_TYPE_ONLY and _rust.RUST_PARSES_DYNAMIC_IMPORTS):
         pytest.skip("pytest-impacted-rs is not installed, or predates finding imports by name")
+    each = ("rust_parse_imports_each",) if _rust.RUST_PARSES_EACH else ()
     with pytest.raises(UnicodeEncodeError):
         _rust.rust_parse_all_imports([(files[f"app.{ODD}"], f"app.{ODD}", False)])  # what failed the run
     handed: dict[str, list[str]] = {}
@@ -111,18 +117,24 @@ def test_the_real_extension_is_never_handed_an_odd_file(monkeypatch, files):
 
         return call
 
-    for function in ("rust_parse_all_imports", "rust_parse_all_imports_split", "rust_parse_all_dynamic_imports"):
+    functions = ("rust_parse_all_imports", "rust_parse_all_imports_split", "rust_parse_all_dynamic_imports", *each)
+    for function in functions:
         monkeypatch.setattr(_rust, function, recording(function))
 
     for ignore in (False, True):
         assert graph._parse_all_module_imports(files, ignore)[0]["app.models"] == ["os"]
     assert set(graph._parse_all_dynamic_imports(files)) == set(files)
 
-    assert handed == {
-        "rust_parse_all_imports": ["app.models"],
-        "rust_parse_all_imports_split": ["app.models"],
-        "rust_parse_all_dynamic_imports": ["app.models"],
-    }
+    # The import pass goes through parse_imports_each when the extension has it, once per option.
+    imports = (
+        {"rust_parse_imports_each": ["app.models"] * 2}
+        if each
+        else {
+            "rust_parse_all_imports": ["app.models"],
+            "rust_parse_all_imports_split": ["app.models"],
+        }
+    )
+    assert handed == {**imports, "rust_parse_all_dynamic_imports": ["app.models"]}
 
 
 INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"

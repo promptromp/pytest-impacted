@@ -494,6 +494,7 @@ The Rust extension:
 4. Returns one `dict[str, list[str]]` mapping module name to its imports — or, with `--impacted-ignore-type-checking-imports`, a `(runtime, type-only)` pair of lists per module — so only the final data crosses the Rust/Python boundary
 5. Finds the [imports by name](#astimpactstrategy) (`importlib.import_module`, `mock.patch`, `monkeypatch.setattr`, …) in parallel too, since 0.40.1, from the same table the pure-Python pass reads. A file ruff rejects, or one nested too deep to walk, it leaves to that pass, so it never finds less. It may find more: in a file the running Python cannot parse, as for import statements (see above). An older `pytest-impacted-rs` leaves them all to that pass, which finds the same imports at a fraction of a second's cost on a thousand-file project
 6. Leaves a file whose name is not UTF-8 (possible on Linux, never on macOS) to the pure-Python backend, for its imports and its imports by name alike (since 0.40.2)
+7. Leaves to the pure-Python backend, since 0.41, a file whose import statements it cannot read: one ruff rejects though CPython compiles it (203 nested conditionals), one not encoded in UTF-8, one over 2 MiB (generated code). An older extension found no imports in such a file. Its threads have 64 MiB stacks, so a generated module with a 60,000-term expression is read rather than crashing the run, as it did before 0.41
 
 ### Benchmarks
 

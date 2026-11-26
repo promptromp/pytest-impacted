@@ -2599,6 +2599,7 @@ def test_an_extension_predating_the_option_leaves_the_parsing_to_python(tmp_path
 
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", False)
+    monkeypatch.setattr(_rust, "RUST_PARSES_EACH", False)  # newer still
     monkeypatch.setattr(_rust, "rust_parse_all_imports", parse_all_imports)
     write_files(tmp_path, TYPE_ONLY)
     build = partial(graph.build_dep_tree, "pkg", tests_package="tests", root_dir=tmp_path)

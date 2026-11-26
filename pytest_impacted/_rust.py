@@ -8,11 +8,13 @@ pure-Python astroid-based implementation is used as a fallback.
 __all__ = [
     "RUST_AVAILABLE",
     "RUST_PARSES_DYNAMIC_IMPORTS",
+    "RUST_PARSES_EACH",
     "RUST_SPLITS_TYPE_ONLY",
     "outdated_for",
     "rust_parse_all_dynamic_imports",
     "rust_parse_all_imports",
     "rust_parse_all_imports_split",
+    "rust_parse_imports_each",
     "takes",
     "uses_rust",
 ]
@@ -46,6 +48,18 @@ try:
 except ImportError:
     rust_parse_all_dynamic_imports = None  # type: ignore[assignment]
     RUST_PARSES_DYNAMIC_IMPORTS = False
+
+
+# From 0.41.0 it parses each file or hands it back (``None``): one ruff rejects though CPython compiles it (nested
+# deeper than 202 levels), one not UTF-8, one too large. The Python backend reads those; an older extension
+# returned no imports for them, so a test was lost.
+try:
+    from pytest_impacted_rs import parse_imports_each as rust_parse_imports_each
+
+    RUST_PARSES_EACH = True
+except ImportError:
+    rust_parse_imports_each = None  # type: ignore[assignment]
+    RUST_PARSES_EACH = False
 
 
 def takes(*texts: str) -> bool:

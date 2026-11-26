@@ -178,6 +178,11 @@ def split_file_imports(
     except astroid.exceptions.AstroidSyntaxError:
         logger.warning("Syntax error while parsing %s", file_path)
         return [], []
+    except RecursionError:
+        # astroid's tree builder recurses in Python, giving up near 500 nested terms (a long ``a + b + ...`` in
+        # generated code) where CPython's parser, and ruff, go on: read the imports as they do, every one at
+        # runtime (no type-only split without astroid's tree; keeping an edge only selects more).
+        return _imports_by_ast(source, file_path, package), []
 
     type_only = {id(node) for node in type_only_imports(tree)} if find_type_only else set()
     runtime: set[str] = set()
@@ -185,6 +190,29 @@ def split_file_imports(
     for node in tree.nodes_of_class((Import, ImportFrom)):
         (typed if id(node) in type_only else runtime).update(_extract_imports_from_node(node, package))
     return sorted(runtime), sorted(typed - runtime)
+
+
+def _imports_by_ast(source: str, file_path: str, package: str) -> list[str]:
+    """The import candidates of *source* by the stdlib parser, as :func:`_extract_imports_from_node` reads them.
+
+    ``ast.walk`` is iterative, so only the parse itself can give up; then the file imports nothing, logged.
+    """
+    try:
+        with _quiet_parse():
+            module = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        logger.warning("Could not parse %s: nested too deeply", file_path)
+        return []
+    found: set[str] = set()
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = _resolve_relative_import(package, node.level, node.module) if node.level else (node.module or "")
+            if base:
+                found.add(base)
+            found.update(f"{base}.{alias.name}" if base else alias.name for alias in node.names if alias.name != "*")
+    return sorted(found)
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:
