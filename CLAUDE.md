@@ -373,28 +373,17 @@ disk (`_Linker`), instead. The apparent
 over-emission is the design, not a bug.
 
 **Imports by name are import candidates** (`dynamic_imports.py`): the literal arguments of the calls in the
-`LOADERS` table. The table is data, read by one mechanism: add an API as a row, never as a branch. The maintainer
+`LOADERS` table, each read as the import statement that imports the same (`graph._imports_by_name`), so placement,
+deleted targets and basedirs behave as for that statement. Add an API as a row, never as a branch. The maintainer
 chose this curated table over a broad rule ("any string spelling a project module"), which measured +13% tests on
-pydantic, about 99% of it noise. A `Loader.callee` matches the end of the call's name after resolving
-absolute-import aliases (unioned over scopes); a re-export, star import or assignment is not followed. So a bare
-`patch`/`setattr`/`delattr` matches any receiver (fixtures, `with monkeypatch.context() as m`), and another API's
-method of that name with a dotted literal becomes a plain edge. From application code, that edge could place a
-test helper as application code, turning its conftest rule opt-in. That never happened in six measured projects,
-where application code's by-name edges all reach application modules: a documented trade-off, not a reach-only
-flag. Those rows are `Names.ATTRIBUTE`, since mock and monkeypatch split `target.rsplit(".", 1)`: the path needs a
-dot, and its module is a prefix of the path before the attribute. `Names.OBJECT` rows import the whole path. Like
-`parse_pytest_plugins`, it is parsed with stdlib `ast` outside the backends, behind a word pre-filter: a file
-calling a loader spells its name, at the call or at the import.
-
-In the graph (`_imports_by_name`), a module name reads as `import pkg.mod`. An object or attribute path's
-candidates are its longest prefix `linker.targets` resolves, else its first part, plus every longer prefix; each
-is then looked up through pytest's basedirs like any candidate. The longer ones link nothing, but they keep a
-deleted module's name in `graph["unresolved"]`, whichever part of `helpers.Factory.make` it was. So placement,
-deleted targets and basedir edges behave exactly as for the static statement, which the integration tests pin
-for every form, place, layout and change. One known corner: an object path (`resolve_name`) through a module
-beside a same-named directory resolves to the directory's file, which the walk names though Python imports the
-module. They are added after `linker.activate`: only static imports are evidence of an assumed root. Only literals
-count; a computed name is no import.
+pydantic, about 99% of it noise. The rows without a module (`patch`, `patch.dict`, `patch.multiple`, `setattr`,
+`delattr`) match any receiver, so another API's method of that name with a matching literal becomes a plain edge.
+From application code, that edge could place a test helper as application code, turning its conftest rule opt-in.
+That never happened in six measured projects, where application code's by-name edges all reach application
+modules: a documented trade-off, not a reach-only flag. An object path keeps every prefix longer than its module
+as a candidate, so a deleted module is linked whichever part it was. By-name candidates are added after
+`linker.activate`: only static imports are evidence of an assumed root. It is parsed with stdlib `ast` outside
+the backends, like `parse_pytest_plugins`. Only literals count; a computed name is no import.
 
 **The `impacted-tests` CLI reads the pytest configuration through `ini.py`, never a pytest
 `Config`**: building one imports the initial conftests, which is running project code. `ini.py`

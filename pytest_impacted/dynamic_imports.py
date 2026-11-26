@@ -122,7 +122,11 @@ def parse_dynamic_imports(file_path: str, module_name: str, is_package: bool = F
         found = set(_imports(tree, module_name, is_package))
     except (SyntaxError, ValueError, RecursionError):  # RecursionError: e.g. a 3000-term attribute chain
         return DynamicImports([], [], [])
-    return DynamicImports(*(sorted(name for kind, name in found if kind is names) for names in Names))
+    return DynamicImports(
+        modules=sorted(name for kind, name in found if kind is Names.MODULE),
+        objects=sorted(name for kind, name in found if kind is Names.OBJECT),
+        attributes=sorted(name for kind, name in found if kind is Names.ATTRIBUTE),
+    )
 
 
 def _imports(tree: ast.Module, module_name: str, is_package: bool) -> Iterator[tuple[Names, str]]:
