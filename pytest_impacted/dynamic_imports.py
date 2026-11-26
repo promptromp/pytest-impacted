@@ -305,9 +305,12 @@ def _is_identifier(text: str) -> bool:
     """Whether *text* is an identifier, any non-ASCII character counting as an identifier's.
 
     That way both backends agree on every script, whatever their Unicode version, as ``type_only.mentions`` does.
+    Lone surrogates and U+FFFD, which ruff makes of one, are no identifier's.
     """
-    return (
-        bool(text)
-        and not ("0" <= text[0] <= "9")
-        and all(char == "_" or char.isalnum() or not char.isascii() for char in text)
-    )
+    return bool(text) and not ("0" <= text[0] <= "9") and all(_identifier_char(char) for char in text)
+
+
+def _identifier_char(char: str) -> bool:
+    if char.isascii():
+        return char == "_" or char.isalnum()
+    return not ("\ud800" <= char <= "\udfff") and char != "\ufffd"

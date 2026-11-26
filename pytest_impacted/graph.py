@@ -823,14 +823,16 @@ def _parse_all_dynamic_imports(submodules: dict[str, str]) -> dict[str, DynamicI
     """What each module of ``{name: path}`` imports by name (see :mod:`~pytest_impacted.dynamic_imports`).
 
     The Rust extension finds it in parallel when it can (``_rust.RUST_PARSES_DYNAMIC_IMPORTS``), from the same
-    table, else the stdlib ``ast`` pass does, file by file. A conftest with no free name is parsed under its
+    table, else the stdlib ``ast`` pass does, file by file. The pass also reads each file the extension leaves to
+    it, so the extension never finds less. A conftest with no free name is parsed under its
     :func:`~pytest_impacted.traversal.import_base`, as for its import statements.
     """
     modules = [(path, import_base(name), os.path.basename(path) == "__init__.py") for name, path in submodules.items()]
     if _rust.RUST_PARSES_DYNAMIC_IMPORTS:
+        # A file the extension leaves (None: ruff rejects it, or it nests too deep) is the stdlib pass's.
         found = [
-            DynamicImports(modules=names, objects=objects, attributes=attributes)
-            for names, objects, attributes in _rust.rust_parse_all_dynamic_imports(modules, TABLE)
+            parse_dynamic_imports(*module) if lists is None else DynamicImports(*lists)
+            for module, lists in zip(modules, _rust.rust_parse_all_dynamic_imports(modules, TABLE), strict=True)
         ]
     else:
         found = [parse_dynamic_imports(*module) for module in modules]

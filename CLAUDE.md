@@ -416,8 +416,11 @@ clause with its own test in ruff's `elif_else_clauses`; astroid keeps docstrings
 has them as bare string statements, so no bare string counts; an f-string's text is a string to
 neither; type comments are nodes to neither. So are the imports by name (`tests/test_dynamic_imports.py`
 runs every case through the stdlib pass and `rust/src/dynamic_imports.rs`): an identifier counts any
-non-ASCII character as an identifier's in both, so no Unicode version decides, and the Rust port of
-`importlib.util.resolve_name` must keep its `rsplit` arithmetic. Check new rules over every file of a real
+non-ASCII character as an identifier's in both (but lone surrogates and the U+FFFD ruff makes of them), so no
+Unicode version decides, and the Rust port of `importlib.util.resolve_name` must keep its `rsplit` arithmetic.
+A file ruff rejects though CPython's parser accepts it (`f(a=1, a=2)`), or nested deeper than `DEEPEST` (the
+visitor recurses on a small rayon stack), is `None` from the extension, and the graph has the stdlib pass read
+it: never less than that pass. More, only where the running Python cannot parse the file (newer syntax). Check new rules over every file of a real
 clone too.
 The extension is a separate distribution and the `fast` extra is unpinned (a development build is
 `0.1.0`, which a pin would refuse), so an install may hold an older one: never change an existing

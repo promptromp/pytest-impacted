@@ -150,21 +150,31 @@ impl Table {
 }
 
 /// What `source`'s loader calls import, for the module `module_name` (`dynamic_imports.parse_dynamic_imports`).
-pub fn dynamic_imports(source: &str, module_name: &str, is_package: bool, table: &Table) -> Found {
+///
+/// `None` for a source ruff rejects, though CPython's `ast.parse` may accept it (`f(a=1, a=2)` is the compiler's
+/// error, not the parser's), and for one nested deeper than `DEEPEST`: the stdlib pass reads those, so this
+/// never finds less than it.
+pub fn dynamic_imports(
+    source: &str,
+    module_name: &str,
+    is_package: bool,
+    table: &Table,
+) -> Option<Found> {
     if !table
         .spellings
         .iter()
         .any(|spelling| source.contains(spelling.as_str()))
     {
-        return Found::default(); // cheap pre-filter: no call to a loader without its name
+        return Some(Found::default()); // cheap pre-filter: no call to a loader without its name
     }
-    let Ok(parsed) = ruff_python_parser::parse_module(source) else {
-        return Found::default();
-    };
+    let parsed = ruff_python_parser::parse_module(source).ok()?;
     let suite = parsed.into_suite();
     let mut walk = Walk::default();
     for stmt in &suite {
         walk.visit_stmt(stmt);
+    }
+    if walk.too_deep {
+        return None;
     }
     let mut found = HashSet::new();
     for call in &walk.calls {
@@ -181,12 +191,16 @@ pub fn dynamic_imports(source: &str, module_name: &str, is_package: bool, table:
         paths.sort();
         paths
     };
-    (
+    Some((
         sorted(Names::Module),
         sorted(Names::Object),
         sorted(Names::Attribute),
-    )
+    ))
 }
+
+/// How deep the walk goes into nested expressions: the visitor recurses, and a rayon worker's stack is small.
+/// Real code is nowhere near; a 3000-term `+` chain is. Deeper, the stdlib pass reads the file.
+const DEEPEST: usize = 2_000;
 
 /// One walk of the module: the names its absolute imports bind anywhere, unioned over scopes (a name bound
 /// in two places may call either), and every call passing an argument.
@@ -194,6 +208,8 @@ pub fn dynamic_imports(source: &str, module_name: &str, is_package: bool, table:
 struct Walk<'a> {
     bindings: Bindings,
     calls: Vec<&'a ExprCall>,
+    depth: usize,
+    too_deep: bool,
 }
 
 impl<'a> Visitor<'a> for Walk<'a> {
@@ -232,12 +248,18 @@ impl<'a> Visitor<'a> for Walk<'a> {
     }
 
     fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.depth == DEEPEST {
+            self.too_deep = true;
+            return;
+        }
         if let Expr::Call(call) = expr {
             if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
                 self.calls.push(call);
             }
         }
+        self.depth += 1;
         visitor::walk_expr(self, expr);
+        self.depth -= 1;
     }
 }
 
@@ -442,13 +464,15 @@ fn dotted(text: &str) -> bool {
     !text.is_empty() && text.split('.').all(is_identifier)
 }
 
-/// Whether `text` is an identifier, any non-ASCII character counting as an identifier's (as in `type_only`).
+/// Whether `text` is an identifier, any non-ASCII character counting as an identifier's (as in `type_only`) but
+/// U+FFFD: what ruff makes of a lone surrogate, which the stdlib pass rejects too.
 fn is_identifier(text: &str) -> bool {
     let mut chars = text.chars();
+    let char_ok = |c: char| identifier_char(c) && c != '\u{FFFD}';
     chars
         .next()
-        .is_some_and(|first| identifier_char(first) && !first.is_ascii_digit())
-        && chars.all(identifier_char)
+        .is_some_and(|first| char_ok(first) && !first.is_ascii_digit())
+        && chars.all(char_ok)
 }
 
 fn last_part(name: &str) -> &str {

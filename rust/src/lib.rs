@@ -293,13 +293,14 @@ fn parse_all_imports_split(
 }
 
 /// What each `(file_path, module_name, is_package)` imports by name, in parallel via rayon: its modules, object
-/// paths and attribute paths, in the order given. `loaders` is the table (`dynamic_imports.TABLE`), read by one
+/// paths and attribute paths, in the order given; `None` for a file the stdlib pass must read (see
+/// `dynamic_imports::dynamic_imports`). `loaders` is the table (`dynamic_imports.TABLE`), read by one
 /// mechanism. Mirrors `parse_dynamic_imports` in `pytest_impacted/dynamic_imports.py`.
 #[pyfunction]
 fn parse_all_dynamic_imports(
     modules: Vec<(String, String, bool)>,
     loaders: Vec<dynamic_imports::Row>,
-) -> PyResult<Vec<dynamic_imports::Found>> {
+) -> PyResult<Vec<Option<dynamic_imports::Found>>> {
     let table =
         dynamic_imports::Table::new(loaders).map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(modules
