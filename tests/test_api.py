@@ -368,9 +368,7 @@ def test_an_impacted_test_module_maps_to_its_node_path(_mock_find_impacted_files
 @patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/gone.py"])
 def test_a_deleted_module_joins_the_run_graph_only(_mock_find_impacted_files, tmp_path):
     """Linked on the run's copy: the cached graph never learns of a file one run saw deleted."""
-    for rel, source in {"pkg/__init__.py": "", "pkg/mod.py": "def f():\n    import pkg.gone\n"}.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, {"pkg/__init__.py": "", "pkg/mod.py": "def f():\n    import pkg.gone\n"})
     seen = []
 
     class Recorder:
@@ -397,9 +395,7 @@ def test_a_deleted_test_module_is_no_test_file(_mock_find_impacted_files, tmp_pa
         "pkg/__init__.py": "",
         "tests/test_child.py": "def test_child():\n    from tests.test_base import Base\n",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
@@ -416,9 +412,7 @@ def test_a_deleted_test_module_is_no_test_file(_mock_find_impacted_files, tmp_pa
 @patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["pkg/mod.py"])
 def test_test_modules_with_a_path_need_no_discovery(_mock_find_impacted_files, mock_resolve_modules_to_files, tmp_path):
     """Discovery re-walks the project: skipped when every impacted test module is a node with a file."""
-    for rel, source in {"pkg/__init__.py": "", "pkg/mod.py": "", "tests/test_mod.py": "import pkg.mod\n"}.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, {"pkg/__init__.py": "", "pkg/mod.py": "", "tests/test_mod.py": "import pkg.mod\n"})
 
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,

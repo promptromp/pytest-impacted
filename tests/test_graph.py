@@ -108,9 +108,7 @@ def test_the_graph_links_no_init_to_the_modules_of_its_package(tmp_path):
     """``import pkg.core`` runs ``pkg/__init__.py`` too, yet no edge says so: the run adds a changed
     ``__init__``'s package members to the impacted modules instead (``package_members``). Edges would make
     every importer of ``pkg.*`` depend on everything the ``__init__`` imports."""
-    for rel, source in {"pkg/__init__.py": "", "pkg/core.py": "", "tests/test_core.py": "import pkg.core\n"}.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, {"pkg/__init__.py": "", "pkg/core.py": "", "tests/test_core.py": "import pkg.core\n"})
 
     dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
 
@@ -126,9 +124,7 @@ def test_resolving_an_init_node_reaches_only_its_importers(tmp_path):
         "tests/test_core.py": "import pkg.core\n",
         "tests/test_utils.py": "import pkg.utils\n",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
 
@@ -143,9 +139,7 @@ def test_a_module_importing_from_its_package_root_links_its_tests_to_the_init(tm
         "tests/test_core.py": "from app.core import thing\n",
         "tests/test_other.py": "",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
 
@@ -187,9 +181,7 @@ def test_ancestor_conftest_relative_imports_resolve_in_src_layout(tmp_path):
         "src/app/core/__init__.py": "",
         "src/app/core/db.py": "def connect(): ...\n",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("src/app/core", root_dir=tmp_path)
 
@@ -210,9 +202,7 @@ def test_ancestor_conftest_whose_short_name_clashes_keeps_its_full_name(tmp_path
         "tests/app/conftest.py": "import app.core.db\n",
         "tests/app/unit/test_x.py": "",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("src/app", tests_package="tests/app/unit", root_dir=tmp_path)
 
@@ -228,9 +218,7 @@ def test_pytest_plugins_declaration_is_an_edge(tmp_path):
         "tests/fixtures.py": "from app.db import connect\n",
         "conftest.py": 'pytest_plugins = ["tests.fixtures", "pytester"]\n',
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
 
@@ -245,9 +233,7 @@ def test_pytest_plugin_targets_are_flagged(tmp_path):
         "tests/fixtures.py": "",
         "tests/test_a.py": 'pytest_plugins = "tests.fixtures"\n',
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
 
@@ -263,9 +249,7 @@ def test_namespace_subpackage_modules_are_linked_by_absolute_and_relative_import
         "app/processors/util.py": "",
         "tests/test_ocr.py": "from app.processors.ocr import run\n",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
 
@@ -282,9 +266,7 @@ def test_a_test_importing_from_the_package_root_sees_what_its_init_imports(tmp_p
         "tests/test_app.py": "from app import Thing\n",
         "tests/test_other.py": "",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
 
@@ -309,9 +291,7 @@ def test_every_node_resolves_back_to_itself(tmp_path):
         "suite/conftest.py": "from backend.conftest import *\n",
         "suite/test_a.py": "",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
     root = tmp_path.resolve()
 
     dep_tree = graph.build_dep_tree("backend/app", tests_package="suite", root_dir=tmp_path)
@@ -348,9 +328,7 @@ def test_a_conftest_named_like_one_in_the_package_keeps_its_edges(tmp_path):
         "mysite/mysite/models.py": "",
         "mysite/mysite/views.py": "",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("mysite/mysite", root_dir=tmp_path)
 
@@ -373,9 +351,7 @@ def test_a_conftest_with_no_free_name_keeps_its_relative_imports(tmp_path):
         "x/x/tests/helpers.py": "",
         "x/x/tests/test_a.py": "",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("x/x", tests_package="x/x/tests", root_dir=tmp_path)
 
@@ -393,9 +369,7 @@ def test_a_module_in_a_regular_package_reaches_its_conftest_by_relative_import(t
         "y/conftest.py": "",
         "y/tests/test_a.py": "from y.pkg import mod\n",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("x/y/pkg", tests_package="y/tests", root_dir=tmp_path)
 
@@ -442,9 +416,7 @@ def test_tests_dir_conftests_sharing_a_name_do_not_select_each_others_tests(tmp_
             f"services/{service}/tests/conftest.py": "def helper(): ...\n",
             f"services/{service}/tests/test_x.py": "from tests.conftest import helper\n",
         }
-        for rel, source in files.items():
-            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-            (tmp_path / rel).write_text(source)
+        write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("services", tests_package="services", root_dir=tmp_path)
     conftest = graph.resolve_files_to_nodes(["services/a/tests/conftest.py"], dep_tree, root_dir=tmp_path)
@@ -476,9 +448,7 @@ def test_a_file_reached_under_two_names_is_one_node(tmp_path):
         "app/tests/helpers.py": "import app.core\n",
         "app/tests/test_a.py": "from tests.helpers import make\n",
     }
-    for rel, source in files.items():
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text(source)
+    write_files(tmp_path, files)
 
     dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path)
 
