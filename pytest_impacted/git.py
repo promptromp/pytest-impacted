@@ -342,52 +342,61 @@ def _with_submodule_changes(
     differ inside it between the commit the superproject recorded at *old* and the one at *new* (``None``: the
     submodule's working tree, untracked files included), deleted ones too; an added submodule brings every file
     it tracks, and so does a submodule whose old commit is not there to diff from (a notice: a file it deleted is
-    not seen). What cannot be read at all — a submodule not checked out, removed, or broken — is a notice: never
-    less than nothing was before, never a failed run. The path itself stays, for a glob such as ``vendor/**``.
-    Only a gitlink the superproject records counts: an untracked clone in the tree is a plain path.
+    not seen). What cannot be read — a submodule not checked out, or broken — is a notice. The path itself stays,
+    for a glob such as ``vendor/**``. Only a gitlink the superproject records counts: an untracked clone in the tree
+    is a plain path. A submodule removed is not followed.
+
+    Never less than main selected (nothing), and never a failed run: anything unexpected here is a notice, and
+    the paths as git gave them.
     """
     root = Path(repo.working_tree_dir) if repo.working_tree_dir else None
     if root is None or not (os.path.exists(root / ".gitmodules") or ".gitmodules" in paths):
         return paths  # no submodules: not one git call more
-    # A submodule's path is a directory (checked out or not), or gone (removed); a changed file is neither.
+    try:
+        return [*paths, *_submodule_files(repo, root, paths, old, new, notice)]
+    except Exception as err:  # noqa: BLE001 — following submodules must never fail a run main did not
+        notice(f"Could not follow the submodules among the changed files ({type(err).__name__}: {err}).")
+        return paths
+
+
+def _submodule_files(
+    repo: Repo, root: Path, paths: list[str], old: str, new: str | None, notice: Callable[[str], None]
+) -> list[str]:
+    """The files changed inside each submodule among *paths* (see :func:`_with_submodule_changes`)."""
+    # A checked-out submodule's path is a directory; a changed or deleted file never is: so few are asked about.
     candidates = [
         path
         for path in dict.fromkeys(path.rstrip("/") for path in paths)  # once each: staged and unstaged may hold it
-        if os.path.isdir(root / path) or not os.path.lexists(root / path)
+        if os.path.isdir(root / path) and not os.path.islink(root / path)
     ]
-    recorded = _gitlinks(repo, new, candidates)
-    gone = [path for path in candidates if path not in recorded and not os.path.lexists(root / path)]
-    expanded = list(paths)
-    for path in candidates:
-        if path in recorded:
-            expanded.extend(f"{path}/{file}" for file in _changed_inside(repo, root, path, old, new, notice))
-    for path in _gitlinks(repo, old, gone):
-        notice(f"Submodule {path} was removed: the files it provided are not seen as deleted.")
-    return expanded
+    return [
+        f"{path}/{file}"
+        for path in sorted(_gitlinks(repo, new, candidates))
+        for file in _changed_inside(repo, root, path, old, new, notice)
+    ]
 
 
 def _gitlinks(repo: Repo, revision: str | None, paths: list[str]) -> frozenset[str]:
     """Which of *paths* the repository records as submodules (mode 160000): in its index, or at *revision*.
 
-    One git call for them all, asking about those paths alone: listing a whole index or tree costs seconds in a
-    monorepo.
+    Asked about those paths alone (a whole index or tree costs seconds in a monorepo), a few hundred at a time
+    (a command line has a limit).
     """
-    if not paths:
-        return frozenset()
-    specs = [f":(literal){path}" for path in paths]
-    try:
+    found: set[str] = set()
+    for start in range(0, len(paths), 256):
+        chunk = paths[start : start + 256]
+        specs = [f":(literal){path}" for path in chunk]
         if revision is None:
             listed = repo.git.ls_files("-s", "-z", "--", *specs)
         else:
             listed = repo.git.ls_tree("-z", *rev_args(revision), "--", *specs)
-    except GitCommandError:
-        return frozenset()
-    wanted = set(paths)
-    return frozenset(
-        path
-        for entry in listed.split("\0")
-        if entry.startswith("160000 ") and (path := entry.partition("\t")[2]) in wanted
-    )
+        wanted = set(chunk)
+        found.update(
+            path
+            for entry in listed.split("\0")
+            if entry.startswith("160000 ") and (path := entry.partition("\t")[2]) in wanted
+        )
+    return frozenset(found)
 
 
 def _changed_inside(
@@ -414,9 +423,10 @@ def _changed_inside(
                 changed = _impactful_paths(_name_status_diff(submodule, *rev_args(before, *after)))
                 if new is None:  # the working tree: untracked files too
                     changed += submodule.git.ls_files("--others", "--exclude-standard", "-z").split("\0")
-                nested = _gitlinks(submodule, None, [file for file in changed if file])
+                changed = [file for file in changed if file]
+                nested = _gitlinks(submodule, None, [file for file in changed if os.path.isdir(directory / file)])
                 return [
-                    *(file for file in changed if file and file not in nested),
+                    *(file for file in changed if file not in nested),
                     *(
                         file
                         for link in sorted(nested.intersection(changed))

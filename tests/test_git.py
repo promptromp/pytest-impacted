@@ -1076,12 +1076,9 @@ def _bump_on_a_branch(repo, root):
     return base
 
 
-@pytest.mark.parametrize(
-    ("how", "noticed"),
-    [("its gitdir gone", "cannot be opened"), ("removed", "was removed")],
-)
-def test_a_submodule_that_cannot_be_read_is_named_never_a_failed_run(repo_with_submodule, how, noticed):
-    """Nothing was selected for a submodule before; what cannot be read in one now is said, and the run goes on."""
+@pytest.mark.parametrize(("how", "notices_expected"), [("its gitdir gone", 1), ("removed", 0)])
+def test_a_submodule_that_cannot_be_read_never_fails_the_run(repo_with_submodule, how, notices_expected):
+    """Nothing was selected for a submodule before: one that cannot be read is said, a removed one is not followed."""
     repo, root = repo_with_submodule
     if how == "removed":
         base = repo.active_branch.name
@@ -1096,7 +1093,29 @@ def test_a_submodule_that_cannot_be_read_is_named_never_a_failed_run(repo_with_s
     found = git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base, on_fallback=notices.append)
 
     assert "vendor" in found
-    assert len(notices) == 1 and noticed in notices[0], notices
+    assert len(notices) == notices_expected, notices
+
+
+def test_many_deleted_files_beside_a_submodule_are_never_asked_about(repo_with_submodule, monkeypatch):
+    """A deleted file is no directory, so no submodule: thousands of them overflowed git's command line."""
+    repo, root = repo_with_submodule
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    for index in range(300):
+        (root / "pkg" / f"gone{index}.py").write_text("")
+    commit_all(repo, "add")
+    base = repo.git.rev_parse("HEAD")
+    for index in range(300):
+        (root / "pkg" / f"gone{index}.py").unlink()
+    commit_all(repo, "delete")
+    asked = []
+    real = git._gitlinks
+    monkeypatch.setattr(
+        git, "_gitlinks", lambda repo, revision, paths: asked.append(len(paths)) or real(repo, revision, paths)
+    )
+
+    assert len(branch(root, base)) == 300
+    assert all(count == 0 for count in asked), asked
 
 
 def test_a_submodule_s_commands_ignore_a_git_hook_s_environment(repo_with_submodule, monkeypatch):
