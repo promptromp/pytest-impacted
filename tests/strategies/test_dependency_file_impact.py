@@ -60,7 +60,7 @@ class TestMatchesDependencyFile:
             pytest.param("requirements/README.md", False, id="non_txt_in_requirements_dir"),
         ],
     )
-    def testmatches_dependency_file(self, file_path, expected):
+    def test_matches_dependency_file(self, file_path, expected):
         assert matches_dependency_file(file_path) is expected
 
     def test_custom_patterns(self):

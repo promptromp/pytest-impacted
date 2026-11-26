@@ -2,8 +2,6 @@
 
 import os
 import sys
-import tempfile
-from pathlib import Path
 
 import networkx as nx
 import pytest
@@ -17,10 +15,9 @@ from pytest_impacted.strategies import (
 class TestPytestImpactStrategy:
     """Test the pytest-specific impact strategy."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.root_dir = Path(self.temp_dir)
+    @pytest.fixture(autouse=True)
+    def _root(self, tmp_path):
+        self.root_dir = tmp_path
 
     def test_find_impacted_tests_through_the_import_graph(self):
         """Without any conftest involved, the strategy still follows imports on its own."""

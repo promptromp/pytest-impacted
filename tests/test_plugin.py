@@ -168,30 +168,30 @@ def test_validate_config_branch_mode_missing_base(pytestconfig, monkeypatch):
         validate_config(pytestconfig)
 
 
-def testvalidate_module_hyphen_suggests_underscore():
+def test_validate_module_hyphen_suggests_underscore():
     """Test that a hyphenated module name suggests the underscore version."""
     with pytest.raises(pytest.UsageError, match="Did you mean: --impacted-module=pytest_impacted"):
         validate_module("pytest-impacted", Path.cwd())
 
 
-def testvalidate_module_nonexistent():
+def test_validate_module_nonexistent():
     """Test that a completely unknown module gives a helpful error."""
     with pytest.raises(pytest.UsageError, match="Module 'doesnotexist' not found"):
         validate_module("doesnotexist", Path.cwd())
 
 
-def testvalidate_module_valid():
+def test_validate_module_valid():
     """Test that a valid module name passes validation."""
     validate_module("pytest_impacted", Path.cwd())  # Should not raise
 
 
-def testvalidate_tests_dir_nonexistent():
+def test_validate_tests_dir_nonexistent():
     """Test that a non-existent tests directory gives a helpful error."""
     with pytest.raises(pytest.UsageError, match="Tests directory 'nonexistent_dir' does not exist"):
         validate_tests_dir("nonexistent_dir", Path.cwd())
 
 
-def testvalidate_tests_dir_valid():
+def test_validate_tests_dir_valid():
     """Test that a valid tests directory passes validation."""
     validate_tests_dir("tests", Path.cwd())  # Should not raise
 
@@ -207,7 +207,7 @@ def test_validate_tests_dir_rejects_a_directory_the_analysis_cannot_name(tmp_pat
         validate_tests_dir(tests_dir, tmp_path / "project")
 
 
-def testvalidate_tests_dir_without_init(tmp_path):
+def test_validate_tests_dir_without_init(tmp_path):
     """Test that a tests directory without __init__.py passes validation."""
     test_dir = tmp_path / "my_tests"
     test_dir.mkdir()
@@ -241,13 +241,13 @@ def test_validate_base_branch_refuses_an_option_like_ref(real_repo):
         validate_base_branch("--output=/tmp/pwned", str(root))
 
 
-def testvalidate_base_branch_no_git_repo(tmp_path):
+def test_validate_base_branch_no_git_repo(tmp_path):
     """validate_base_branch gives a helpful error when no git repo is found."""
     with pytest.raises(pytest.UsageError, match="No git repository found"):
         validate_base_branch("main", str(tmp_path))
 
 
-def testvalidate_module_src_layout_suggestion(tmp_path):
+def test_validate_module_src_layout_suggestion(tmp_path):
     """When a module exists under src/, suggest the src-layout path."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "mypackage").mkdir()

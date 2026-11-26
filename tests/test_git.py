@@ -449,7 +449,7 @@ def test_find_repo_uses_search_parent_directories(mock_repo):
     mock_repo.assert_called_once_with(path=Path("/some/path"), search_parent_directories=True)
 
 
-def testnormalize_git_paths_same_dir():
+def test_normalize_git_paths_same_dir():
     """When git_root == working_dir, paths are returned unchanged."""
     paths = ["src/module.py", "tests/test_foo.py"]
     result = normalize_git_paths(paths, Path("/repo"), Path("/repo"))

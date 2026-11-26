@@ -122,6 +122,17 @@ def import_backend(request, monkeypatch):
     return request.param
 
 
+@pytest.fixture(params=["rust", "python"])
+def by_name_backend(request, monkeypatch):
+    """Run the test with each backend finding the imports by name: the Rust extension, then the stdlib ``ast``
+    pass, which an older extension also leaves it to."""
+    if request.param == "python":
+        monkeypatch.setattr(_rust, "RUST_PARSES_DYNAMIC_IMPORTS", False)
+    elif not _rust.RUST_PARSES_DYNAMIC_IMPORTS:
+        pytest.skip("pytest-impacted-rs is not installed, or predates finding imports by name")
+    return request.param
+
+
 @pytest.fixture(scope="session")
 def committed_repo_template(tmp_path_factory):
     """A committed repository with a two-module package on ``main``, built once and copied per test."""

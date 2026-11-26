@@ -277,7 +277,7 @@ def test_find_non_package_prefix_src_layout(tmp_path):
     assert importable == "predicated"
 
 
-def testfind_non_package_prefix_deeply_nested(tmp_path):
+def test_find_non_package_prefix_deeply_nested(tmp_path):
     """Deeply nested non-package prefix: src/lib/mypackage."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "lib").mkdir()
