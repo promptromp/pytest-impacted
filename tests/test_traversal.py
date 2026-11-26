@@ -969,3 +969,27 @@ def test_a_link_from_the_tests_dir_into_the_package_keeps_it_application_code(tm
     found = discover_application_files("app", "tests", root_dir=tmp_path)
 
     assert found == {str((tmp_path / rel).resolve()) for rel in ("app/__init__.py", "app/db.py")}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_the_tests_walk_names_a_file_as_its_own_directory_reads(tmp_path):
+    """A link back up the tree is not followed; a file linked into another directory keeps its own name."""
+    write_files(tmp_path, {"tests/b/test_y.py": "", "app/a.py": "", ".venv/lib/x.py": ""})
+    os.symlink(tmp_path, tmp_path / "tests" / "up", target_is_directory=True)
+    (tmp_path / "tests" / "a").mkdir()
+    os.symlink(tmp_path / "tests" / "b" / "test_y.py", tmp_path / "tests" / "a" / "test_x.py")
+
+    found = discover_submodules("tests", require_init=False, root_dir=tmp_path)
+
+    assert set(found) == {"tests.b.test_y"}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_package_file_linked_into_the_tests_dir_is_test_code_as_before(tmp_path):
+    """A file symlinked into the tests dir is test code, as it always was; only a directory link reaches beyond."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/testing/fixtures.py": "", "tests/test_x.py": ""})
+    os.symlink(tmp_path / "app" / "testing" / "fixtures.py", tmp_path / "tests" / "fixtures.py")
+
+    found = discover_application_files("app", "tests", root_dir=tmp_path)
+
+    assert str((tmp_path / "app" / "testing" / "fixtures.py").resolve()) not in found

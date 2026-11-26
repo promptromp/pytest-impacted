@@ -242,9 +242,10 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
     """Discover submodules by walking the filesystem (no __init__.py required), as pytest collects test files.
 
     Every ``.py`` file beneath, whatever the directories hold — through a symlinked directory too, as pytest
-    collects through one, but only while it stays inside the project, and never into a directory already walked
-    (a loop, or two directories linking to each other) nor ``node_modules`` and the like. The tree itself is walked
-    first, so a file reached both ways is named as its own directory reads.
+    collects through one, but only while it stays inside the project and does not point back up the tree (see
+    :func:`_is_walkable_link_target`), never into a directory already walked (two directories linking to each
+    other), nor ``node_modules`` and the like. A file reached two ways is named as its own directory reads: the
+    tree before any directory link, and regular files before file links.
     """
     base_path = root / package_name_to_path(package)
     # os.path, not Path.is_dir(): a directory inside an unsearchable one is missing, rather than raising.
@@ -252,34 +253,46 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
         return {}
 
     results: dict[str, str] = {}
+    named: set[str] = set()  # the real files named already
+    linked_files: list[Path] = []
     walked: set[str] = set()
-    links: list[Path] = [base_path]
-    while links:
-        start = links.pop(0)
+    starts: list[Path] = [base_path]
+    while starts:
+        start = starts.pop(0)
         real_start = os.path.realpath(start)
         if real_start in walked:
             continue
-        for directory, subdirectories, files in os.walk(start):  # links are followed here, one by one
+        for directory, subdirectories, files in os.walk(start):  # each directory link walked as a start of its own
             here = Path(directory)
-            walked.add(os.path.realpath(here))
-            links += [here / name for name in sorted(subdirectories) if _walkable_link(here / name, root, walked)]
-            subdirectories[:] = sorted(name for name in subdirectories if not os.path.islink(here / name))
-            for file in sorted(files):
-                # A regular file only: a symlink loop or a named pipe called ``*.py`` is no module, and reading
-                # a pipe would block the run.
-                if file.endswith(".py") and os.path.isfile(here / file):
-                    name = ".".join(module_parts((here / file).relative_to(base_path.parent)))
-                    results.setdefault(name, os.path.realpath(here / file))
+            real_here = os.path.join(real_start, os.path.relpath(directory, start))  # no realpath per directory
+            walked.add(os.path.normpath(real_here))
+            links = {name for name in subdirectories if os.path.islink(here / name)}
+            starts += [
+                here / name
+                for name in sorted(links)
+                if name not in _NEVER_PACKAGES and _is_walkable_link_target(here / name, Path(real_here), root)
+            ]
+            subdirectories[:] = sorted(
+                name
+                for name in subdirectories
+                if name not in links and os.path.normpath(os.path.join(real_here, name)) not in walked
+            )
+            for file in sorted(name for name in files if name.endswith(".py")):
+                if os.path.islink(here / file):
+                    linked_files.append(here / file)
+                else:
+                    _add_test_file(results, named, here / file, base_path)
+    for linked in linked_files:
+        _add_test_file(results, named, linked, base_path)
     return results
 
 
-def _walkable_link(path: Path, root: Path, walked: set[str]) -> bool:
-    """Whether the tests walk enters the symlinked directory *path*: inside the project, not walked yet, and not a
-    directory no test lives in (``node_modules``)."""
-    if not os.path.islink(path) or path.name in _NEVER_PACKAGES:
-        return False
-    real = os.path.realpath(path)
-    return os.path.isdir(real) and Path(real).is_relative_to(root) and real not in walked
+def _add_test_file(results: dict[str, str], named: set[str], file: Path, base_path: Path) -> None:
+    """Name *file* as the tests walk does, unless its real file has a name already (*named*). A regular file only:
+    a symlink loop or a named pipe called ``*.py`` is no module, and reading a pipe would block the run."""
+    if os.path.isfile(file) and (real := os.path.realpath(file)) not in named:
+        named.add(real)
+        results[".".join(module_parts(file.relative_to(base_path.parent)))] = real
 
 
 @lru_cache
@@ -568,11 +581,14 @@ def discover_application_files(
     application = set(discover_submodules(package, require_init=True, root_dir=root).values())
     package_dir = Path(package_name_to_path(package))
     if tests_package and not package_dir.is_relative_to(package_name_to_path(tests_package)):
-        tests_dir = real_path(root / package_name_to_path(tests_package))
+        # What lies in the tests dir's own tree, a file symlinked there too: not what a directory link reaches
+        # (one into the package would make application code test code, and its conftest rule opt-out).
+        tests_dir = root / package_name_to_path(tests_package)
         application -= {
-            path
-            for path in discover_submodules(tests_package, require_init=False, root_dir=root).values()
-            if Path(path).is_relative_to(tests_dir)
+            os.path.realpath(os.path.join(directory, file))
+            for directory, _, files in os.walk(tests_dir)
+            for file in files
+            if file.endswith(".py")
         }
     return frozenset(application)
 
