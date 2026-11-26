@@ -1075,9 +1075,12 @@ def _bump_on_a_branch(repo, root):
     return base
 
 
-@pytest.mark.parametrize("how", ["its gitdir gone", "removed"])
-def test_changes_a_submodule_cannot_tell_fail_open(repo_with_submodule, how):
-    """Precise, or unknown — then every test runs, as when git is missing — never a guess."""
+@pytest.mark.parametrize(
+    ("how", "noticed"),
+    [("its gitdir gone", "cannot be opened"), ("removed", "was removed")],
+)
+def test_a_submodule_that_cannot_be_read_is_named_never_a_failed_run(repo_with_submodule, how, noticed):
+    """Nothing was selected for a submodule before; what cannot be read in one now is said, and the run goes on."""
     repo, root = repo_with_submodule
     if how == "removed":
         base = repo.active_branch.name
@@ -1087,6 +1090,31 @@ def test_changes_a_submodule_cannot_tell_fail_open(repo_with_submodule, how):
     else:
         base = _bump_on_a_branch(repo, root)
         shutil.rmtree(root / ".git" / "modules" / "vendor")
+    notices: list[str] = []
 
-    with pytest.raises(git.GitUnavailableError, match="Submodule vendor was removed|inside submodule vendor"):
-        branch(root, base)
+    found = git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base, on_fallback=notices.append)
+
+    assert "vendor" in found
+    assert len(notices) == 1 and noticed in notices[0], notices
+
+
+def test_a_submodule_s_commands_ignore_a_git_hook_s_environment(repo_with_submodule, monkeypatch):
+    """The pre-commit hook exports GIT_INDEX_FILE=.git/index for the superproject; inside a submodule it is wrong."""
+    _, root = repo_with_submodule
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("GIT_INDEX_FILE", ".git/index")
+
+    assert unstaged(root) == ["vendor", "vendor/lib/core.py"]
+
+
+def test_without_submodules_no_git_call_is_spent_on_them(real_repo, monkeypatch):
+    """One process per changed path made 1,000 untracked files take 23 s: without a .gitmodules, none at all."""
+    _, root = real_repo
+    for index in range(50):
+        (root / "pkg" / f"new{index}.py").write_text("")
+    calls = []
+    monkeypatch.setattr(git, "_gitlinks", lambda *args: calls.append(args) or frozenset())
+
+    assert len(unstaged(root)) == 50
+    assert calls == []

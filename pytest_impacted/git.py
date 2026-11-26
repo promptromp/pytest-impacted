@@ -3,7 +3,8 @@
 from __future__ import annotations
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 
@@ -40,7 +41,7 @@ class GitError(RuntimeError):
 
 
 class GitUnavailableError(RuntimeError):
-    """Git cannot be run, or cannot tell what changed (inside a submodule), so the set of changed files is unknown.
+    """Git cannot be run, so the set of changed files is unknown.
 
     Deliberately an exception rather than an empty result: "no changes" means
     no test needs to run, whereas "unknown" means every test might, and
@@ -246,6 +247,7 @@ def find_impacted_files_in_repo(
     """
     if not GIT_AVAILABLE:
         raise GitUnavailableError()
+    _GITLINKS.clear()  # what the index and commits record is read afresh for each analysis
 
     try:
         return _find_impacted_files(repo_dir, git_mode, base_branch, use_merge_base, on_fallback)
@@ -337,72 +339,97 @@ def _with_submodule_changes(
     """*paths*, each submodule among them followed by the files that changed inside it, under its path.
 
     git reports a change inside a submodule — a new commit recorded, or edits not committed there — by the
-    submodule's own path (``vendor``), which names no module. The files are those that differ inside it between
-    the commit the superproject recorded at *old* and the one at *new* (``None``: the submodule's working tree,
-    untracked files included), deleted ones too; an added submodule brings every file it tracks. The path
-    itself stays, for a glob such as ``vendor/**``.
-
-    Precise, or :class:`GitUnavailableError`: when the changes inside a submodule cannot be known (its gitdir
-    broken, its old commit not fetched, the submodule removed, one nested in it changed), the run fails open as
-    when git is missing, rather than guess. A submodule not checked out holds no code a test could import: a
-    notice. Only a gitlink the superproject records counts: an untracked clone in the tree, or a symlink to a
-    repository, is a plain path.
+    submodule's own path (``vendor``), which names no module, so nothing was selected. The files are those that
+    differ inside it between the commit the superproject recorded at *old* and the one at *new* (``None``: the
+    submodule's working tree, untracked files included), deleted ones too; an added submodule brings every file
+    it tracks, and so does a submodule whose old commit is not there to diff from (a notice: a file it deleted is
+    not seen). What cannot be read at all — a submodule not checked out, removed, or broken — is a notice: never
+    less than nothing was before, never a failed run. The path itself stays, for a glob such as ``vendor/**``.
+    Only a gitlink the superproject records counts: an untracked clone in the tree is a plain path.
     """
-    if repo.working_tree_dir is None:
-        return paths
-    root = Path(repo.working_tree_dir)
+    root = Path(repo.working_tree_dir) if repo.working_tree_dir else None
+    if root is None or not (os.path.exists(root / ".gitmodules") or ".gitmodules" in paths):
+        return paths  # no submodules: not one git call more
+    recorded = _gitlinks(repo, new)
     expanded = list(paths)
     for path in dict.fromkeys(path.rstrip("/") for path in paths):  # once each: staged and unstaged may both hold it
-        recorded_now = _is_gitlink(repo, path, None if new is None else new)
-        if not recorded_now:
-            if _is_gitlink(repo, path, old):
-                raise GitUnavailableError(f"Submodule {path} was removed: the files it provided cannot be listed.")
-            continue
-        directory = root / path
-        if os.path.islink(directory):
-            continue
-        if not os.path.exists(directory / ".git"):
-            notice(
-                f"Submodule {path} changed but is not checked out, so nothing in it is analysed (actions/checkout: "
-                "submodules: true)."
-            )
-            continue
-        expanded.extend(f"{path}/{file}" for file in _changed_inside(repo, directory, path, old, new))
+        if path in recorded:
+            expanded.extend(f"{path}/{file}" for file in _changed_inside(repo, root, path, old, new, notice))
+        elif path in _gitlinks(repo, old) and not os.path.isdir(root / path):
+            notice(f"Submodule {path} was removed: the files it provided are not seen as deleted.")
     return expanded
 
 
-def _is_gitlink(repo: Repo, path: str, revision: str | None) -> bool:
-    """Whether the superproject records *path* as a submodule (mode 160000): in its index, or at *revision*."""
-    spec = f":(literal){path}"
-    try:
-        if revision is None:
-            listed = repo.git.ls_files("-s", "-z", "--", spec)
-        else:
-            listed = repo.git.ls_tree("-z", *rev_args(revision), "--", spec)
-    except GitCommandError:
-        return False
-    return any(entry.startswith("160000 ") and entry.endswith(f"\t{path}") for entry in listed.split("\0"))
+def _gitlinks(repo: Repo, revision: str | None) -> frozenset[str]:
+    """The paths the superproject records as submodules (mode 160000): in its index, or at *revision*. One git
+    call, cached per repository and revision for the run's analysis."""
+    key = (os.fspath(repo.git_dir), revision)
+    if key not in _GITLINKS:
+        try:
+            listed = (
+                repo.git.ls_files("-s", "-z") if revision is None else repo.git.ls_tree("-r", "-z", *rev_args(revision))
+            )
+        except GitCommandError:
+            listed = ""
+        _GITLINKS[key] = frozenset(
+            entry.partition("\t")[2] for entry in listed.split("\0") if entry.startswith("160000 ")
+        )
+    return _GITLINKS[key]
 
 
-def _changed_inside(repo: Repo, directory: Path, path: str, old: str, new: str | None) -> list[str]:
-    """The files that changed inside the submodule at *directory* (see :func:`_with_submodule_changes`)."""
-    try:
-        submodule = Repo(directory)
+#: :func:`_gitlinks`, for one analysis: cleared by :func:`find_impacted_files_in_repo` each time.
+_GITLINKS: dict[tuple[str, str | None], frozenset[str]] = {}
+
+
+def _changed_inside(
+    repo: Repo, root: Path, path: str, old: str, new: str | None, notice: Callable[[str], None]
+) -> list[str]:
+    """The files that changed inside the submodule at *path* (see :func:`_with_submodule_changes`)."""
+    directory = root / path
+    if os.path.islink(directory) or not os.path.exists(directory / ".git"):
+        notice(
+            f"Submodule {path} changed but is not checked out, so nothing in it is analysed (actions/checkout: "
+            "submodules: true)."
+        )
+        return []
+    with _own_git_environment():
+        try:
+            submodule = Repo(directory)
+        except (InvalidGitRepositoryError, NoSuchPathError) as err:
+            notice(f"Submodule {path} changed but its repository cannot be opened ({err}); nothing in it is analysed.")
+            return []
         before = _recorded(repo, old, path)
-        if before is None:  # added since: everything it tracks is new
-            changed = submodule.git.ls_files("-z").split("\0")
-        else:
-            after = [] if new is None else [_recorded(repo, new, path) or "HEAD"]
-            changed = _impactful_paths(_name_status_diff(submodule, *rev_args(before, *after)))
-            if new is None:  # the working tree: untracked files too
-                changed += submodule.git.ls_files("--others", "--exclude-standard", "-z").split("\0")
-        changed = [file for file in changed if file]
-        if any(_is_gitlink(submodule, file, None) for file in changed):
-            raise GitUnavailableError(f"Submodule {path} holds a submodule that changed, whose changes are not read.")
-    except (GitCommandError, InvalidGitRepositoryError, NoSuchPathError) as err:
-        reason = _reason(err) if isinstance(err, GitCommandError) else f"{type(err).__name__}: {err}"
-        raise GitUnavailableError(f"The changes inside submodule {path} cannot be read ({reason}).") from err
-    return changed
+        if before is not None:
+            try:
+                after = [] if new is None else [_recorded(repo, new, path) or "HEAD"]
+                changed = _impactful_paths(_name_status_diff(submodule, *rev_args(before, *after)))
+                if new is None:  # the working tree: untracked files too
+                    changed += submodule.git.ls_files("--others", "--exclude-standard", "-z").split("\0")
+                nested = _gitlinks(submodule, None)
+                return [
+                    *(file for file in changed if file and file not in nested),
+                    *(
+                        file
+                        for link in sorted(nested.intersection(changed))
+                        for file in (link, *_tracked(submodule, link))
+                    ),
+                ]
+            except GitCommandError:
+                notice(
+                    f"Submodule {path}'s previous commit is not fetched: every file it tracks counts as changed, but "
+                    "one it deleted is not seen."
+                )
+        try:
+            return _tracked(submodule, "")  # added since, or no commit to diff from: every file it tracks
+        except GitCommandError as err:
+            notice(f"Could not list the files of submodule {path} ({_reason(err)}); nothing in it is analysed.")
+            return []
+
+
+def _tracked(submodule: Repo, path: str) -> list[str]:
+    """Every file *submodule* tracks under *path* (``""``: all of it), nested submodules' included."""
+    listed = submodule.git.ls_files("--recurse-submodules", "-z", *(("--", path) if path else ()))
+    return [file for file in listed.split("\0") if file]
 
 
 def _recorded(repo: Repo, revision: str, path: str) -> str | None:
@@ -411,6 +438,42 @@ def _recorded(repo: Repo, revision: str, path: str) -> str | None:
         return repo.git.rev_parse("--verify", "--quiet", *rev_args(f"{revision}:{path}")) or None
     except GitCommandError:
         return None
+
+
+@contextmanager
+def _own_git_environment() -> Iterator[None]:
+    """git's repository-locating variables left out while a submodule's commands run.
+
+    A git hook (the pre-commit one runs this) exports ``GIT_INDEX_FILE=.git/index`` and the like for the
+    superproject; inherited, a submodule's command resolves them inside the submodule and fails. git itself
+    clears them for a submodule (``prepare_submodule_repo_env``).
+    """
+    saved = {name: os.environ.pop(name) for name in _LOCAL_GIT_VARIABLES if name in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+#: ``git rev-parse --local-env-vars`` (git 2.24): the variables that locate a repository.
+_LOCAL_GIT_VARIABLES = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+)
 
 
 def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:

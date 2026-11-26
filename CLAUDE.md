@@ -283,9 +283,12 @@ routinely names paths that no longer exist, and files outside the project root a
 absolute paths. A submodule
 reported by its own path is followed by the files changed inside it (`git._with_submodule_changes`: a diff between
 the commits the superproject records, or against the submodule's working tree), for a gitlink the superproject
-records and has checked out — one not checked out is a notice (`on_fallback`). Precise or unknown, never a guess:
-what cannot be read there (an old commit not fetched, a gitdir gone, a removed or nested submodule) raises
-`GitUnavailableError`, which fails open. Two review rounds of per-corner fallbacks preceded that rule.
+records and has checked out — one not checked out is a notice (`on_fallback`). Every outcome is at least what main
+selected for a submodule (nothing) and never fails the run: no old commit to diff from → every tracked file and a
+notice; unreadable, removed or not checked out → a notice. Failing open there (tried) made ordinary states — a
+vendored copy replacing a submodule, a dirty nested one — full runs. Its git calls must stay O(1) per analysis (the
+gitlinks read once, `_gitlinks`; none without a `.gitmodules`: one per path took 23 s for 1,000 untracked files), and
+run without a hook's `GIT_INDEX_FILE` (`_own_git_environment`).
 
 **`canonical_root()` is the single origin for every path.** Discovery, graph building and
 the conftest walk all resolve against `root_dir` (the plugin passes `config.rootpath`),
