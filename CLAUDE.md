@@ -420,7 +420,8 @@ non-ASCII character as an identifier's in both (but lone surrogates and the U+FF
 Unicode version decides, and the Rust port of `importlib.util.resolve_name` must keep its `rsplit` arithmetic.
 A file ruff rejects though CPython's parser accepts it (`f(a=1, a=2)`), or nested deeper than `DEEPEST` (the
 visitor recurses on a small rayon stack), is `None` from the extension, and the graph has the stdlib pass read
-it: never less than that pass. More, only where the running Python cannot parse the file (newer syntax). Check new rules over every file of a real
+it: never less than that pass. More, only where the running Python cannot parse the file (newer syntax). A table
+an older extension cannot read (a new kind or column: ValueError, TypeError) leaves every file to that pass. Check new rules over every file of a real
 clone too.
 The extension is a separate distribution and the `fast` extra is unpinned (a development build is
 `0.1.0`, which a pin would refuse), so an install may hold an older one: never change an existing

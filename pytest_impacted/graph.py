@@ -828,15 +828,26 @@ def _parse_all_dynamic_imports(submodules: dict[str, str]) -> dict[str, DynamicI
     :func:`~pytest_impacted.traversal.import_base`, as for its import statements.
     """
     modules = [(path, import_base(name), os.path.basename(path) == "__init__.py") for name, path in submodules.items()]
-    if _rust.RUST_PARSES_DYNAMIC_IMPORTS:
-        # A file the extension leaves (None: ruff rejects it, or it nests too deep) is the stdlib pass's.
-        found = [
-            parse_dynamic_imports(*module) if lists is None else DynamicImports(*lists)
-            for module, lists in zip(modules, _rust.rust_parse_all_dynamic_imports(modules, TABLE), strict=True)
-        ]
-    else:
-        found = [parse_dynamic_imports(*module) for module in modules]
+    by_rust = _rust_dynamic_imports(modules) if _rust.RUST_PARSES_DYNAMIC_IMPORTS else [None] * len(modules)
+    # A file the extension leaves (None: ruff rejects it, or it nests too deep) is the stdlib pass's.
+    found = [
+        parse_dynamic_imports(*module) if lists is None else DynamicImports(*lists)
+        for module, lists in zip(modules, by_rust, strict=True)
+    ]
     return dict(zip(submodules, found, strict=True))
+
+
+def _rust_dynamic_imports(modules: list[tuple[str, str, bool]]) -> list[tuple[list[str], list[str], list[str]] | None]:
+    """What the extension finds in each of *modules*: all left to the stdlib pass if it cannot read the table.
+
+    The ``fast`` extra is unpinned, so an older extension may meet a table it predates: a kind of name it does not
+    know is a ValueError, a row of another shape a TypeError. Those are its to refuse, never a failed run.
+    """
+    try:
+        return _rust.rust_parse_all_dynamic_imports(modules, TABLE)
+    except (TypeError, ValueError):
+        logger.debug("pytest-impacted-rs cannot read the loader table; the stdlib pass finds the imports by name")
+        return [None] * len(modules)
 
 
 def _import_of(linker: _Linker, object_path: str, *, attribute: bool = False) -> list[str]:

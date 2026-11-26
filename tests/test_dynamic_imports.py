@@ -294,12 +294,17 @@ def test_a_warning_turned_error_hides_no_import(parse):
         ("x = " + "[" * 5000 + "]" * 5000 + "\nimport importlib\n", NOTHING),
         ("import importlib\nx = " + " + ".join(["importlib.import_module('a.b')"] * 3000), found(modules=["a.b"])),
         ("import importlib\nimportlib" + ".attribute" * 3000 + ".import_module('a.b')", NOTHING),
+        ("import importlib\nimportlib.import_module('a.b')\nx = " + "**".join(["2"] * 3000), found(modules=["a.b"])),
     ],
-    ids=["deep nesting", "a long concatenation", "a long attribute chain"],
+    ids=["deep nesting", "a long concatenation", "a long attribute chain", "a right-nested chain"],
 )
-def test_pathological_source_never_fails_the_parse(parse, source, imported):
-    """Deep enough to stop a recursive walk: the file imports what can be read of it, or nothing."""
-    assert parse(source) in (imported, NOTHING)
+def test_pathological_source_never_fails_the_parse(tmp_path, parse, source, imported):
+    """Deep enough to stop a recursive walk, or CPython's parser (a MemoryError for the right-nested chain): the
+    file imports what can be read of it, or nothing, and with the extension exactly what the stdlib pass finds."""
+    result = parse(source)
+
+    assert result == parse_dynamic_imports(str(tmp_path / "loader.py"), "app.loader")
+    assert result in (imported, NOTHING)
 
 
 @pytest.mark.parametrize(
@@ -344,10 +349,32 @@ def test_both_backends_read_the_same_source_alike(parse, source, imported):
 
 
 def test_the_extension_refuses_a_table_it_cannot_read():
-    rust = pytest.importorskip("pytest_impacted_rs")
+    if not _rust.RUST_PARSES_DYNAMIC_IMPORTS:
+        pytest.skip("pytest-impacted-rs is not installed, or predates finding imports by name")
 
     with pytest.raises(ValueError, match="unknown kind of name"):
-        rust.parse_all_dynamic_imports([], [("patch", 0, "target", "something", None, None, None)])
+        _rust.rust_parse_all_dynamic_imports([], [("patch", 0, "target", "something", None, None, None)])
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [ValueError("unknown kind of name in the loader table"), TypeError("a row of another shape")],
+    ids=["a kind it predates", "a row it predates"],
+)
+def test_a_table_the_extension_refuses_is_the_stdlib_pass_s(tmp_path, monkeypatch, refusal):
+    """An older extension may meet a newer table (the ``fast`` extra is unpinned): it refuses it, and the stdlib
+    pass finds the imports instead, never a failed run."""
+
+    def refuse(modules, table):
+        raise refusal
+
+    monkeypatch.setattr(_rust, "RUST_PARSES_DYNAMIC_IMPORTS", True)
+    monkeypatch.setattr(_rust, "rust_parse_all_dynamic_imports", refuse)
+    (tmp_path / "loader.py").write_text("import importlib\nimportlib.import_module('app.target')\n")
+
+    found_ = graph._parse_all_dynamic_imports({"app.loader": str(tmp_path / "loader.py")})
+
+    assert found_ == {"app.loader": found(modules=["app.target"])}
 
 
 def test_the_table_is_the_loaders():

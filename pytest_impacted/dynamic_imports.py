@@ -136,7 +136,8 @@ def parse_dynamic_imports(file_path: str, module_name: str, is_package: bool = F
         with _quiet_parse():
             tree = ast.parse(source)
         found = set(_imports(tree, module_name, is_package))
-    except (SyntaxError, ValueError, RecursionError):  # RecursionError: e.g. a 3000-term attribute chain
+    # A 3000-term chain: RecursionError, or MemoryError ("parser stack overflowed") for a right-nested one.
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return DynamicImports([], [], [])
     return DynamicImports(
         modules=sorted(name for kind, name in found if kind is Names.MODULE),
