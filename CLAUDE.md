@@ -381,8 +381,11 @@ don't re-implement either.
 
 **A star import loads the submodules `pkg.__all__` lists** (`from pkg import *` imports each, even one the
 `__init__` never imports): `graph._star_names` adds `pkg.<name>` for each name of the package `__init__.py`'s literal
-`__all__`. Both readers (`parsing.star_imports_in`, `parse_all_names`) are stdlib `ast` passes outside the backends,
-as `pytest_plugins` is, sharing one read per file per build with it; a plain `import pkg` adds nothing.
+`__all__`, the package found as its import is (import roots and basedirs). Both readers (`parsing.star_imports_in`,
+`parse_all_names`) are stdlib `ast` passes outside the backends, as `pytest_plugins` is: `_parse_project` reads each
+file once for both scans and keeps only their results (holding every source cost memory). A file the running
+Python cannot parse (newer syntax) loses its star imports under either backend, as its `pytest_plugins` do; a plain
+`import pkg` adds nothing.
 
 **`parse_file_imports` returns *candidates*, not resolved modules.** `from pkg import name`
 emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg`, so

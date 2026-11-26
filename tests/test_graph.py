@@ -2864,3 +2864,22 @@ def test_a_star_import_loads_the_submodules_all_names(tmp_path, importer, source
 
     submodules = {"app.mod", "app.other", "app.unlisted"}
     assert {node for node in submodules if dep_tree.has_edge(node, module)} == linked
+
+
+@pytest.mark.usefixtures("import_backend")
+def test_a_star_import_of_a_helper_package_found_through_a_basedir(tmp_path):
+    """A tests dir with no __init__.py: ``from helpers import *`` finds the package on pytest's basedir."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "suite/conftest.py": "",
+            "suite/helpers/__init__.py": "__all__ = ['factories']\n",
+            "suite/helpers/factories.py": "def make():\n    pass\n",
+            "suite/test_x.py": "from helpers import *\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("suite.helpers.factories", "suite.test_x")
