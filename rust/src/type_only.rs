@@ -96,7 +96,7 @@ fn module_names(suite: &[Stmt]) -> HashSet<String> {
 }
 
 /// Each statement that runs when the module is imported, nested blocks included, but no function or
-/// class body. Mirrors `_module_level` in the Python backend.
+/// class body. Mirrors `module_level` in the Python backend.
 fn for_module_level<'a, F: FnMut(&'a Stmt)>(stmts: &'a [Stmt], f: &mut F) {
     for stmt in stmts {
         f(stmt);
@@ -200,7 +200,7 @@ impl<'a> Visitor<'a> for TypeOnlyWalk<'_> {
             Stmt::If(node) => {
                 self.visit_expr(&node.test);
                 self.visit_block(is_type_checking(&node.test, self.modules), &node.body);
-                // An `elif TYPE_CHECKING:` too: astroid nests it as an `if` in the `orelse`.
+                // An `elif TYPE_CHECKING:` too: `ast` nests it as an `if` in the `orelse`.
                 for clause in &node.elif_else_clauses {
                     if let Some(test) = &clause.test {
                         self.visit_expr(test);
@@ -212,7 +212,7 @@ impl<'a> Visitor<'a> for TypeOnlyWalk<'_> {
                     self.visit_block(type_only, &clause.body);
                 }
             }
-            // No code reads a bare string, such as a docstring (astroid keeps those out of its tree).
+            // No code reads a bare string, such as a docstring (`ast` has them as bare string statements too).
             Stmt::Expr(node) if matches!(*node.value, Expr::StringLiteral(_)) => {}
             Stmt::Import(node) if self.depth > 0 => {
                 let names = node.names.iter().map(bound_by_import).collect();

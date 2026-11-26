@@ -68,13 +68,17 @@ def type_only_imports(tree: ast.Module) -> list[Imports]:
 
 
 def module_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
-    """The statements that run when the module is imported, nested blocks included, but no function or class body."""
-    for stmt in body:
+    """The statements that run when the module is imported, nested blocks included, but no function or class body,
+    in source order. Without recursion: ``ast`` nests each ``elif`` in the ``orelse`` before it, so a generated
+    1,000-branch dispatch is 1,000 deep (ruff keeps the clauses flat)."""
+    stack: list[ast.AST] = list(reversed(body))
+    while stack:
+        stmt = stack.pop()
         if isinstance(stmt, ast.stmt):
             yield stmt
         if isinstance(stmt, _BLOCKS):
-            for field in BLOCK_FIELDS:
-                yield from module_level(getattr(stmt, field, None) or [])
+            for field in reversed(BLOCK_FIELDS):
+                stack.extend(reversed(getattr(stmt, field, None) or []))
 
 
 def _module_names(tree: ast.Module) -> frozenset[str]:

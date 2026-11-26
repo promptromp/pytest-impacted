@@ -54,10 +54,11 @@ in particular, which imports every parent package to answer. (`importlib.util.re
 manipulates strings, is the one exception: `dynamic_imports` resolves a relative `import_module` name with it.)
 
 **The pure-Python backend is the standard library's `ast`** (astroid until 0.42: 6–7x slower, and its pin
-blocked installing beside pylint < 4.1). Both walks are iterative, statements alone for imports
-(`parsing._import_statements`, as `collect_imports_from_stmts`): only the parse can give up, near 3,000 nested terms
-on 3.11 and 10,000 on 3.12–3.13, and then the file imports nothing, logged. Never a recursive visitor: astroid's
-recursion gave up near 500.
+blocked installing beside pylint < 4.1). Every walk over statements, and the type-only walk, is iterative,
+statements alone for imports (`parsing._import_statements`, as `collect_imports_from_stmts`): only the parse can give
+up, near 3,000 nested terms on 3.11 and 10,000 on 3.12–3.13, and then the file imports nothing, logged. Never a
+recursive visitor: astroid's recursion gave up near 500, and `ast` nests each `elif` in the `orelse` before it, so a
+generated 1,000-branch dispatch is 1,000 statements deep (ruff keeps the clauses flat).
 
 **`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an
 importable package — `pkgutil.iter_modules`, with a non-package prefix like `src/`

@@ -352,3 +352,14 @@ def test_a_t_string_s_text_is_no_string_of_its_own_to_either_backend(tmp_path, u
     python, rust = both_backends(tmp_path, GUARD + "def f(x: Thing): ...\n" + use)
 
     assert python == rust
+
+
+def test_a_long_elif_chain_is_walked_without_recursion(tmp_path):
+    """``ast`` nests each ``elif`` in the ``orelse`` before it: a generated 1,500-branch dispatch is 1,500 deep,
+    which a recursive walk of the module's statements could not take (ruff keeps the clauses flat)."""
+    dispatch = "if a == 0:\n    pass\n" + "".join(f"elif a == {i}:\n    pass\n" for i in range(1, 1_500))
+    source = GUARD + "def f(x: Thing): ...\n" + dispatch
+
+    python, rust = both_backends(tmp_path, source)
+
+    assert python == rust == (["typing", "typing.TYPE_CHECKING"], ["pkg.lazy", "pkg.lazy.Thing"])
