@@ -233,7 +233,8 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
     if any(re.sub(r"^\d+\*", "", spec) != "popen" for spec in config.getoption("tx", default=None) or []):
         return None
     try:
-        return _Handoff(_analyse(session, config), _known_tests(config))
+        tests = _analyse(session, config)
+        return _Handoff(tests, [] if tests is None else _known_tests(config))  # None: every test runs, none judged
     except (Exception, pytest.fail.Exception, pytest.skip.Exception) as err:  # noqa: BLE001 — warned, and retried
         # Raised here it would escape xdist's session start, and pytest would skip every
         # pytest_sessionfinish (no JUnit XML, no combined coverage); in a worker it may
@@ -306,10 +307,12 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
 def _known_tests(config: Config) -> list[str]:
     """The test files the walks name, relative to the rootdir: the files the analysis may select or leave out.
 
-    A test pytest collects from any other file — a ``python_files`` pattern beyond the test-module names
-    (``check_*.py``), a directory whose name is no identifier, which no walk enters — no analysis judges: it runs.
-    Discovery alone (cached, no parsing): the graph's test nodes are these, and the files found through imports,
-    which lie outside the analysed directories and are run as such anyway.
+    A test pytest collects from any other file no analysis judges, and it runs: one not named as a test module
+    (``test_*.py``, ``*_test.py``, or under a ``test``/``tests`` directory) that a ``python_files`` pattern collects,
+    or one in a package directory whose name is no identifier, which the package walk does not enter. Discovery
+    alone (cached, no parsing), so a test file the graph found only through an import (rare: tests are not imported)
+    runs too, unjudged — the safe side. Files outside the rootdir are left out: they are outside the analysed
+    directories too, so they run anyway.
     """
     get_option = partial(get_option_from_config, config)
     tests_dir = get_option("impacted_tests_dir")
@@ -318,11 +321,10 @@ def _known_tests(config: Config) -> list[str]:
         _traversal().path_to_package_name(tests_dir) if tests_dir else None,
         root_dir=config.rootpath,
     )
-    is_test = _parsing().is_test_module
-    roots = [_traversal().canonical_root(config.rootpath), config.rootpath]
-    return sorted(
-        _relative_to(roots, _traversal().real_path(path)) for name, path in found.modules.items() if is_test(name)
-    )
+    is_test, real_path = _parsing().is_test_module, _traversal().real_path
+    root = real_path(config.rootpath)
+    real = (real_path(path) for name, path in found.modules.items() if is_test(name))
+    return sorted(path.relative_to(root).as_posix() for path in real if path.is_relative_to(root))
 
 
 def _pythonpath(config: Config) -> list[Path]:
@@ -543,9 +545,9 @@ def pytest_terminal_summary(terminalreporter, config: Config) -> None:
     if (unnamed := config.stash.get(_UNNAMED, 0)) and config.get_verbosity() > -2:
         tests = "test" if unnamed == 1 else "tests"
         terminalreporter.write_line(
-            f"pytest-impacted: {unnamed} {tests} in files no analysis names as test modules ran: a python_files "
-            "pattern beyond test_*.py and *_test.py, or a directory whose name is no identifier. Name them so to "
-            "select among them.",
+            f"pytest-impacted: {unnamed} {tests} in files no analysis names as test modules ran: files a python_files "
+            "pattern collects though named neither test_*.py nor *_test.py, outside any tests directory, or in a "
+            "package directory whose name is no identifier. Rename or move them to select among them.",
             yellow=True,
         )
     # pytest leaves the report header out under -q and --no-header; a warning it carries is said here instead.

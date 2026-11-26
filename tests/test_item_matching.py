@@ -330,3 +330,23 @@ def test_a_test_in_a_directory_no_walk_enters_runs_unjudged(make_git_project):
 
     result.assert_outcomes(passed=1, deselected=1)
     result.stdout.fnmatch_lines(["*my-dir/test_x.py::test_x PASSED*", UNNAMED])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_package_symlinked_from_outside_the_rootdir_leaves_the_known_tests_inside(make_git_project, tmp_path):
+    """Its test files resolve outside the rootdir: left out of the known ones (they run as outside the analysed
+    directories), never a path the rest are compared with (an INTERNALERROR)."""
+    outside = tmp_path / "libs" / "shared"
+    (outside / "tests").mkdir(parents=True)
+    (outside / "__init__.py").write_text("")
+    (outside / "tests" / "__init__.py").write_text("")
+    (outside / "tests" / "test_s.py").write_text("def test_s():\n    assert True\n")
+    files = {name: code for name, code in TWO_TEST_DIRS.items() if not name.startswith("integration/")}
+    project = make_git_project(files, INI)
+    os.symlink(outside, project.path / "app" / "shared", target_is_directory=True)
+    edit_file(project, "app/b.py")
+
+    result = run(project, "suite", "app/shared")
+
+    assert result.ret == 0, result.stdout.str()
+    result.stdout.fnmatch_lines_random(["*test_b.py::test_b PASSED*", "*test_s.py::test_s PASSED*"])
