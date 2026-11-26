@@ -3,6 +3,8 @@
 And the notices that say why every test runs, wherever pytest leaves out the report header that carries them.
 """
 
+import re
+import subprocess
 import sys
 from typing import ClassVar
 from unittest.mock import MagicMock
@@ -23,6 +25,17 @@ FILES = {
     "suite/test_a.py": "from app.a import a\n\ndef test_a():\n    assert a() == 1\n",
 }
 INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
+
+
+def _git_version() -> tuple[int, ...]:
+    output = subprocess.run(["git", "--version"], capture_output=True, text=True, check=True).stdout
+    return tuple(int(part) for part in re.findall(r"\d+", output)[:3])
+
+
+#: git honours GIT_TEST_ASSUME_DIFFERENT_OWNER from 2.35.2; the project supports git 2.24 and later.
+pretends_another_owner = pytest.mark.skipif(
+    sys.platform == "win32" or _git_version() < (2, 35, 2), reason="needs git's ownership check (POSIX, git 2.35.2+)"
+)
 
 
 def assert_usage_error(result, *messages):
@@ -50,6 +63,7 @@ def test_a_directory_outside_any_repository_is_a_usage_error(pytester, mode):
     assert_usage_error(result, "No git repository found")
 
 
+@pretends_another_owner
 @pytest.mark.parametrize("mode", ["unstaged", "branch"])
 def test_a_repository_git_refuses_is_a_usage_error_naming_git_s_reason(make_git_project, monkeypatch, mode):
     """In a CI container git often refuses a checkout another user owns; say so, not "no such branch"."""
@@ -131,12 +145,12 @@ def test_the_cli_reports_a_git_failure_in_one_line(make_git_project, pytester, m
 
     result = CliRunner().invoke(impacted_tests_cli, ["--module", "app", "--tests-dir", "suite", *args])
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == 2, result.output  # a usage error, unlike git missing (exit 1)
     assert message in result.output, result.output
     assert result.exception is None or isinstance(result.exception, SystemExit), result.exception
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git's ownership check is POSIX")
+@pretends_another_owner
 def test_the_cli_reports_git_refusing_the_repository(make_git_project, pytester, monkeypatch):
     make_git_project(FILES, INI)
     monkeypatch.chdir(pytester.path)
@@ -144,5 +158,16 @@ def test_the_cli_reports_git_refusing_the_repository(make_git_project, pytester,
 
     result = CliRunner().invoke(impacted_tests_cli, ["--module", "app", "--tests-dir", "suite"])
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == 2, result.output
     assert "dubious ownership" in result.output, result.output
+
+
+def test_help_is_shown_whatever_the_settings_and_wherever_it_runs(pytester):
+    """``--impacted`` in addopts, outside any repository (an unpacked sdist): ``--help`` still helps."""
+    write_files(pytester.path, FILES)
+    pytester.makeini(INI + "addopts = --impacted --impacted-git-mode=unstaged\n")
+
+    result = pytester.runpytest("--help")
+
+    assert result.ret == pytest.ExitCode.OK, result.stdout.str() + result.stderr.str()
+    result.stdout.fnmatch_lines(["*--impacted-module*"])

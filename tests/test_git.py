@@ -715,8 +715,10 @@ def test_unstaged_mode_works_with_index_v4(tmp_path, isolated_git_config):
 def test_bare_repo_is_a_clear_error(tmp_path, isolated_git_config, mode):
     """There is no working tree to diff, so say so instead of silently reporting no changes."""
     Repo.init(tmp_path, bare=True)
-    with pytest.raises(ValueError, match="bare repository"):
+    with pytest.raises(git.GitError, match="bare repository"):
         git.find_impacted_files_in_repo(tmp_path, mode, "main")
+    with pytest.raises(git.GitError, match="bare repository"):
+        git.check_repository(tmp_path)
 
 
 def test_git_that_cannot_launch_keeps_its_reason(monkeypatch):

@@ -191,7 +191,8 @@ def get_impacted_tests(
 
     Returns ``None`` when nothing is impacted, and raises
     :class:`~pytest_impacted.git.GitUnavailableError` when that cannot be known
-    because git cannot run — callers must not treat the two alike.
+    because git cannot run — callers must not treat the two alike — and
+    :class:`~pytest_impacted.git.GitError` when git runs but refuses (no repository, an unknown base branch).
     """
     git_mode = impacted_git_mode
     base_branch = impacted_base_branch

@@ -320,7 +320,7 @@ def _run(
         # this output into pytest, so fail instead.
         raise click.ClickException(str(err)) from err
     except GitError as err:  # no repository, one git refuses, an unknown base branch: git's words, no traceback
-        raise click.ClickException(str(err)) from err
+        raise click.UsageError(str(err)) from err  # exit 2: a configuration error, unlike git missing (exit 1)
 
     if impacted_tests:
         for impacted_test in impacted_tests:

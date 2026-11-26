@@ -40,7 +40,7 @@ Like `ns_module` and `tests_dir`, pytest's `pythonpath` is never read from the c
 
 Since 0.38.1, `invalidate_all_patterns` (and `InvalidationFileImpactStrategy`) raise a `ValueError` for a glob Python cannot match (empty, `.`, `./`) when the strategy is built, rather than mid-run. If your extension matches globs of its own with `pytest_impacted.strategies.matches_any_glob`, check them first with `glob_refusal(glob)` (the reason, or `None`) and spell them with `normalise_glob(glob)`, as the built-in options do.
 
-`get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run".
+`get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run". It raises `pytest_impacted.git.GitError` (since 0.40.3) when git runs but refuses — no repository, a bare one, a checkout another user owns, an unknown base branch — in git's own words on one line: a configuration error to report, not to fail open on.
 
 The strategy you pass **replaces** the default pipeline — the AST, conftest and dependency-file strategies included, and `watch_dep_files` / `invalidate_all_patterns` / `conftest_imports` then have no effect (`file_map` still does: its paths join `changed_files`, which every strategy receives). To add to the defaults instead, pass `CompositeImpactStrategy([*get_default_strategies(), MyCustomStrategy()])` (both from `pytest_impacted.strategies`).
 

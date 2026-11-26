@@ -448,6 +448,8 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             ignore_type_checking_imports=bool(get_option("impacted_ignore_type_checking_imports")),
         )
     except GitError as err:  # validate_config asked first; git may still refuse later (a ref deleted since)
+        # Under pytest-xdist the controller's _handoff warns of it and each worker raises it again: rare enough,
+        # and raising it there would skip every pytest_sessionfinish (see _handoff).
         raise UsageError(str(err)) from err
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not
@@ -598,9 +600,9 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 
 def pytest_terminal_summary(terminalreporter, config: Config) -> None:
-    """Say how many tests were deselected as not impacted; pytest-xdist's summary omits it.
-
-    Not under ``-qq``, which asks for no more than pytest's own summary.
+    """Say how many tests were deselected as not impacted, which pytest-xdist's summary omits — not under
+    ``-qq``, which asks for no more than pytest's own summary — and, when pytest left the report header out
+    (``-q``, ``-qq``, ``--no-header``), the warnings it would have carried: why every test runs, say.
     """
     count = config.stash.get(_DESELECTION, 0)
     if count and config.get_verbosity() > -2:
@@ -658,8 +660,8 @@ def get_option_from_config(config: Config, name: str) -> str | None:
 def validate_config(config: Config):
     """Validate the configuration options."""
     get_option = partial(get_option_from_config, config)
-    if not get_option("impacted"):
-        return
+    if not get_option("impacted") or config.getoption("help", default=False):
+        return  # `pytest --help` shows the help, whatever addopts holds and wherever it runs (an sdist: no git)
 
     if not get_option("impacted_module"):
         raise UsageError("No module specified. Please specify a module using --impacted-module.")

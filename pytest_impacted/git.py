@@ -279,9 +279,11 @@ def check_repository(repo_dir: str | Path) -> None:
 
 
 def _readable_repo(repo_dir: str | Path) -> Repo:
-    """The repository at or above *repo_dir*, once git itself has agreed to read it."""
+    """The repository at or above *repo_dir*, once git itself has agreed to read it, with a working tree to diff."""
     repo = find_repo(repo_dir)
     repo.git.rev_parse("--git-dir")  # GitPython opens a repository without git, which may still refuse it
+    if repo.bare:
+        raise GitError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")
     return repo
 
 
@@ -289,8 +291,9 @@ def _reason(err: GitCommandError) -> str:
     """git's own words for failing, on one line: its stderr, which GitPython wraps as ``stderr: '...'``."""
     stderr = err.stderr if isinstance(err.stderr, str) else (err.stderr or b"").decode("utf-8", "replace")
     text = stderr.strip().removeprefix("stderr:").strip().removeprefix("'").removesuffix("'")
-    words = " ".join(line.strip() for line in text.splitlines() if line.strip())
-    return f"git {err.command[1] if len(err.command) > 1 else ''} failed: {words or err}".replace("  ", " ")
+    words = " ".join(line.strip() for line in text.splitlines() if line.strip()) or f"exit status {err.status}"
+    command = f"git {err.command[1]}" if isinstance(err.command, list) and len(err.command) > 1 else "git"
+    return f"{command} failed: {words}"
 
 
 def _find_impacted_files(
@@ -301,8 +304,6 @@ def _find_impacted_files(
     on_fallback: Callable[[str], None] | None,
 ) -> list[str] | None:
     repo = _readable_repo(repo_dir)
-    if repo.bare:
-        raise ValueError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")
 
     match git_mode:
         case GitMode.UNSTAGED:
