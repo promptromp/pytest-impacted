@@ -28,7 +28,6 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
     "click>=8.2.0",
@@ -50,6 +49,8 @@ fast = ["pytest-impacted-rs"]
 
 [project.urls]
 Homepage = "https://github.com/promptromp/pytest-impacted"
+Documentation = "https://promptromp.github.io/pytest-impacted"
+Changelog = "https://github.com/promptromp/pytest-impacted/releases"
 Issues = "https://github.com/promptromp/pytest-impacted/issues"
 
 [project.entry-points.pytest11]

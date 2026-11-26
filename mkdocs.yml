@@ -30,6 +30,7 @@ theme:
     - navigation.footer
 markdown_extensions:
   - admonition
+  - github-callouts  # README's GitHub alerts (> [!CAUTION]), as admonitions
   - attr_list
   - pymdownx.details
   - pymdownx.emoji:

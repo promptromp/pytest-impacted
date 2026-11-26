@@ -5,7 +5,7 @@ Follow Python's official documentation and PEPs for best practices in Python dev
 
 ## Project Description
 
-This is a repository that exposes a pytest plugin called `pytest-impact` which uses a combination of static analysis, git repository introspection, and dependency analysis via graph algorithms to estimate which unit-tests are affected ("impacted") by changes to the codebase as reflected via the git repository state.
+This is a repository that exposes a pytest plugin called `pytest-impacted` which uses a combination of static analysis, git repository introspection, and dependency analysis via graph algorithms to estimate which unit-tests are affected ("impacted") by changes to the codebase as reflected via the git repository state.
 
 
 ## Virtual Environment and Package Dependency Management

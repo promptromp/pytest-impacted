@@ -32,6 +32,8 @@ Three kinds of test always run, as no analysis can judge them: items from non-Py
 
 To mark them skipped instead, as releases up to 0.35 did, pass `--impacted-unimpacted=skip` (ini: `impacted_unimpacted = "skip"`). Each then reports `SKIPPED (not impacted by the changes)`. `--impacted-unimpacted=deselect` restores the default when the ini says `skip`.
 
+Every test the analysis selects carries the `impacted` marker, set before `-k` and `-m` filter, so `-m impacted` and `-m "not impacted"` select by it too.
+
 ## Git Modes
 
 ### Unstaged Mode (default)
@@ -216,7 +218,7 @@ Monitored files — each matched by file name, in any directory:
 - pytest configuration: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini` — settings such as `addopts`, `markers` and `filterwarnings` apply to every test
 - Requirements: any `*requirements*.txt` or `*requirements*.in` (`requirements-dev.txt`, `test-requirements.txt`, pip-tools inputs, …) and `*constraints*.txt`
 
-Plus files inside a `requirements/` directory, one or two levels deep: `requirements/*.txt`, `requirements/*/*.txt`, and the same for `.in`. And whichever config file the running pytest actually loaded — including one passed with `-c` under any name (pytest plugin only: the `impacted-tests` CLI has no pytest session).
+Plus files inside a `requirements/` directory, one or two levels deep: `requirements/*.txt`, `requirements/*/*.txt`, and the same for `.in`. And whichever config file the running pytest actually loaded — including one passed with `-c` under any name. The `impacted-tests` CLI watches the file it read its settings from, too: `-c`, or the one it found from `--root-dir`.
 
 This strategy is enabled by default. To disable it, use:
 
@@ -336,6 +338,11 @@ else
   echo "No impacted tests."
 fi
 ```
+
+The CLI prints the impacted test files on stdout, one absolute path per line, and nothing else: its settings and
+notices go to stderr. It exits with status 0 whether or not a test is impacted (`No impacted tests found.` on stderr
+then), 1 when git cannot run, so the changes are unknown, and 2 on a usage error: a missing or misspelled option, a
+module or tests dir that is not there, a base branch git does not know.
 
 If your tests live outside the package, pass `--tests-dir` here too — the CLI needs it
 for the same reason the pytest flag does, otherwise the dependency graph will not
@@ -508,11 +515,15 @@ The Rust extension:
 
 ### Benchmarks
 
-Run the included benchmark script to measure speedup on your codebase:
+The benchmark script ships in the repository, not in the package. From your project's root, run it from a clone of
+pytest-impacted, in an environment with pytest-impacted (and pytest-impacted-rs) installed:
 
 ```bash
-python -m benchmarks.bench_parsing --module my_package --tests-dir tests
+python /path/to/pytest-impacted/benchmarks/bench_parsing.py --module my_package --tests-dir tests
 ```
+
+It times the pure-Python parser against the extension, sequential and parallel, and checks both find the same
+imports.
 
 !!! note
     The Rust extension is **completely optional**. When not installed, the pure-Python implementation (the standard library's `ast`) is used automatically. Apart from the grammar difference above, both modes select the same tests.

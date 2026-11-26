@@ -28,8 +28,12 @@ jobs:
           path: .cache
           restore-keys: |
             mkdocs-material-
-      - run: pip install mkdocs-material
+      # Pinned: an unpinned theme release could change or break the site unseen.
+      - run: pip install mkdocs-material==9.8.2 markdown-callouts==0.4.0
       - name: copy README.md to docs/
         run: |
           cp README.md docs/
-      - run: mkdocs gh-deploy --force
+      # --strict: a broken link or a missing page fails the deploy instead of publishing it.
+      - run: mkdocs gh-deploy --force --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
