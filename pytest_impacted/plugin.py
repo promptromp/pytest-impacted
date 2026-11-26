@@ -53,6 +53,7 @@ _api = _lazily("pytest_impacted.api")
 _file_map = _lazily("pytest_impacted.file_map")
 _git = _lazily("pytest_impacted.git")
 _strategies = _lazily("pytest_impacted.strategies")
+_parsing = _lazily("pytest_impacted.parsing")
 _traversal = _lazily("pytest_impacted.traversal")
 _validation = _lazily("pytest_impacted.validation")
 
@@ -61,13 +62,18 @@ NOT_IMPACTED = "not impacted by the changes"
 # Where a pytest-xdist worker reports its deselection to the controller, and the tests no analysis judged.
 _WORKER_OUTPUT_KEY = "pytest_impacted_deselected"
 _WORKER_UNJUDGED_KEY = "pytest_impacted_unjudged"
-# Where the controller hands each pytest-xdist worker its analysis.
+_WORKER_UNNAMED_KEY = "pytest_impacted_unnamed"
+# Where the controller hands each pytest-xdist worker its analysis: the impacted test files, and the test files the
+# walks name (any other a worker collects is no analysis's to judge).
 _WORKER_INPUT_KEY = "pytest_impacted_tests"
+_WORKER_KNOWN_KEY = "pytest_impacted_known_tests"
 
 
-# How many tests this plugin deselected, and how many it ran unjudged: outside the analysed directories.
+# How many tests this plugin deselected, and how many it ran unjudged: outside the analysed directories, or inside
+# them in a file no walk names as a test module (a ``python_files`` pattern, a directory that is no identifier).
 _DESELECTION = StashKey[int]()
 _UNJUDGED = StashKey[int]()
+_UNNAMED = StashKey[int]()
 _SESSION = StashKey[pytest.Session]()
 
 
@@ -76,6 +82,7 @@ class _Handoff:
     """The controller's analysis for every pytest-xdist worker (``None``: run every test)."""
 
     tests: list[str] | None
+    known: list[str]
 
 
 # The controller's handoff, or None for none: each worker then analyses for itself.
@@ -83,7 +90,7 @@ _HANDOFF = StashKey[_Handoff | None]()
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect, and those no analysis
 # judged (outside the analysed directories), for it to count once -k and -m have filtered.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
-_UNJUDGED_ITEMS = StashKey[set[pytest.Item]]()
+_UNJUDGED_ITEMS = StashKey[dict[pytest.Item, StashKey[int]]]()  # each with the count it adds to
 
 
 def pytest_addoption(parser: Parser):
@@ -215,6 +222,7 @@ def pytest_configure_node(node) -> None:
         config.stash[_HANDOFF] = _handoff(session, config)
     if (handoff := config.stash[_HANDOFF]) is not None:
         node.workerinput[_WORKER_INPUT_KEY] = handoff.tests
+        node.workerinput[_WORKER_KNOWN_KEY] = handoff.known
 
 
 def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
@@ -225,7 +233,8 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
     if any(re.sub(r"^\d+\*", "", spec) != "popen" for spec in config.getoption("tx", default=None) or []):
         return None
     try:
-        return _Handoff(_analyse(session, config))
+        tests = _analyse(session, config)
+        return _Handoff(tests, [] if tests is None else _known_tests(config))  # None: every test runs, none judged
     except (Exception, pytest.fail.Exception, pytest.skip.Exception) as err:  # noqa: BLE001 — warned, and retried
         # Raised here it would escape xdist's session start, and pytest would skip every
         # pytest_sessionfinish (no JUnit XML, no combined coverage); in a worker it may
@@ -295,6 +304,29 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
     return [_relative_to(roots, test) for test in impacted_tests or []]
 
 
+def _known_tests(config: Config) -> list[str]:
+    """The test files the walks name, relative to the rootdir: the files the analysis may select or leave out.
+
+    A test pytest collects from any other file no analysis judges, and it runs: one not named as a test module
+    (``test_*.py``, ``*_test.py``, or under a ``test``/``tests`` directory) that a ``python_files`` pattern collects,
+    or one in a package directory whose name is no identifier, which the package walk does not enter. Discovery
+    alone (cached, no parsing), so a test file the graph found only through an import (rare: tests are not imported)
+    runs too, unjudged — the safe side. Files outside the rootdir are left out: they are outside the analysed
+    directories too, so they run anyway.
+    """
+    get_option = partial(get_option_from_config, config)
+    tests_dir = get_option("impacted_tests_dir")
+    found = _traversal().discover_project_modules(
+        _validation().normalized_module(str(get_option("impacted_module"))),
+        _traversal().path_to_package_name(tests_dir) if tests_dir else None,
+        root_dir=config.rootpath,
+    )
+    is_test, real_path = _parsing().is_test_module, _traversal().real_path
+    root = real_path(config.rootpath)
+    real = (real_path(path) for name, path in found.modules.items() if is_test(name))
+    return sorted(path.relative_to(root).as_posix() for path in real if path.is_relative_to(root))
+
+
 def _pythonpath(config: Config) -> list[Path]:
     """pytest's ``pythonpath`` entries; none when no plugin declares the setting.
 
@@ -346,18 +378,21 @@ def pytest_collection_modifyitems(session, config, items):
         return
     # Afresh: a second collection on one config must not count the first's deselection.
     config.stash[_UNIMPACTED_ITEMS] = set()
-    config.stash[_UNJUDGED_ITEMS] = set()
+    config.stash[_UNJUDGED_ITEMS] = {}
     _record(config, 0)
-    _report(config, _UNJUDGED, _WORKER_UNJUDGED_KEY, 0)
+    for key, worker_key in _UNJUDGED_COUNTS:
+        _report(config, key, worker_key, 0)
     workerinput = getattr(config, "workerinput", None)
     handed_on = workerinput is not None and _WORKER_INPUT_KEY in workerinput
     impacted_tests = workerinput[_WORKER_INPUT_KEY] if handed_on else _analyse(session, config)
     if impacted_tests is None:
         return
     root_dir = config.rootpath
-    unjudged = _unjudged_items(items, _analysed_dirs(config), _traversal().real_path(config.rootpath))
+    known = workerinput[_WORKER_KNOWN_KEY] if handed_on else _known_tests(config)
+    real_root = _traversal().real_path(root_dir)
+    unjudged = _unjudged_items(items, _analysed_dirs(config), real_root, {real_root / test for test in known})
     config.stash[_UNJUDGED_ITEMS] = unjudged
-    impacted_items = _impacted_items(items, impacted_tests, root_dir) | unjudged
+    impacted_items = _impacted_items(items, impacted_tests, root_dir) | unjudged.keys()
     # A worker analysing for itself skips: another may judge differently, and xdist stops a
     # run whose workers collect different tests, not one whose skips differ.
     analysed_alone = workerinput is not None and not handed_on
@@ -392,8 +427,9 @@ def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None
         items[:] = kept
         _record(config, len(unimpacted))
     # Counted now, after -k and -m: the summary says how many ran.
-    unjudged = config.stash.get(_UNJUDGED_ITEMS, set())
-    _report(config, _UNJUDGED, _WORKER_UNJUDGED_KEY, sum(item in unjudged for item in kept))
+    unjudged = config.stash.get(_UNJUDGED_ITEMS, {})
+    for key, worker_key in _UNJUDGED_COUNTS:
+        _report(config, key, worker_key, sum(unjudged.get(item) is key for item in kept))
 
 
 def _record(config: Config, count: int) -> None:
@@ -427,28 +463,36 @@ def _analysed_dirs(config: Config) -> list[Path]:
     return [*given, *(_traversal().real_path(directory) for directory in given)]
 
 
-def _unjudged_items(items: list[pytest.Item], analysed: list[Path], root: Path) -> set[pytest.Item]:
-    """The Python test items no walk reaches: no analysis judged them, so they run.
+def _unjudged_items(
+    items: list[pytest.Item], analysed: list[Path], root: Path, known: set[Path]
+) -> dict[pytest.Item, StashKey[int]]:
+    """The Python test items no analysis judges, so they run, each with the count it adds to.
 
-    Their files are no graph node (nothing in the application imports a test), so a rule that impacts "every
-    test" never reached them either, and they were deselected on every run: a second tests directory, or the
-    tests themselves when only ``--impacted-module`` is set. A walk reaches a file under an analysed directory,
-    resolved, or through a symlink under one that stays inside the project (*root*), as the walks follow links.
+    - Outside the analysed directories (``_UNJUDGED``): their files are no graph node (nothing in the application
+      imports a test), so a rule that impacts "every test" never reached them either: a second tests directory, or
+      the tests themselves when only ``--impacted-module`` is set. A walk reaches a file under an analysed
+      directory, resolved, or through a symlink under one that stays inside the project (*root*).
+    - Inside them, in a file that is none of the *known* test files the walks name (``_UNNAMED``): a test a
+      ``python_files`` pattern collects from ``check_db.py``, or one in a directory whose name is no identifier.
     """
-    resolved: dict[Path, bool] = {}
+    resolved: dict[Path, StashKey[int] | None] = {}
     real_path = _traversal().real_path
 
-    def outside(path: Path) -> bool:
+    def reason(path: Path) -> StashKey[int] | None:
         if path not in resolved:
             real, spelled = real_path(path), Path(os.path.abspath(path))
             judged = any(real.is_relative_to(d) for d in analysed) or (
                 real.is_relative_to(root) and any(spelled.is_relative_to(d) for d in analysed)
             )
-            resolved[path] = not judged
+            resolved[path] = None if judged and real in known else _UNJUDGED if not judged else _UNNAMED
         return resolved[path]
 
     # Tests pytest's Python collector made: a linter plugin's items (pytest-ruff, pytest-mypy) are no tests.
-    return {item for item in items if isinstance(item, pytest.Function) and outside(item.path)}
+    return {item: why for item in items if isinstance(item, pytest.Function) and (why := reason(item.path)) is not None}
+
+
+#: The counts of unjudged tests, each with the key a pytest-xdist worker reports it under.
+_UNJUDGED_COUNTS = ((_UNJUDGED, _WORKER_UNJUDGED_KEY), (_UNNAMED, _WORKER_UNNAMED_KEY))
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -459,7 +503,7 @@ def pytest_testnodedown(node, error) -> None:
     names when they do not: ``--dist each`` allows it, and a crashed worker's replacement
     may collect what appeared since.
     """
-    for worker_key, key in ((_WORKER_OUTPUT_KEY, _DESELECTION), (_WORKER_UNJUDGED_KEY, _UNJUDGED)):
+    for key, worker_key in ((_DESELECTION, _WORKER_OUTPUT_KEY), *_UNJUDGED_COUNTS):
         reported = getattr(node, "workeroutput", {}).get(worker_key)
         if isinstance(reported, int):
             config = node.config
@@ -496,6 +540,14 @@ def pytest_terminal_summary(terminalreporter, config: Config) -> None:
         terminalreporter.write_line(
             f"pytest-impacted: {unjudged} {tests} outside --impacted-module and --impacted-tests-dir, which no "
             "analysis judges, ran: set --impacted-tests-dir to a directory holding every test to select among them.",
+            yellow=True,
+        )
+    if (unnamed := config.stash.get(_UNNAMED, 0)) and config.get_verbosity() > -2:
+        tests = "test" if unnamed == 1 else "tests"
+        terminalreporter.write_line(
+            f"pytest-impacted: {unnamed} {tests} in files no analysis names as test modules ran: files a python_files "
+            "pattern collects though named neither test_*.py nor *_test.py, outside any tests directory, or in a "
+            "package directory whose name is no identifier. Rename or move them to select among them.",
             yellow=True,
         )
     # pytest leaves the report header out under -q and --no-header; a warning it carries is said here instead.
