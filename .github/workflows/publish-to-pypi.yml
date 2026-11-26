@@ -69,11 +69,17 @@ jobs:
     - name: Create GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
-      run: >-
-        gh release create
-        "$GITHUB_REF_NAME"
-        --repo "$GITHUB_REPOSITORY"
-        --notes ""
+      # The release notes are the annotated tag's message, less its first line (the version), read through the
+      # API: this job has no checkout, and `--notes-from-tag` reads the tag from a local clone.
+      run: |
+        ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME")
+        if [ "$(jq -r .object.type <<<"$ref")" = tag ]; then
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$(jq -r .object.sha <<<"$ref")" --jq .message \
+            | sed "1{/^$GITHUB_REF_NAME\$/d;}" | sed '/./,$!d' > notes.md
+        else
+          : > notes.md  # a lightweight tag carries no message
+        fi
+        gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
     - name: Upload artifact signatures to GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
