@@ -404,7 +404,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-module=my_package` (src-layout) | Suggests `src/my_package` if found under `src/` |
 | `--impacted-module=nonexistent` | Clear error naming the rootdir the package was looked for under |
 | `--impacted-tests-dir=bad_path` | Error indicating the directory doesn't exist |
-| `--impacted-tests-dir=tests.unit` (a `.` in a directory name), `../tests` | Error: the tests dir travels as a dotted module name, so name it by its path inside the rootdir (the CLI's `--tests-dir` also accepts a dotted spelling of a real path, `tests.unit` for `tests/unit`) |
+| `--impacted-tests-dir=tests.unit` (a `.` in a directory name), `../tests` | Error: the tests dir travels as a dotted module name, so name it by its path inside the rootdir (a dotted spelling of a real path, `tests.unit` for `tests/unit`, is accepted too, as are `./app` and `app/` for the module; a module directory with a `.` in its name, `.` or a path outside the rootdir is refused, as the analysis reads dots as separators) |
 | `--impacted-base-branch=no_such_branch` | Error listing available git refs |
 | `--impacted-base-branch=--some-option` | Rejected before reaching git — refs may not begin with `-`, since git would parse them as options rather than revisions |
 | No git repository found (branch mode) | Clear error naming the rootdir searched: no `.git` found at or above it |

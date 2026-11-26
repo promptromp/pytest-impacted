@@ -1,7 +1,7 @@
 """CLI entrypoints for pytest-impacted."""
 
 import logging
-import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,26 +19,15 @@ from pytest_impacted.extensions import (
     get_ext_ini_name,
 )
 from pytest_impacted.file_map import parse_file_map
-from pytest_impacted.git import GitError, GitMode, GitUnavailableError
+from pytest_impacted.git import GitError, GitUnavailableError
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
+from pytest_impacted.options import CLI_SETTINGS, OPTIONS, Kind
 from pytest_impacted.strategies import parse_invalidation_patterns
-from pytest_impacted.traversal import unnameable_tests_dir
+from pytest_impacted.validation import module_problem, tests_dir_problem
 
 
-# The pytest setting each option defaults to; an extension's option is named as its setting.
-INI_NAMES = {
-    "git_mode": "impacted_git_mode",
-    "base_branch": "impacted_base_branch",
-    "module": "impacted_module",
-    "tests_dir": "impacted_tests_dir",
-    "no_merge_base": "impacted_no_merge_base",
-    "no_dep_files": "no_impacted_dep_files",
-    "invalidate_all": "impacted_invalidate_all",
-    "file_map": "impacted_map",
-    "conftest_imports": "impacted_conftest_imports",
-    "ignore_type_checking_imports": "impacted_ignore_type_checking_imports",
-    "disable_ext": "impacted_disable_ext",
-}
+# The pytest setting each option defaults to (see pytest_impacted.options); an extension's option is named as it.
+INI_NAMES = CLI_SETTINGS
 # The prefix of an extension option's name, which is its pytest setting's too.
 EXT_PREFIX = "impacted_ext_"
 # Options with no pytest setting.
@@ -50,6 +39,27 @@ _CLICK_TYPE_MAP: dict[type, click.ParamType] = {
     float: click.FLOAT,
     bool: click.BOOL,
 }
+
+
+def _with_setting_options(command: Callable[..., Any]) -> Callable[..., Any]:
+    """*command* with a click option for each setting of :data:`~pytest_impacted.options.OPTIONS` the CLI has: a flag
+    as an on/off pair (``--no-merge-base/--merge-base``), a list as a repeatable option, a choice as one."""
+    for option in reversed([option for option in OPTIONS if option.cli]):
+        cli = option.cli
+        assert cli is not None
+        kwargs: dict[str, Any] = {"help": cli.help, "default": cli.default}
+        if option.kind is Kind.FLAG:
+            off = cli.flag.removeprefix("no-") if cli.flag.startswith("no-") else f"no-{cli.flag}"
+            declarations = [f"--{cli.flag}/--{off}", cli.param]
+        else:
+            declarations = [f"--{cli.flag}", cli.param]
+            kwargs["metavar"] = cli.metavar
+            if option.kind is Kind.LIST:
+                kwargs["multiple"] = True
+            elif option.kind is Kind.CHOICE:
+                kwargs["type"] = click.Choice(list(option.choices))
+        command = click.option(*declarations, **kwargs)(command)
+    return command
 
 
 def configure_logging(verbose: bool) -> None:
@@ -65,13 +75,6 @@ def configure_logging(verbose: bool) -> None:
 
 
 @click.command(context_settings={"show_default": True})
-@click.option(
-    "--git-mode",
-    type=click.Choice([mode.value for mode in GitMode]),
-    default=GitMode.UNSTAGED.value,
-    help="Which changes count.",
-)
-@click.option("--base-branch", default="main", help="Base branch.")
 @click.option(
     "--root-dir",
     default=".",
@@ -90,59 +93,8 @@ def configure_logging(verbose: bool) -> None:
         + "for a run from --root-dir (pytest.ini, pyproject.toml, tox.ini, ...)."
     ),
 )
-@click.option(
-    "--module",
-    help=(
-        "Namespace (top-level) module for package we are testing, relative to --root-dir. "
-        + "Required, here or as impacted_module in the pytest configuration."
-    ),
-)
-@click.option(
-    "--tests-dir",
-    help=(
-        "Directory containing the unit-test files, relative to --root-dir. If not specified, "
-        + "tests will only be found under namespace module directory."
-    ),
-)
-@click.option(
-    "--no-merge-base/--merge-base",
-    default=False,
-    help="In branch mode, diff against the base branch's tip instead of the fork point.",
-)
+@_with_setting_options
 @click.option("--verbose", is_flag=True, help="Verbose output.")
-@click.option(
-    "--no-dep-files/--dep-files", default=False, help="Disable dependency and test-config file change detection."
-)
-@click.option(
-    "--invalidate-all",
-    multiple=True,
-    default=(),
-    metavar="PATTERN",
-    help="Glob for files that, when changed, mark ALL tests as impacted (repeatable).",
-)
-@click.option(
-    "--map",
-    "file_map",
-    multiple=True,
-    default=(),
-    metavar="GLOB=PATH",
-    help="A changed file matching GLOB counts as a change to PATH, relative to --root-dir (repeatable).",
-)
-@click.option(
-    "--conftest-imports/--no-conftest-imports",
-    default=False,
-    help="Also treat a conftest.py that imports changed application code as impacting every test beneath it.",
-)
-@click.option(
-    "--ignore-type-checking-imports/--no-ignore-type-checking-imports",
-    default=False,
-    help=(
-        "Leave application code's type-only imports out of the dependency graph: those in an "
-        + "'if TYPE_CHECKING:' block whose names the module uses only in annotations. Test code and "
-        + "package __init__.py files keep their own."
-    ),
-)
-@click.option("--disable-ext", multiple=True, default=(), help="Disable a strategy extension by name (repeatable).")
 @click.pass_context
 def impacted_tests_cli(ctx, **options):
     """CLI entrypoint for impacted-tests console script.
@@ -270,16 +222,15 @@ def _run(
 
     configure_logging(verbose=verbose)
 
-    # Paths are relative to --root-dir, which need not be the working directory. Dotted
-    # names are accepted here as they are by discover_submodules, but ``./suite`` is a path.
-    for name, option, value in (("module", "--module", module), ("tests_dir", "--tests-dir", tests_dir)):
-        candidates = (Path(root_dir) / value, Path(root_dir) / value.replace(".", os.sep)) if value else ()
-        if value and not any(os.path.isdir(candidate) for candidate in candidates):
-            raise click.BadParameter(
-                f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=sources.get(name, option)
-            )
-    if tests_dir and (reason := unnameable_tests_dir(tests_dir, Path(root_dir))):
-        raise click.BadParameter(reason, param_hint=sources.get("tests_dir", "--tests-dir"))
+    # Paths are relative to --root-dir, which need not be the working directory; the plugin checks the same. A fix is
+    # spelled as the value was given: the option, or the setting in the configuration file.
+    def spelled(name: str) -> str:
+        return CLI_SETTINGS[name] if name in sources else f"--{name.replace('_', '-')}"
+
+    if problem := module_problem(module, Path(root_dir), spelled("module")):
+        raise click.BadParameter(problem, param_hint=sources.get("module", "--module"))
+    if tests_dir and (problem := tests_dir_problem(tests_dir, Path(root_dir), spelled("tests_dir"))):
+        raise click.BadParameter(problem, param_hint=sources.get("tests_dir", "--tests-dir"))
 
     try:
         mappings = parse_file_map(file_map)

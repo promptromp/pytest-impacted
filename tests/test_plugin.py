@@ -11,6 +11,7 @@ from pytest_impacted import _rust
 from pytest_impacted.extensions import discover_extension_metadata
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
+    _analysed_dirs,
     _lazily,
     pytest_addoption,
     pytest_configure,
@@ -448,3 +449,33 @@ def test_a_directory_in_a_listable_but_unsearchable_one_is_a_usage_error(tmp_pat
             validate(tmp_path)
     finally:
         locked.chmod(0o755)
+
+
+@pytest.mark.parametrize("module", [".", "./", "../app", ".app", "...", "app/..", "ABSOLUTE"])
+def test_validate_module_rejects_a_module_outside_the_rootdir(tmp_path, module):
+    """Dots turn into separators: ``.`` was read as ``/`` (always a directory) and passed, ``.app`` as ``/app``."""
+    (tmp_path / "project/app").mkdir(parents=True)
+    (tmp_path / "app").mkdir()
+    module = str(tmp_path / "project/app") if module == "ABSOLUTE" else module
+
+    with pytest.raises(pytest.UsageError, match="names no package inside"):
+        validate_module(module, tmp_path / "project")
+
+
+@pytest.mark.parametrize(
+    ("tests_dir", "expected"),
+    [("ABSOLUTE", "ABSOLUTE"), ("suite", "suite"), ("suite.unit", "suite/unit")],
+    ids=["absolute, as given", "relative", "dotted, as walked"],
+)
+def test_the_analysed_tests_dir_is_spelled_as_a_test_path_is(pytester, tests_dir, expected):
+    """An item's path is compared with it as spelled, so ``/proj/suite`` must not become ``//proj/suite`` (the
+    dotted name it travels as): a test reached through a symlinked directory beneath it no longer matched."""
+    (pytester.path / "app").mkdir()
+    (pytester.path / "suite/unit").mkdir(parents=True)
+    given = str(pytester.path / "suite") if tests_dir == "ABSOLUTE" else tests_dir
+    config = pytester.parseconfig("--impacted-module=app", f"--impacted-tests-dir={given}")
+
+    analysed = _analysed_dirs(config)
+
+    spelled = pytester.path / "suite" if expected == "ABSOLUTE" else Path(os.path.abspath(pytester.path / expected))
+    assert analysed[1] == spelled

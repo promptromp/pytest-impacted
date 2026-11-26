@@ -36,6 +36,7 @@ from pytest_impacted.traversal import (
     path_to_package_name,
     resolve_modules_to_files,
 )
+from pytest_impacted.validation import normalized_module
 
 
 def matches_impacted_tests(item_path: str, *, impacted_tests: list[str]) -> bool:
@@ -200,6 +201,7 @@ def get_impacted_tests(
     """
     git_mode = impacted_git_mode
     base_branch = impacted_base_branch
+    ns_module = normalized_module(ns_module)  # ``./app/`` names ``app``: the analysis reads dots as separators
 
     # Use default strategy if none provided
     if strategy is None:

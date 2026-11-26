@@ -272,3 +272,23 @@ def test_a_test_reached_through_a_link_out_of_the_project_runs(make_git_project,
 
     result.assert_outcomes(passed=2, deselected=1)
     result.stdout.fnmatch_lines(["*test_far.py::test_far PASSED*", "pytest-impacted: 1 test outside *"])
+
+
+@pytest.mark.parametrize(
+    ("module", "tests_dir", "files"),
+    [
+        ("./app", "suite", TWO_TEST_DIRS),
+        ("app", "suite.unit", {name.replace("suite/", "suite/unit/"): code for name, code in TWO_TEST_DIRS.items()}),
+    ],
+    ids=["a module path", "a dotted tests dir"],
+)
+def test_the_spellings_the_settings_accept_judge_the_tests_they_name(make_git_project, module, tests_dir, files):
+    """``./app`` and ``suite.unit`` name what ``app`` and ``suite/unit`` do: their tests are judged, never unjudged."""
+    files = {name: source for name, source in files.items() if not name.startswith("integration/")}
+    project = make_git_project(files, "[pytest]\npythonpath = .\n")
+    edit_file(project, "app/b.py")
+
+    result = run(project, f"--impacted-module={module}", f"--impacted-tests-dir={tests_dir}")
+
+    result.assert_outcomes(passed=1, deselected=1)
+    assert "outside --impacted-module" not in result.stdout.str()
