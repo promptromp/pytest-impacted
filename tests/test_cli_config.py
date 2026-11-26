@@ -73,6 +73,7 @@ impacted_invalidate_all = *.json 'my dir/*.yaml'
 impacted_conftest_imports = 1
 impacted_ignore_type_checking_imports = true
 impacted_disable_ext = slow-ext
+impacted_backend = python
 """
 
 
@@ -94,6 +95,7 @@ def test_every_setting_is_read(calls, tmp_path):
         "file_map": [],
         "pythonpath": [],
         "ignore_type_checking_imports": True,
+        "backend": "python",
     }
     assert build.call_args.kwargs == {
         "watch_dep_files": False,

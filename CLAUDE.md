@@ -49,6 +49,16 @@ module-level code (monkey patching, DB connections, app factories). Reaching for
 and then the file imports nothing, logged. Never a recursive visitor: `ast` nests each `elif` in the previous
 `orelse`, so a generated 1,000-branch dispatch is 1,000 statements deep.
 
+**Parsing goes through `backends.py`; `graph.py` names no parser.** A `Backend` answers per `Source`, in order, `None`
+for a file it leaves to another (`imports`, `imports_by_name`): `PythonBackend` reads every file, `RustBackend` leaves
+out what it cannot read or an older extension cannot do, and `WithFallback` is the "extension, then Python for what
+it leaves" rule — never fewer imports than Python. `backend_for` is the one place a run's backend is chosen (the
+extension with Python behind it; Python alone when the extension is absent, too old for the options, or
+`--impacted-backend=python`), and part of the graph cache's key; a backend of the caller's gets Python behind it
+(`resolve_backend`). The report header, written on every run, decides from `_rust`'s flags without loading the
+layer (lazy imports, above); `test_the_header_names_the_backend_the_analysis_chooses` holds it to `backend_for`. Add
+a parser as a backend, never as a branch in `graph.py`.
+
 **`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an importable package:
 `pkgutil.iter_modules`, a non-package prefix like `src/` dropped, plus the package's own `__init__.py` (`pkgutil`
 lists children only; without it `from pkg import X` had no edge). `False` walks test directories, naming modules

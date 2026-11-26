@@ -170,6 +170,7 @@ impacted_tests_dir = "tests"
 # impacted_ignore_type_checking_imports = true  # type-only imports (annotations alone) are no dependencies
 # impacted_no_merge_base = true  # branch mode: diff against the base tip, not the fork point
 # impacted_unimpacted = "skip"  # mark tests not impacted skipped instead of deselecting them
+# impacted_backend = "python"  # the standard library's parser whatever is installed (the same imports)
 ```
 
 Command-line flags override these defaults. A boolean set to `true` here has no flag to turn it off; override it with `-o`, e.g. `-o impacted_conftest_imports=false`.
@@ -190,6 +191,7 @@ Command-line flags override these defaults. A boolean set to `true` here has no 
 | `--impacted-conftest-imports` | `false` | Also select every test beneath a `conftest.py` that imports changed *application* code — see [below](#strategy-based-architecture) |
 | `--impacted-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph — those under `if TYPE_CHECKING:` whose names only annotations use — so the import cycles they close stop selecting each other's tests. A name the code uses, a string names, or the module never uses (a lazy `__init__`'s exports) keeps its import, and test code and package `__init__.py` files keep all of their own; a test running a type checker is no longer selected through them — see the [usage guide](https://promptromp.github.io/pytest-impacted/usage/#astimpactstrategy) |
 | `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them (the behaviour up to 0.35) |
+| `--impacted-backend` | `auto` | Which parser reads the imports: `auto` (pytest-impacted-rs when installed and new enough, the standard library's `ast` otherwise) or `python` (`ast`, whatever is installed); both find the same imports |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension (see `pytest --help`) |
 

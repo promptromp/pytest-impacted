@@ -370,6 +370,7 @@ impacted-tests --module=my_package --tests-dir=tests --git-mode=branch --base-br
 | `--map` | `[]` | `GLOB=PATH`: a changed file matching `GLOB` counts as a change to `PATH` (repeatable) |
 | `--conftest-imports` / `--no-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted |
 | `--ignore-type-checking-imports` / `--no-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use; test code and package `__init__.py` files keep their own ([details](#astimpactstrategy)) |
+| `--backend` | `auto` | Which parser reads the imports: `auto` or `python` (see `--impacted-backend`) |
 | `--disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension; it takes a value, `true` or `false` for a boolean. Run `impacted-tests --help` to list them |
 
@@ -397,6 +398,7 @@ impacted_conftest_imports = false  # true: a conftest importing changed app code
 impacted_ignore_type_checking_imports = false  # true: type-only imports (annotations alone) are no dependencies
 impacted_unimpacted = "deselect"  # "skip": mark tests not impacted skipped instead of deselecting them
 impacted_no_merge_base = false  # true: branch mode diffs against the base tip
+impacted_backend = "auto"  # "python": the standard library's parser whatever is installed (the same imports)
 impacted_disable_ext = []  # extension names to disable
 ```
 
@@ -438,6 +440,7 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-conftest-imports` | `false` | Also mark every test beneath a `conftest.py` that imports changed application code as impacted ([details](#conftestimportimpactstrategy-opt-in)) |
 | `--impacted-ignore-type-checking-imports` | `false` | Leave application code's type-only imports out of the dependency graph: those under `if TYPE_CHECKING:` whose names only annotations use; test code and package `__init__.py` files keep their own ([details](#astimpactstrategy)) |
 | `--impacted-unimpacted` | `deselect` | What becomes of tests not impacted: `deselect` them, or `skip` them ([details](#tests-not-impacted)) |
+| `--impacted-backend` | `auto` | Which parser reads the imports: `auto` (pytest-impacted-rs when installed and new enough, the standard library's `ast` otherwise) or `python` (`ast`, whatever is installed); both find the same imports |
 | `--impacted-disable-ext` | `[]` | Disable a strategy extension by name (repeatable) |
 | `--impacted-ext-{ext}-{option}` | *(per extension)* | Set a config option on an installed extension. Installed extensions register their own flags — run `pytest --help` to list them, or see the [Extensions guide](extensions.md#extension-with-configuration) |
 
@@ -500,7 +503,9 @@ On macOS 27 and later, build with Rust 1.98 or newer (`rustup update`). An exten
 
 ### How It Works
 
-When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential parsing with the standard library's `ast` (astroid before 0.42, 6-7x slower). No configuration or flags are needed — the extension is detected at import time.
+When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential parsing with the standard library's `ast` (astroid before 0.42, 6-7x slower). No configuration or flags are needed — the extension is detected at import time. The extension hands back each file it cannot read (one ruff rejects though CPython compiles it, one not in UTF-8, one over 4 MiB), and the Python parser reads those, so it never finds fewer imports.
+
+`--impacted-backend=python` (ini `impacted_backend = "python"`, CLI `--backend python`) has the Python parser read every file whatever is installed: to compare the two, or to rule the extension out when a selection looks wrong. The report header's `backend=` names the parser a run uses. Both are `pytest_impacted.backends`, one interface behind which the graph never names a parser.
 
 Both backends extract the same imports from the same source, so switching backends does not change which tests run, with one known exception, grammar: the pure-Python backend parses with the running interpreter's grammar, while ruff's parser accepts newer syntax on any interpreter. A module using syntax newer than your Python (for example PEP 695 `type` aliases on 3.11) logs a syntax-error warning and contributes no edges on the pure-Python backend; every test that imports it is then selected only through other paths.
 

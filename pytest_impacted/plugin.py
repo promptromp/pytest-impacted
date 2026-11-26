@@ -23,7 +23,7 @@ from pytest_impacted.extensions import (
     get_ext_ini_name,
 )
 from pytest_impacted.modes import GitMode
-from pytest_impacted.options import OPTIONS, Kind, Option, Unimpacted
+from pytest_impacted.options import BACKENDS as OPTIONS_BACKENDS, OPTIONS, Kind, Option, Unimpacted
 
 
 def _lazily(name: str) -> Callable[[], ModuleType]:
@@ -155,7 +155,7 @@ def pytest_report_header(config: Config) -> list[str]:
     ext_names = [e.name for e in discover_extension_metadata()]
     header = [
         *(f"{option.setting}={get_option(option.setting)}" for option in OPTIONS if option.in_header),
-        f"backend={_backend(bool(ignore_type_checking_imports))}",
+        f"backend={_backend(bool(ignore_type_checking_imports), get_option('impacted_backend') or 'auto')}",
     ]
     if ext_names:
         header.append(f"extensions={','.join(ext_names)}")
@@ -177,7 +177,10 @@ def _header_warnings(config: Config) -> list[str]:
         lines.extend(
             f"pytest-impacted: WARNING: --impacted-map path {path} matches no file git knows." for path in unknown
         )
-    if outdated := _rust.outdated_for(bool(get_option("impacted_ignore_type_checking_imports"))):
+    python_asked_for = get_option("impacted_backend") == "python"  # the extension is not used: nothing to upgrade
+    if not python_asked_for and (
+        outdated := _rust.outdated_for(bool(get_option("impacted_ignore_type_checking_imports")))
+    ):
         lines.append(f"pytest-impacted: WARNING: {outdated}")
     if not _git().GIT_AVAILABLE:
         lines.append(f"pytest-impacted: WARNING: {_git().GitUnavailableError()} Running every test.")
@@ -234,9 +237,14 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
         return None
 
 
-def _backend(ignore_type_checking_imports: bool) -> str:
-    """The parser the analysis uses, for the report header (see :func:`~pytest_impacted._rust.uses_rust`)."""
-    return "rust (ruff parser + rayon)" if _rust.uses_rust(ignore_type_checking_imports) else "python (ast)"
+def _backend(ignore_type_checking_imports: bool, requested: str) -> str:
+    """The parser the analysis uses, for the report header, which pytest writes on every run, ``--impacted`` or not:
+    decided from ``_rust``'s flags, as ``backends.backend_for`` decides, without loading the parsers that module
+    imports (``test_plugin`` holds the two to the same answer). An invalid *requested* is validate_config's."""
+    if requested not in OPTIONS_BACKENDS:
+        return requested
+    rust = requested != "python" and _rust.uses_rust(ignore_type_checking_imports)
+    return "rust (ruff parser + rayon)" if rust else "python (ast)"
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
@@ -268,6 +276,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             file_map=_file_map().parse_file_map(get_option("impacted_map") or []),
             pythonpath=_pythonpath(config),
             ignore_type_checking_imports=bool(get_option("impacted_ignore_type_checking_imports")),
+            backend=get_option("impacted_backend") or "auto",
         )
     except _git().GitError as err:  # validate_config asked first; git may still refuse later (a ref deleted since)
         # Under pytest-xdist the controller's _handoff warns of it and each worker raises it again: rare enough,
@@ -533,10 +542,16 @@ def get_option_from_config(config: Config, name: str) -> str | None:
     """Get an option from the config.
 
     If the option is not set via command line, return the default value
-    from the ini configuration file (e.g. pytest.ini, pyproject.toml) if present.
-
+    from the ini configuration file (e.g. pytest.ini, pyproject.toml) if present. A choice setting left empty
+    there (``impacted_backend =``) is its default, as the ``impacted-tests`` CLI reads it.
     """
-    return config.getoption(name) or config.getini(name)
+    value = config.getoption(name) or config.getini(name)
+    if value == "" and (choice := _CHOICE_OPTIONS.get(name)):
+        return choice.default
+    return value
+
+
+_CHOICE_OPTIONS = {option.setting: option for option in OPTIONS if option.kind is Kind.CHOICE}
 
 
 def validate_config(config: Config):
@@ -549,14 +564,10 @@ def validate_config(config: Config):
         raise UsageError("No module specified. Please specify a module using --impacted-module.")
     if not get_option("impacted_git_mode"):
         raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
-    if (git_mode := get_option("impacted_git_mode")) not in list(GitMode):
-        # ``choices`` guards the command line only; the setting would reach the analysis and crash it.
-        choices = ", ".join(f"'{mode}'" for mode in GitMode)
-        raise UsageError(f"Invalid impacted_git_mode value {git_mode!r}: expected one of {choices}.")
-    unimpacted = get_option("impacted_unimpacted")
-    if unimpacted not in list(Unimpacted):
-        choices = ", ".join(f"'{action}'" for action in Unimpacted)
-        raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
+    for option in OPTIONS:  # ``choices`` guards the command line only; a setting would reach the analysis and crash it
+        if option.kind is Kind.CHOICE and (value := get_option(option.setting)) not in option.choices:
+            choices = ", ".join(f"'{choice}'" for choice in option.choices)
+            raise UsageError(f"Invalid {option.setting} value {value!r}: expected one of {choices}.")
 
     try:
         _file_map().parse_file_map(get_option("impacted_map") or [])

@@ -183,6 +183,7 @@ def _cached_build_dep_tree(
     root: Path,
     pythonpath: tuple[str, ...] = (),
     ignore_type_checking_imports: bool = False,
+    backend: str = "auto",
 ) -> nx.DiGraph:
     """Cached graph construction, keyed on the canonical *root*, the resolved *pythonpath* and the options.
 
@@ -197,6 +198,7 @@ def _cached_build_dep_tree(
         root_dir=root,
         pythonpath=pythonpath,
         ignore_type_checking_imports=ignore_type_checking_imports,
+        backend=backend,
     )
 
 
@@ -206,6 +208,7 @@ def cached_build_dep_tree(
     root_dir: str | Path | None = None,
     pythonpath: str | Path | Iterable[str | Path] = (),
     ignore_type_checking_imports: bool = False,
+    backend: str | None = "auto",
 ) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
@@ -217,6 +220,7 @@ def cached_build_dep_tree(
         pythonpath: pytest's ``pythonpath`` entries, absolute or relative to the root:
             each inside it or above it is an import root (see :func:`~pytest_impacted.graph.build_dep_tree`).
         ignore_type_checking_imports: Leave out the type-only imports (see :mod:`pytest_impacted.type_only`).
+        backend: Which parser reads the imports (see :mod:`pytest_impacted.backends`): ``auto`` or ``python``.
 
     Returns:
         NetworkX dependency graph. Do not mutate it — it is shared between
@@ -231,7 +235,9 @@ def cached_build_dep_tree(
     # Resolved before the lookup, as the root is, and only those the graph may read (inside the root or
     # above it, once each): two spellings of one entry, or one elsewhere, change nothing, so they share one.
     entries = tuple(str(entry) for entry in pythonpath_roots(pythonpath, root))
-    return _cached_build_dep_tree(ns_module, tests_package, root, entries, bool(ignore_type_checking_imports))
+    return _cached_build_dep_tree(
+        ns_module, tests_package, root, entries, bool(ignore_type_checking_imports), backend or "auto"
+    )
 
 
 def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:

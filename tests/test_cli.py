@@ -62,6 +62,7 @@ DEFAULT_CALL = {
     "file_map": [],
     "pythonpath": [],
     "ignore_type_checking_imports": False,
+    "backend": "auto",
 }
 
 #: What it hands ``build_strategy_with_extensions`` then.
@@ -132,6 +133,7 @@ def cli(tmp_path, monkeypatch, entry_points):
             ["ignore-type-checking-imports: True"],
             id="type-only",
         ),
+        pytest.param(["--backend", "python"], {"backend": "python"}, ["backend: python"], id="the python backend"),
     ],
 )
 def test_the_cli_hands_the_analysis_its_options_and_says_so(cli, args, call, echoed):
@@ -469,3 +471,13 @@ def test_a_map_without_a_path_is_a_usage_error(tmp_path):
 
     assert result.exit_code == 2, result.output
     assert "--map" in result.output
+
+
+@pytest.mark.parametrize(("args", "warned"), [([], True), (["--backend", "python"], False)], ids=["auto", "python"])
+def test_the_cli_warns_of_an_outdated_extension_only_when_it_is_used(cli, monkeypatch, args, warned):
+    monkeypatch.setattr("pytest_impacted.cli.outdated_for", lambda ignore: "the installed pytest-impacted-rs is old")
+
+    result = cli.invoke(*args)
+
+    assert result.exit_code == 0, result.output
+    assert ("is old" in result.stderr) is warned

@@ -9,12 +9,14 @@ import pytest
 
 from pytest_impacted import (
     _rust,
+    backends,
     validation,  # not its functions: pytest would collect tests_dir_problem
 )
 from pytest_impacted.extensions import discover_extension_metadata
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
     _analysed_dirs,
+    _backend,
     _lazily,
     pytest_addoption,
     pytest_configure,
@@ -41,6 +43,7 @@ CLI_OPTION_DESTS = {
     "impacted_conftest_imports",
     "impacted_ignore_type_checking_imports",
     "impacted_unimpacted",
+    "impacted_backend",
     "impacted_disable_ext",
 }
 
@@ -108,16 +111,17 @@ OUTDATED = (
 
 
 @pytest.mark.parametrize(
-    ("available", "accepts", "ignore", "backend", "warning"),
+    ("available", "accepts", "ignore", "asked", "backend", "warning"),
     [
-        pytest.param(True, True, True, "rust (ruff parser + rayon)", False, id="rust"),
-        pytest.param(True, False, False, "rust (ruff parser + rayon)", False, id="older_rust_option_off"),
-        pytest.param(True, False, True, "python (ast)", True, id="older_rust_option_on"),
-        pytest.param(False, False, True, "python (ast)", False, id="no_rust"),
+        pytest.param(True, True, True, "auto", "rust (ruff parser + rayon)", False, id="rust"),
+        pytest.param(True, False, False, "auto", "rust (ruff parser + rayon)", False, id="older_rust_option_off"),
+        pytest.param(True, False, True, "auto", "python (ast)", True, id="older_rust_option_on"),
+        pytest.param(False, False, True, "auto", "python (ast)", False, id="no_rust"),
+        pytest.param(True, True, True, "python", "python (ast)", False, id="python_asked_for"),
     ],
 )
 def test_the_header_names_the_parser_the_options_leave(
-    pytestconfig, monkeypatch, available, accepts, ignore, backend, warning
+    pytestconfig, monkeypatch, available, accepts, ignore, asked, backend, warning
 ):
     """An installed pytest-impacted-rs older than the option leaves the parsing to Python, several times slower
     on a large project: the header warns, as it does when git is missing (the controller writes it)."""
@@ -125,6 +129,7 @@ def test_the_header_names_the_parser_the_options_leave(
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", accepts)
     monkeypatch.setattr(pytestconfig.option, "impacted", True)
     monkeypatch.setattr(pytestconfig.option, "impacted_ignore_type_checking_imports", ignore)
+    monkeypatch.setattr(pytestconfig.option, "impacted_backend", asked)
 
     header = pytest_report_header(pytestconfig)
 
@@ -303,8 +308,10 @@ def test_a_run_without_impacted_loads_none_of_the_analysis(tmp_path):
         "real = subprocess.Popen.__init__\n"
         "subprocess.Popen.__init__ = lambda self, *a, **k: spawned.append(a) or real(self, *a, **k)\n"
         "import pytest\n"
-        "code = pytest.main(['-q', '-p', 'no:cacheprovider', 'test_one.py'])\n"
-        "heavy = ('git', 'networkx', 'pytest_impacted.graph', 'pytest_impacted.api')\n"
+        # Not -q: the report header, which pytest writes on every run, must load none of it either.
+        "code = pytest.main(['-p', 'no:cacheprovider', 'test_one.py'])\n"
+        "heavy = ('git', 'networkx', 'pytest_impacted.graph', 'pytest_impacted.api', 'pytest_impacted.backends',\n"
+        "         'pytest_impacted.parsing', 'pytest_impacted.dynamic_imports', 'pytest_impacted.type_only')\n"
         "print('loaded:', [name for name in heavy if name in sys.modules], 'spawned:', spawned, 'exit:', int(code))\n"
     )
     if discover_extension_metadata():
@@ -499,3 +506,16 @@ def test_the_analysed_tests_dir_is_spelled_as_a_test_path_is(pytester, tests_dir
 
     spelled = pytester.path / "suite" if expected == "ABSOLUTE" else Path(os.path.abspath(pytester.path / expected))
     assert analysed[1] == spelled
+
+
+@pytest.mark.parametrize("available", [True, False])
+@pytest.mark.parametrize("splits", [True, False])
+@pytest.mark.parametrize("ignore", [True, False])
+@pytest.mark.parametrize("requested", ["auto", "python"])
+def test_the_header_names_the_backend_the_analysis_chooses(monkeypatch, available, splits, ignore, requested):
+    """The header decides without loading the parsers (it is written on every run): it must still agree with
+    ``backends.backend_for``, which the analysis uses, in every install and option."""
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", available)
+    monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", splits)
+
+    assert _backend(ignore, requested) == backends.backend_for(ignore, requested).name
