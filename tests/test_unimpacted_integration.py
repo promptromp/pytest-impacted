@@ -27,7 +27,7 @@ from pytest_impacted.plugin import (
     pytest_testnodedown,
 )
 
-from .git_helpers import edit_file as edit
+from .git_helpers import INI, edit_file as edit, run
 
 
 FILES = {
@@ -38,12 +38,7 @@ FILES = {
     "suite/test_b.py": "from app.b import b\n\ndef test_b():\n    assert b() == 2\n",
     "docs/notes.md": "notes\n",
 }
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 NOT_IMPACTED = "pytest-impacted: 1 test not impacted by the changes, deselected"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 def run_subprocess(project, *args):

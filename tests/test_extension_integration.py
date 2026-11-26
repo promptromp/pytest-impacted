@@ -1,5 +1,6 @@
 """Integration tests for the extension system using pytester."""
 
+import importlib
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
@@ -7,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import networkx as nx
 from click.testing import CliRunner
 
-from pytest_impacted import resolve_impacted_tests
+from pytest_impacted import cli as cli_module, resolve_impacted_tests
 from pytest_impacted.cli import impacted_tests_cli
 from pytest_impacted.extensions import ConfigOption, clear_extension_cache
 from pytest_impacted.plugin import pytest_report_header
@@ -191,3 +192,57 @@ class TestExtensionCLIIntegration:
                 ["--module", "test_ns", "--disable-ext", "some_ext"],
             )
             assert result.exit_code == 0
+
+
+class FlaggedStrategy(ImpactStrategy):
+    """An extension with a string setting and an on/off one."""
+
+    config_options: ClassVar[list[ConfigOption]] = [
+        ConfigOption(name="label", help="A label", type=str, default="none"),
+        ConfigOption(name="strict", help="An on/off setting", type=bool, default=False),
+    ]
+
+    def find_impacted_tests(self, *args, **kwargs):
+        return []
+
+
+class TestAnExtensionsSettings:
+    """Its settings reach it, from pytest and from the CLI; discovery's cache is cleared even when a test fails."""
+
+    def setup_method(self):
+        clear_extension_cache()
+
+    def teardown_method(self):
+        clear_extension_cache()
+
+    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+    def test_an_on_off_setting_is_a_flag(self, mock_entry_points, pytester):
+        """``--impacted-ext-flagged-strict`` alone turns it on, as ``store_true`` does; no value follows it."""
+        mock_entry_points.return_value = [_make_mock_entry_point("flagged", FlaggedStrategy)]
+
+        config = pytester.parseconfig("--impacted-ext-flagged-strict", "--impacted-ext-flagged-label=x")
+
+        assert config.getoption("impacted_ext_flagged_strict") is True
+        assert config.getoption("impacted_ext_flagged_label") == "x"
+
+    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+    def test_the_cli_registers_them_and_hands_their_values_over(self, mock_entry_points, tmp_path):
+        """``impacted-tests`` registers each extension's settings when ``pytest_impacted.cli`` is imported (as an
+        install's first import of it does): re-imported here with the extension installed, then without."""
+        mock_entry_points.return_value = [_make_mock_entry_point("flagged", FlaggedStrategy)]
+        (tmp_path / "pkg").mkdir()
+        try:
+            command = importlib.reload(cli_module).impacted_tests_cli
+            with (
+                patch("pytest_impacted.cli.build_strategy_with_extensions") as build,
+                patch("pytest_impacted.cli.get_impacted_tests", return_value=[]),
+            ):
+                args = ["--root-dir", str(tmp_path), "--module", "pkg", "--impacted-ext-flagged-label", "x"]
+                result = CliRunner().invoke(command, args)
+        finally:
+            mock_entry_points.return_value = []
+            clear_extension_cache()
+            importlib.reload(cli_module)
+
+        assert result.exit_code == 0, result.output
+        assert build.call_args.kwargs["ext_config"]["impacted_ext_flagged_label"] == "x"

@@ -564,3 +564,15 @@ def test_a_suggested_fix_is_spelled_as_the_value_was_given(tmp_path, args, ini, 
 
     assert result.exit_code == 2, result.output
     assert f"Did you mean: {suggested}" in " ".join(result.output.split())
+
+
+def test_a_map_without_a_path_is_a_usage_error(tmp_path):
+    """Not a traceback: the option named, exit 2."""
+    (tmp_path / "pkg").mkdir()
+
+    result = CliRunner().invoke(
+        impacted_tests_cli, ["--root-dir", str(tmp_path), "--module", "pkg", "--map", "nonsense"]
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "--map" in result.output

@@ -16,7 +16,7 @@ class TestNormalizePath:
         assert isinstance(result, Path)
         assert str(result) == "/some/path/file.py"
 
-    def testnormalize_pathlib_path(self):
+    def test_normalize_pathlib_path(self):
         """Test normalizing a pathlib.Path object."""
         original = Path("/some/path/file.py")
         result = normalize_path(original)

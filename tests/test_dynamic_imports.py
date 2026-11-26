@@ -11,14 +11,10 @@ from pytest_impacted import _rust, graph
 from pytest_impacted.dynamic_imports import LOADERS, TABLE, DynamicImports, Names, parse_dynamic_imports
 
 
-@pytest.fixture(params=["python", "rust"])
-def engine(request, monkeypatch):
+@pytest.fixture
+def engine(by_name_backend):
     """A backend's reading of imports by name, as the graph asks for it: ``(file path, module name) ->
     DynamicImports``. The Rust one leaves to the stdlib pass what it cannot read, as in the graph."""
-    if request.param == "python":
-        monkeypatch.setattr(_rust, "RUST_PARSES_DYNAMIC_IMPORTS", False)
-    elif not _rust.RUST_PARSES_DYNAMIC_IMPORTS:
-        pytest.skip("pytest-impacted-rs is not installed, or predates finding imports by name")
 
     def parse(file_path, module_name):
         return graph._parse_all_dynamic_imports({module_name: file_path})[module_name]

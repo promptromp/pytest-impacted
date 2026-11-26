@@ -1,10 +1,9 @@
 """Integration tests for the strategies sub-modules."""
 
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import networkx as nx
+import pytest
 
 from pytest_impacted.strategies import (
     PytestImpactStrategy,
@@ -14,10 +13,9 @@ from pytest_impacted.strategies import (
 class TestIntegration:
     """Integration tests for the strategy system."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.root_dir = Path(self.temp_dir)
+    @pytest.fixture(autouse=True)
+    def _root(self, tmp_path):
+        self.root_dir = tmp_path
 
     def test_absolute_and_relative_paths(self):
         """``changed_files`` may mix repo-relative and absolute paths; both resolve against ``root_dir``."""

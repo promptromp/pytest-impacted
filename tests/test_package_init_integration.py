@@ -8,7 +8,7 @@ first: an edit to either, adding one or deleting one, selects the tests importin
 
 import pytest
 
-from .git_helpers import assert_selected, edit_file
+from .git_helpers import assert_selected, edit_file, run
 
 
 TEST_APP = "from app import create_app, Thing\n\ndef test_app():\n    assert isinstance(create_app(), Thing)\n"
@@ -39,10 +39,6 @@ def test_an_edit_reaching_the_package_root_selects_tests_importing_from_it(make_
 def ini(package_dir: str) -> str:
     pythonpath = package_dir.removesuffix("app") or "."
     return f"[pytest]\npythonpath = {pythonpath}\nimpacted_module = {package_dir}\nimpacted_tests_dir = suite\n"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 SUBPACKAGE = {

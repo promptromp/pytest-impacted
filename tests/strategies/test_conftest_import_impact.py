@@ -20,6 +20,8 @@ from pytest_impacted.strategies import (
 )
 from pytest_impacted.traversal import resolve_files_to_modules
 
+from ..git_helpers import write_files
+
 
 FIXTURE = "import pytest\nfrom app.helpers import make\n\n@pytest.fixture\ndef db():\n    return make()\n"
 APP = {
@@ -37,9 +39,7 @@ SUITE = {
 
 
 def make(root: Path, files: dict[str, str]) -> Path:
-    for rel, content in files.items():
-        (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        (root / rel).write_text(content)
+    write_files(root, files)
     return root
 
 

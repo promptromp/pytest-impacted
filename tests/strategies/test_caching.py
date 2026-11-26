@@ -9,14 +9,6 @@ from pytest_impacted.traversal import _discover_submodules, canonical_root, disc
 class TestCaching:
     """Test the caching functionality."""
 
-    def setup_method(self):
-        """Clear cache before each test."""
-        clear_dep_tree_cache()
-
-    def teardown_method(self):
-        """Clear cache after each test."""
-        clear_dep_tree_cache()
-
     @patch("pytest_impacted.strategies.build_dep_tree")
     def test_cache_avoids_duplicate_calls(self, mock_build_tree):
         """Test that the cache avoids duplicate calls to build_dep_tree."""

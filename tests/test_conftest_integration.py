@@ -9,7 +9,7 @@ app would otherwise select almost every test on almost every change.
 
 import pytest
 
-from .git_helpers import assert_selected, edit_file as edit
+from .git_helpers import INI, assert_selected, edit_file as edit, run
 
 
 APP = {
@@ -24,7 +24,6 @@ TESTS = {
 }
 # Not "tests": pytester runs in-process and shares sys.modules with this repo's own
 # ``tests`` package, so ``tests.db`` could never be imported by the project under test.
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 HELPER = "from app.db import connect\n\ndef make():\n    return connect()\n"
 HELPER_FIXTURE = "import pytest\nfrom suite.db.helpers import make\n\n@pytest.fixture\ndef db():\n    return make()\n"
 
@@ -33,10 +32,6 @@ HELPER_FIXTURE = "import pytest\nfrom suite.db.helpers import make\n\n@pytest.fi
 def make_project(make_git_project):
     """The shared factory, defaulting to this module's ini."""
     return lambda files, ini=INI: make_git_project(files, ini)
-
-
-def run(pytester, *args):
-    return pytester.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 # Every way of turning the opt-in rule on: (extra ini lines, extra command-line args).

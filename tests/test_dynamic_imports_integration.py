@@ -12,18 +12,10 @@ import pytest
 
 from pytest_impacted import _rust, api, graph
 
-from .git_helpers import assert_selected, edit_file, write_files
+from .git_helpers import INI, assert_selected, edit_file, run, write_files
 
 
-@pytest.fixture(autouse=True, params=["rust", "python"])
-def backend(request, monkeypatch):
-    """Every test here runs with each backend finding the imports by name: the Rust extension, then the stdlib
-    ``ast`` pass, which an older extension also leaves it to."""
-    if request.param == "python":
-        monkeypatch.setattr(_rust, "RUST_PARSES_DYNAMIC_IMPORTS", False)
-    elif not _rust.RUST_PARSES_DYNAMIC_IMPORTS:
-        pytest.skip("pytest-impacted-rs is not installed, or predates finding imports by name")
-    return request.param
+pytestmark = pytest.mark.usefixtures("by_name_backend")  # every test, with each backend
 
 
 def build(tmp_path, files):
@@ -39,9 +31,9 @@ def imports_of(dep_tree, module):
 TARGET = "VALUE = 1\nTABLE = {}\n\nclass Model:\n    def save(self):\n        pass\n"
 
 
-def test_the_backend_finds_the_imports_by_name(tmp_path, monkeypatch, backend):
+def test_the_backend_finds_the_imports_by_name(tmp_path, monkeypatch, by_name_backend):
     """Not vacuous: the backend each test here is parametrized with is the one that reads the files."""
-    where = (_rust, "rust_parse_all_dynamic_imports") if backend == "rust" else (graph, "parse_dynamic_imports")
+    where = (_rust, "rust_parse_all_dynamic_imports") if by_name_backend == "rust" else (graph, "parse_dynamic_imports")
     real, calls = getattr(*where), []
     monkeypatch.setattr(*where, lambda *args: calls.append(args) or real(*args))
 
@@ -311,12 +303,7 @@ def test_a_nested_path_selects_as_the_import_statement_does(tmp_path, selection,
 
 
 # Real runs: the dependency an import by name records is one the test has.
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 CONSUMER = "from app.loader import load\n\ndef test_value():\n    assert load() == 1\n"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "--impacted-git-mode=unstaged", "-v", "-p", "no:cacheprovider", *args)
 
 
 @pytest.fixture

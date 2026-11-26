@@ -16,7 +16,7 @@ from pytest_impacted.cli import impacted_tests_cli
 from pytest_impacted.extensions import ConfigOption, clear_extension_cache
 from pytest_impacted.strategies import ImpactStrategy
 
-from .git_helpers import edit_file, write_files
+from .git_helpers import INI, edit_file, write_files
 
 
 FILES = {
@@ -24,7 +24,6 @@ FILES = {
     "app/a.py": "def a():\n    return 1\n",
     "suite/test_a.py": "from app.a import a\n\ndef test_a():\n    assert a() == 1\n",
 }
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 
 
 def _git_version() -> tuple[int, ...]:

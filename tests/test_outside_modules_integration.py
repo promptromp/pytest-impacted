@@ -8,10 +8,9 @@ nothing.
 
 import pytest
 
-from .git_helpers import assert_selected, edit_file
+from .git_helpers import INI, assert_selected, edit_file, run
 
 
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 FACTORY = "def make():\n    return 1\n"
 DB_FIXTURE = "import pytest\nfrom testing.factories import make\n\n@pytest.fixture\ndef db():\n    return make()\n"
 USES_FACTORY = "from testing.factories import make\n\ndef test_other():\n    assert make()\n"
@@ -21,10 +20,6 @@ TESTS = {
     "suite/db/test_db.py": "def test_db(db):\n    assert db\n",
     "suite/other/test_other.py": "def test_other():\n    assert True\n",
 }
-
-
-def run(pytester, *args):
-    return pytester.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 @pytest.mark.parametrize(
