@@ -140,7 +140,7 @@ class WithFallback:
 
     def __init__(self, first: Backend, rest: Backend):
         self.first, self.rest = first, rest
-        self.name = first.name
+        self.name = getattr(first, "name", type(first).__name__)  # a caller's backend need not name itself
 
     def imports(self, sources: Sequence[Source], *, find_type_only: bool) -> list[Split | None]:
         found = self.first.imports(sources, find_type_only=find_type_only)
@@ -178,4 +178,6 @@ def resolve_backend(backend: "str | Backend | None", ignore_type_checking_import
     :func:`backend_for`, or a backend of the caller's, with Python behind it, so a file it leaves out is still read."""
     if backend is None or isinstance(backend, str):
         return backend_for(ignore_type_checking_imports, backend or "auto")
+    if isinstance(backend, PythonBackend) or (isinstance(backend, WithFallback) and backend.rest is PYTHON):
+        return backend  # Python reads every file already
     return WithFallback(backend, PYTHON)

@@ -203,13 +203,32 @@ def test_an_empty_backend_setting_is_the_default(make_git_project):
     assert_selected(run(project), passed=["test_a.py"], deselected=["test_b.py"])
 
 
-def test_asking_for_python_says_nothing_of_an_outdated_extension(pytestconfig, monkeypatch):
+@pytest.mark.parametrize(("requested", "warned"), [("auto", True), ("python", False)])
+def test_asking_for_python_says_nothing_of_an_outdated_extension(pytester, monkeypatch, requested, warned):
     """The extension is not used then: there is nothing to upgrade."""
     from pytest_impacted.plugin import _header_warnings  # noqa: PLC0415
 
     monkeypatch.setattr(_rust, "outdated_for", lambda ignore: "the installed pytest-impacted-rs is old")
-    monkeypatch.setattr(pytestconfig.option, "impacted", True)
-    monkeypatch.setattr(pytestconfig.option, "impacted_map", [])
-    for requested, warned in (("auto", True), ("python", False)):
-        monkeypatch.setattr(pytestconfig.option, "impacted_backend", requested)
-        assert any("is old" in line for line in _header_warnings(pytestconfig)) is warned
+    pytester.makeini("[pytest]\nimpacted_module = app\n")
+    config = pytester.parseconfig("--impacted", f"--impacted-backend={requested}")
+
+    assert any("is old" in line for line in _header_warnings(config)) is warned
+
+
+def test_an_empty_choice_setting_is_its_default_in_the_header_too(pytester):
+    """The header names what the run uses: ``impacted_backend =`` reads ``auto``, not an empty value."""
+    from pytest_impacted.plugin import pytest_report_header  # noqa: PLC0415
+
+    pytester.makeini("[pytest]\nimpacted_module = app\nimpacted_backend =\nimpacted_git_mode =\n")
+    header = pytest_report_header(pytester.parseconfig("--impacted"))[0]
+
+    assert "impacted_backend=auto" in header and "impacted_git_mode=unstaged" in header
+
+
+def test_a_backend_of_the_caller_s_need_not_name_itself():
+    class Nameless:
+        imports = Recording.imports
+        imports_by_name = Recording.imports_by_name
+
+    assert WithFallback(Nameless(), PYTHON).name == "Nameless"
+    assert backends.resolve_backend(PYTHON) is PYTHON

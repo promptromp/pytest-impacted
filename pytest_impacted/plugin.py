@@ -542,10 +542,16 @@ def get_option_from_config(config: Config, name: str) -> str | None:
     """Get an option from the config.
 
     If the option is not set via command line, return the default value
-    from the ini configuration file (e.g. pytest.ini, pyproject.toml) if present.
-
+    from the ini configuration file (e.g. pytest.ini, pyproject.toml) if present. A choice setting left empty
+    there (``impacted_backend =``) is its default, as the ``impacted-tests`` CLI reads it.
     """
-    return config.getoption(name) or config.getini(name)
+    value = config.getoption(name) or config.getini(name)
+    if value == "" and (choice := _CHOICE_OPTIONS.get(name)):
+        return choice.default
+    return value
+
+
+_CHOICE_OPTIONS = {option.setting: option for option in OPTIONS if option.kind is Kind.CHOICE}
 
 
 def validate_config(config: Config):
@@ -559,8 +565,7 @@ def validate_config(config: Config):
     if not get_option("impacted_git_mode"):
         raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
     for option in OPTIONS:  # ``choices`` guards the command line only; a setting would reach the analysis and crash it
-        value = get_option(option.setting)
-        if option.kind is Kind.CHOICE and value not in ("", None) and value not in option.choices:  # empty: default
+        if option.kind is Kind.CHOICE and (value := get_option(option.setting)) not in option.choices:
             choices = ", ".join(f"'{choice}'" for choice in option.choices)
             raise UsageError(f"Invalid {option.setting} value {value!r}: expected one of {choices}.")
 
