@@ -808,26 +808,27 @@ def _imports_by_name(linker: _Linker, name: str, path: str) -> list[str]:
 
     A module named is ``import pkg.mod``. An object's path is ``from pkg.mod import Class`` for
     ``patch("pkg.mod.Class.method")``, its module being the longest prefix naming a module in the project, as
-    ``pkgutil.resolve_name`` imports the longest one it can. When no prefix names one, as for ``os.environ`` or
-    a module deleted since, the module is the path's parent.
+    ``pkgutil.resolve_name`` imports the longest one it can (see :func:`_import_of`).
     """
     found = parse_dynamic_imports(path, import_base(name), os.path.basename(path) == "__init__.py")
     return [
         *found.modules,
-        *(candidate for found_path in found.objects for candidate in _import_of(linker, path, found_path)),
+        *(candidate for found_path in found.objects for candidate in _import_of(linker, found_path)),
     ]
 
 
-def _import_of(linker: _Linker, importer_path: str, object_path: str) -> list[str]:
-    """``from <module> import <next part>`` for *object_path*, imported by the module at *importer_path*."""
+def _import_of(linker: _Linker, object_path: str) -> list[str]:
+    """The candidates of *object_path*: its longest prefix naming a module in the project, and every longer one.
+
+    The longer ones name no module, so they link nothing, but they keep its name in ``graph["unresolved"]``
+    for a module deleted since. Which part of ``helpers.Factory.make`` was the deleted module, only the import
+    statement could tell. A path that no module of the project starts, such as ``os.environ``, keeps all its
+    prefixes, its first part included: like every candidate, that one is looked up beside the importer too
+    (pytest's basedirs: ``helpers.func`` beside a test).
+    """
     parts = object_path.split(".")
-    for end in range(len(parts), 0, -1):
-        module = ".".join(parts[:end])
-        if linker.targets(module) or (
-            linker.looks_locally(importer_path, module) and linker.local_targets(importer_path, module)
-        ):
-            return [module] if end == len(parts) else [module, f"{module}.{parts[end]}"]
-    return [".".join(parts[:-1]), object_path]
+    end = next((end for end in range(len(parts), 1, -1) if linker.targets(".".join(parts[:end]))), 1)
+    return [".".join(parts[:longer]) for longer in range(end, len(parts) + 1)]
 
 
 def _parse_by_role(

@@ -126,11 +126,6 @@ def test_an_object_path_named_to_a_loader_is_imported(parse, source):
     assert parse(source) == DynamicImports([], ["app.target.VALUE"])
 
 
-def test_an_object_path_of_one_part_is_a_module(parse):
-    """``resolve_name("app")`` imports ``app``: with no dot, nothing in it can be an attribute."""
-    assert parse("import pkgutil\npkgutil.resolve_name('app')") == DynamicImports(["app"], [])
-
-
 def test_every_call_counts_once(parse):
     source = (
         "import importlib\nfrom unittest.mock import patch\n"
@@ -181,6 +176,14 @@ def test_every_call_counts_once(parse):
         "def import_module(name):\n    pass\nimport_module('app.target')",  # not importlib's
         "from loaders import import_module\nimport_module('app.target')",
         "import pytest\npytest.param('app.target')",
+        # an object path of one part names nothing in a module: another API's method of the same name
+        "def configure(config):\n    config.setattr('settings', 1)",
+        "def routes(client):\n    client.patch('health')",
+        "import pkgutil\npkgutil.resolve_name('app')",
+        # a loader whose origin is not followed: re-exported by another module, star-imported, assigned
+        "from .compat import import_module\nimport_module('app.target')",
+        "from importlib import *\nimport_module('app.target')",
+        "import importlib\nload = importlib.import_module\nload('app.target')",
         # a loader's name outside a call
         "'''Patch it with patch(\"app.target.VALUE\").'''",
         "# importlib.import_module('app.target')\n",

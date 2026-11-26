@@ -49,7 +49,8 @@ name, as type checkers do, or as the attribute of a module-level `import`.
 and AST parsing. Importing a module to inspect it would execute module-level code —
 monkey patching, DB connections, app factories. If you find yourself reaching for
 `importlib`, you are solving the problem the wrong way — `importlib.util.find_spec`
-in particular, which imports every parent package to answer.
+in particular, which imports every parent package to answer. (`importlib.util.resolve_name`, which only
+manipulates strings, is the one exception: `dynamic_imports` resolves a relative `import_module` name with it.)
 
 **`parsing.py` imports node classes from `astroid.nodes`**, not `astroid` — required
 since astroid v4.
@@ -377,18 +378,23 @@ over-emission is the design, not a bug.
 - the mock patchers: `patch`, `patch.dict` and `patch.multiple`, `mocker`'s too
 - pytest's: `importorskip`, and `monkeypatch.setattr`/`delattr` with a string target
 
-The table is data, read by one mechanism. A `Loader.callee` matches the end of the call's name after resolving import
-aliases (unioned over scopes). A bare `patch` therefore matches any receiver (fixtures, `with monkeypatch.context()
-as m`), while `importlib.import_module` needs that function. Add an API as a row, never as a branch. The maintainer
+The table is data, read by one mechanism. A `Loader.callee` matches the end of the call's name after resolving
+absolute-import aliases (unioned over scopes); a re-export, star import or assignment is not followed. A bare
+`patch` therefore matches any receiver (fixtures, `with monkeypatch.context() as m`), while
+`importlib.import_module` needs that function. So an object path needs a dot: `config.setattr("settings", v)`
+is another API's call, and as a plain edge it could make a test helper application code. Add an API as a row,
+never as a branch. The maintainer
 chose this curated table over a broad rule ("any string spelling a project module"), which measured +13% tests on
 pydantic, about 99% of it noise. Like `parse_pytest_plugins`, it is parsed with stdlib `ast` outside the backends,
 behind a word pre-filter: a file calling a loader spells its name, at the call or at the import.
 
-In the graph (`_imports_by_name`), a module name reads as `import pkg.mod`. An object path reads as
-`from M import next_part`, where M is its longest prefix that `linker.targets`/`local_targets` resolve, as
-`pkgutil.resolve_name` imports the longest it can, else its parent. Placement, `graph["unresolved"]` (deleted
-targets) and basedir edges then behave exactly as for the static statement.
-`test_an_import_by_name_selects_as_the_import_statement_does` pins that for every form, place and change.
+In the graph (`_imports_by_name`), a module name reads as `import pkg.mod`. An object path's candidates are its
+longest prefix that `linker.targets`/`local_targets` resolve (as `pkgutil.resolve_name` imports the longest it
+can), else its first part, plus every longer prefix. The longer ones link nothing, but they keep a deleted
+module's name in `graph["unresolved"]`, whichever part of `helpers.Factory.make` it was. Placement, deleted
+targets and basedir edges then behave exactly as for the static statement.
+`test_an_import_by_name_selects_as_the_import_statement_does` pins that for every form, place and change, and
+`test_a_nested_path_selects_as_the_import_statement_does` pins it for every layout.
 They are added after `linker.activate`: only static imports are evidence of an assumed root. Only literals count;
 a computed name is no import.
 

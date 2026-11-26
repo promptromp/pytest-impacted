@@ -41,7 +41,9 @@ class Loader:
     """An API that imports what one of its string arguments names.
 
     *callee* is matched against the end of the name a call calls, after resolving the module's import aliases.
-    ``importlib.import_module`` matches that function under any alias. A bare ``patch`` matches ``mock.patch``,
+    ``importlib.import_module`` matches that function under any name an absolute import gives it, but not one
+    re-exported by another module, star-imported or assigned, whose origin is not followed. A bare ``patch``
+    matches ``mock.patch``,
     ``unittest.mock.patch`` and ``mocker.patch`` alike: fixtures and context managers hand a patcher out under
     any name. *package* anchors a relative name. *fromlist* names submodules imported too. *level* makes the
     import relative to its caller's package unless it is 0, and a relative one is not followed.
@@ -205,13 +207,17 @@ def _named(call: ast.Call, loader: Loader, module_name: str, is_package: bool) -
 
 
 def _object(text: str) -> Iterator[tuple[Names, str]]:
-    """What an object path names: its module, after a ``:``; else the path, a module if it has one part."""
+    """What an object path names: its module, before a ``:``; else the path itself.
+
+    A path of one part names nothing inside a module. The patchers and ``monkeypatch`` take no such target, and
+    their rows match any receiver, so ``config.setattr("settings", value)`` is some other API's call.
+    """
     module, colon, attributes = text.partition(":")
     if colon:
         if _dotted(module) and (not attributes or _dotted(attributes)):
             yield Names.MODULE, module
-    elif _dotted(text):
-        yield (Names.OBJECT if "." in text else Names.MODULE), text
+    elif _dotted(text) and "." in text:
+        yield Names.OBJECT, text
 
 
 def _absolute(name: str, anchor: str | None) -> str | None:

@@ -111,6 +111,29 @@ def test_an_object_path_s_module_may_be_one_beside_the_test(tmp_path):
     assert dep_tree.edges["suite.helpers", "suite.test_patching"] == {"basedir": True}
 
 
+def test_an_object_path_s_module_outside_the_walks_is_its_longest_prefix(tmp_path):
+    """``shared.factories`` is found on disk under ``tests/``, where the tests dir's names are rooted, though no
+    walk names it. The path's module is it, not the ``shared`` package above, whose ``__init__`` imports whatever
+    it re-exports."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "tests/conftest.py": "",
+            "tests/shared/__init__.py": "from shared.factories import Factory\n",
+            "tests/shared/factories.py": "class Factory:\n    def make(self):\n        pass\n",
+            "tests/unit/test_patching.py": (
+                "from unittest import mock\n\n@mock.patch('shared.factories.Factory.make')\ndef test_it(m):\n    pass\n"
+            ),
+        },
+    )
+    dep_tree = graph.build_dep_tree("app", tests_package="tests/unit", root_dir=tmp_path)
+    files = {node: Path(path).relative_to(tmp_path).as_posix() for node, path in dep_tree.nodes(data="path")}
+    (test,) = (node for node, file in files.items() if file == "tests/unit/test_patching.py")
+
+    assert {files[node] for node in imports_of(dep_tree, test)} == {"tests/shared/factories.py"}
+
+
 def test_a_module_found_on_disk_joins_the_graph(tmp_path):
     """A module no walk finds is looked up under the import roots, as for an import statement."""
     files = {
@@ -158,25 +181,31 @@ FORMS = {
     ),
 }
 PLACES = {"application code": "app/loader.py", "a test": "suite/test_consumer.py", "a conftest": "suite/conftest.py"}
+OTHER = {"suite/test_other.py": "def test_other():\n    pass\n"}  # an unrelated test, never selected
 PROJECT = {
     "app/__init__.py": "",
     "app/target.py": TARGET,
     "app/loader.py": "",
     "suite/conftest.py": "",
     "suite/test_consumer.py": "import app.loader\n\ndef test_consumer():\n    pass\n",
-    "suite/test_other.py": "def test_other():\n    pass\n",
+    **OTHER,
 }
 
 
-def selection(root, statement, place, change, conftest_imports, monkeypatch):
-    """The test files ``get_impacted_tests`` selects for *change* to ``app/target.py`` ("edit" or "delete")."""
-    files = {**PROJECT, PLACES[place]: PROJECT[PLACES[place]] + statement + "\n"}
-    write_files(root, files)
-    if change == "delete":
-        (root / "app/target.py").unlink()
-    monkeypatch.setattr(api, "find_impacted_files_in_repo", lambda *args, **kwargs: ["app/target.py"])
-    found = api.get_impacted_tests("unstaged", "main", root, "app", "suite", conftest_imports=conftest_imports)
-    return sorted(Path(os.path.relpath(path, root)).as_posix() for path in found or ())
+@pytest.fixture
+def selection(monkeypatch):
+    """Factory: the test files ``get_impacted_tests`` selects in a project of *files* for *change* ("edit" or
+    "delete") to *changed*. No git: the change is handed to the pipeline as git would report it."""
+
+    def select(root, files, changed, change, conftest_imports=False):
+        write_files(root, files)
+        if change == "delete":
+            (root / changed).unlink()
+        monkeypatch.setattr(api, "find_impacted_files_in_repo", lambda *args, **kwargs: [changed])
+        found = api.get_impacted_tests("unstaged", "main", root, "app", "suite", conftest_imports=conftest_imports)
+        return sorted(Path(os.path.relpath(path, root)).as_posix() for path in found or ())
+
+    return select
 
 
 @pytest.mark.parametrize("form", FORMS)
@@ -184,16 +213,54 @@ def selection(root, statement, place, change, conftest_imports, monkeypatch):
 @pytest.mark.parametrize("change", ["edit", "delete"])
 @pytest.mark.parametrize("conftest_imports", [False, True], ids=["", "conftest-imports"])
 def test_an_import_by_name_selects_as_the_import_statement_does(
-    tmp_path, monkeypatch, form, place, change, conftest_imports
+    tmp_path, selection, form, place, change, conftest_imports
 ):
+    def written_with(statement):
+        return {**PROJECT, PLACES[place]: PROJECT[PLACES[place]] + statement + "\n"}
+
     dynamic, static = FORMS[form]
 
-    by_name = selection(tmp_path / "by_name", dynamic, place, change, conftest_imports, monkeypatch)
-    by_statement = selection(tmp_path / "by_statement", static, place, change, conftest_imports, monkeypatch)
+    by_name = selection(tmp_path / "by_name", written_with(dynamic), "app/target.py", change, conftest_imports)
+    by_statement = selection(tmp_path / "by_statement", written_with(static), "app/target.py", change, conftest_imports)
 
     assert by_name == by_statement
     if place != "a conftest":
         assert "suite/test_consumer.py" in by_name  # not vacuous: the import selects its importer's test
+
+
+LAYOUTS = {  # where the patched module lives, and the name the test imports it by
+    "a regular package": ("app/target.py", "app.target"),
+    "a namespace package": ("app/ns/target.py", "app.ns.target"),
+    "beside the tests": ("suite/target.py", "target"),
+}
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize("change", ["edit", "delete"])
+def test_a_nested_path_selects_as_the_import_statement_does(tmp_path, selection, layout, change):
+    """``patch("target.Model.save")``: which part is the module, only the import statement can tell. A deleted
+    one is no prefix the project resolves, yet must still reach the test, as ``from target import Model`` does."""
+    changed, module = LAYOUTS[layout]
+
+    def written_with(test):
+        return {"app/__init__.py": "", changed: TARGET, "suite/test_consumer.py": test, **OTHER}
+
+    by_name = selection(
+        tmp_path / "by_name",
+        written_with(
+            f"from unittest import mock\n\n@mock.patch('{module}.Model.save')\ndef test_consumer(m):\n    pass\n"
+        ),
+        changed,
+        change,
+    )
+    by_statement = selection(
+        tmp_path / "by_statement",
+        written_with(f"from {module} import Model\n\ndef test_consumer():\n    pass\n"),
+        changed,
+        change,
+    )
+
+    assert by_name == by_statement == ["suite/test_consumer.py"]
 
 
 # Real runs: the dependency an import by name records is one the test has.
@@ -215,7 +282,7 @@ def loader_project(make_git_project):
             "app/target.py": "VALUE = 1\n",
             "app/loader.py": loader,
             "suite/test_consumer.py": CONSUMER,
-            "suite/test_other.py": "def test_other():\n    pass\n",
+            **OTHER,
         }
         return make_git_project(files, INI)
 
@@ -309,7 +376,7 @@ def test_a_test_patching_a_module_runs_when_it_changes(make_git_project, patchin
                 "    return 2 * importlib.import_module('app.' + 'prices').Price.amount\n"
             ),
             "suite/test_total.py": PATCHING_TESTS[patching],
-            "suite/test_other.py": "def test_other():\n    pass\n",
+            **OTHER,
         },
         INI,
     )
