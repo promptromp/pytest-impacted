@@ -173,9 +173,11 @@ def test_validate_config_branch_mode_missing_base(pytestconfig, monkeypatch):
 
 @pytest.fixture
 def project_dirs(tmp_path):
-    """A rootdir holding a package ``my_package/`` and a ``tests/`` directory."""
-    (tmp_path / "my_package").mkdir()
-    (tmp_path / "tests").mkdir()
+    """A rootdir holding a package ``my_package/``, a ``tests/`` package and a plain ``scripts/`` directory."""
+    for package in ("my_package", "tests"):
+        (tmp_path / package).mkdir()
+        (tmp_path / package / "__init__.py").touch()
+    (tmp_path / "scripts").mkdir()
     return tmp_path
 
 
@@ -191,21 +193,21 @@ def project_dirs(tmp_path):
 def test_module_problem(project_dirs, module, problem):
     found = validation.module_problem(module, project_dirs, "--impacted-module")
 
-    assert found is None if problem is None else problem in found
+    assert found is None if problem is None else (found is not None and problem in found), found
 
 
 @pytest.mark.parametrize(
     ("tests_dir", "problem"),
     [
-        pytest.param("tests", None, id="a directory"),
-        pytest.param("my_package", None, id="one without __init__.py"),
+        pytest.param("tests", None, id="a package"),
+        pytest.param("scripts", None, id="a directory without __init__.py"),
         pytest.param("nonexistent_dir", "Tests directory 'nonexistent_dir' does not exist", id="no such directory"),
     ],
 )
 def test_tests_dir_problem(project_dirs, tests_dir, problem):
     found = validation.tests_dir_problem(tests_dir, project_dirs, "--impacted-tests-dir")
 
-    assert found is None if problem is None else problem in found
+    assert found is None if problem is None else (found is not None and problem in found), found
 
 
 def test_the_plugin_raises_each_problem_as_a_usage_error(project_dirs):

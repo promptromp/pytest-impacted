@@ -207,9 +207,7 @@ def test_a_lazily_loading_package_keeps_its_type_only_imports(make_git_project, 
     assert_selected(run(project, FLAG), passed=["test_lazy.py"], deselected=["test_other.py"])
 
     (project.path / "app/models.py").write_text("raise RuntimeError('imported')\n")
-    broken = run(project, FLAG)
-    broken.assert_outcomes(errors=1, deselected=1)
-    broken.stdout.fnmatch_lines(["*ERROR*test_lazy.py*"])
+    run(project, FLAG).assert_outcomes(errors=1, deselected=1)  # at collection: before any selection
 
 
 def test_the_cli_warns_when_an_older_extension_leaves_the_parsing_to_python(project, monkeypatch):

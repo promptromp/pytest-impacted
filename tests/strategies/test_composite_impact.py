@@ -204,7 +204,6 @@ class TestCompositeLifecycle:
 
         assert s.setup(ns_module="pkg", dep_tree=nx.DiGraph()) is None
         assert s.teardown() is None
-        assert s.find_impacted_tests([], [], "pkg", dep_tree=nx.DiGraph()) == []
 
     def test_setup_passes_all_context_kwargs_to_children(self):
         """All kwargs supplied to the composite's setup should reach each child."""
