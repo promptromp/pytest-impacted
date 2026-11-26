@@ -493,7 +493,9 @@ The extension is a separate distribution and the `fast` extra is unpinned (a dev
 function's signature — add a function (`parse_all_imports_split`), import it in `_rust.py` behind
 `ImportError` like the extension itself (`RUST_SPLITS_TYPE_ONLY`), and let `uses_rust` leave the
 parsing to Python when the extension cannot honour the options; the header and the CLI warn
-(`outdated_for`) — never a TypeError, never an option dropped unseen.
+(`outdated_for`) — never a TypeError, never an option dropped unseen. Call the new function in
+`.github/scripts/smoke_rust_wheel.py` too: each wheel a runner can load runs it before anything is published, and a
+function missing from a wheel would otherwise only shrink the Rust path, silently.
 
 **Logging: every module that logs declares `logger = logging.getLogger(__name__)`.**
 Never call `logging.info(...)` and friends — those hit the root logger and are
@@ -620,12 +622,13 @@ configuration through the working directory: run it from `tmp_path`, as `in_tmp_
 
 ## Documentation
 
-Four surfaces, different audiences — keep them in sync in the same PR as the change:
+Five surfaces, different audiences — keep them in sync in the same PR as the change:
 
 - `README.md` — concise overview for GitHub/PyPI (also the MkDocs home page)
 - `docs/usage.md` — reference for people *running* pytest-impacted
 - `docs/extensions.md` — reference for people *building strategies*; keep
   extension-author content here and do not let it leak back into `usage.md`
+- `rust/README.md` — pytest-impacted-rs's PyPI page: what the extension is, how to install it, its speed figure
 - `CLAUDE.md` — this file
 
 ## Commands
