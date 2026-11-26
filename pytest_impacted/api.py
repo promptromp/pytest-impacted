@@ -25,6 +25,7 @@ from pytest_impacted.graph import (
     reached_from,
     resolve_files_to_nodes,
 )
+from pytest_impacted.graph_keys import Node
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
@@ -127,14 +128,16 @@ def _test_files(
     extension added with its ``path`` — would otherwise be dropped. A name that is no node
     may be another spelling of one (:func:`~pytest_impacted.graph.nodes_named`).
     """
-    paths = [dep_tree.nodes[module].get("path") if module in dep_tree else None for module in modules]
+    paths = [dep_tree.nodes[module].get(Node.PATH) if module in dep_tree else None for module in modules]
     unplaced = [module for module, path in zip(modules, paths, strict=True) if not path]
     if not unplaced:
         return [path for path in paths if path]
     # Another spelling of a node first: ``app.tests.test_x`` for ``src.app.tests.test_x``.
     named = nodes_named_each((module for module in unplaced if module not in dep_tree), dep_tree)
     files = {
-        module: [path for node in sorted(named[module], key=str) if _is_file(path := dep_tree.nodes[node].get("path"))]
+        module: [
+            path for node in sorted(named[module], key=str) if _is_file(path := dep_tree.nodes[node].get(Node.PATH))
+        ]
         for module in named
     }
     found = [path for module in named for path in files[module]]
@@ -265,7 +268,7 @@ def get_impacted_tests(
     # linked to whatever still imports it (a changed __init__.py, to importers of missing names in it).
     # Named now, from the run's own paths (all inside the rootdir): an extension may move them.
     linked = {
-        node: Path(dep_tree.nodes[node]["path"]).relative_to(canonical_root(root_dir)).as_posix()
+        node: Path(dep_tree.nodes[node][Node.PATH]).relative_to(canonical_root(root_dir)).as_posix()
         for node in link_changed_files(impacted_files, dep_tree, root_dir=root_dir)
     }
 

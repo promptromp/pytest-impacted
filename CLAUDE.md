@@ -43,6 +43,12 @@ module-level code (monkey patching, DB connections, app factories). Reaching for
 `importlib.util.find_spec` imports every parent package. The one exception is `importlib.util.resolve_name`
 (strings only), with which `dynamic_imports` resolves a relative `import_module` name.
 
+**The graph's keys are `graph_keys.py`'s** (`Node`, `Edge`, `Graph`): each node, edge and graph attribute is declared
+there with what it holds; never a new string key outside it (`test_graph_keys` fails on an undeclared one).
+`REACH_ONLY` maps each edge flag that only reaches to the graph flag set when an edge carries it; `only_reaches` and
+`may_hold_reach_only_edges` read it. Plain `str` constants: the graph stores what it always did (no enum objects in
+a pickled or dumped graph).
+
 **The pure-Python backend is the standard library's `ast`**, not astroid (6–7x slower; its pin blocked pylint <
 4.1). Every walk over statements, the type-only walk included, is iterative (`parsing._import_statements`, as
 `collect_imports_from_stmts`): only the parse can give up (near 3,000 nested terms on 3.11, 10,000 on 3.12–3.13),
