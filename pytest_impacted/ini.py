@@ -11,6 +11,7 @@ version gate follows them. ``tests/test_ini.py`` holds it to pytest's own answer
 import os
 import shlex
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -89,6 +90,27 @@ class PytestConfig:
         if value is not None and self.native and not isinstance(value, native_type):
             raise ValueError(f"{name} in {self.path}: expected a {native_type.__name__}, got {value!r}")
         return value
+
+
+def dash_p_plugins(config: PytestConfig, environ: Mapping[str, str] = os.environ) -> list[str]:
+    """The ``-p`` arguments pytest reads before a command line: ``addopts``, then ``PYTEST_ADDOPTS``.
+
+    Spelled ``-p name`` or ``-pname``, as pytest's ``consider_preparse`` reads them when it loads plugins; a
+    ``no:name`` entry is kept (it disables a plugin, for the caller to leave out). Raises ValueError for an
+    ``addopts`` of the wrong type, naming it and the file.
+    """
+    args = [*(config.args("addopts") or []), *shlex.split(environ.get("PYTEST_ADDOPTS", ""))]
+    plugins, following = [], iter(args)
+    for arg in following:
+        if arg == "-p":
+            if (name := next(following, None)) is None:
+                break
+        elif arg.startswith("-p"):
+            name = arg[2:]
+        else:
+            continue
+        plugins.append(name.strip())
+    return plugins
 
 
 def find_pytest_config(start: Path) -> PytestConfig:

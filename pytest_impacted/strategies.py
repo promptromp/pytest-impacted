@@ -398,23 +398,28 @@ def _every_test(dep_tree: nx.DiGraph, reason: str, session: Any) -> list[str]:
     return all_test_modules
 
 
-def _session_wide_changes(reached: set[str], dep_tree: nx.DiGraph, session: Any) -> list[str]:
+def _session_wide_changes(
+    reached: set[str], dep_tree: nx.DiGraph, session: Any, plugins: Iterable[str] = ()
+) -> list[str]:
     """Reached modules that pytest loads as plugins, whose fixtures and hooks reach every test.
 
     - a ``pytest_plugins`` target (flagged in the graph) — reached when it, or anything it imports, changed
-    - a plugin loaded with ``-p`` (command line or ``addopts``) or ``PYTEST_PLUGINS``
+    - a plugin loaded with ``-p`` (command line or ``addopts``: the session's options, or *plugins* without one)
+      or ``PYTEST_PLUGINS``
     """
-    session_plugins = nodes_named(_session_plugins(session), dep_tree)
+    session_plugins = nodes_named(_session_plugins(session, plugins), dep_tree)
     plugins = {node for node in reached if dep_tree.nodes[node].get(Node.PYTEST_PLUGIN)} | (session_plugins & reached)
     return sorted(plugins, key=str)  # an extension may add nodes that are not strings
 
 
-def _session_plugins(session: Any) -> set[str]:
-    """Modules loaded with ``-p`` or ``PYTEST_PLUGINS``; ``-p no:name`` disables one and loads nothing."""
+def _session_plugins(session: Any, plugins: Iterable[str] = ()) -> set[str]:
+    """Modules loaded with ``-p`` (the session's options, and *plugins*) or ``PYTEST_PLUGINS``; ``-p no:name``
+    disables one and loads nothing."""
     names = getattr(getattr(getattr(session, "config", None), "option", None), "plugins", None)
     from_options = [name for name in names if isinstance(name, str)] if isinstance(names, list) else []
     from_env = os.environ.get("PYTEST_PLUGINS", "").split(",")
-    return {name.strip() for name in [*from_options, *from_env] if name.strip() and not name.startswith("no:")}
+    every = [*from_options, *plugins, *from_env]
+    return {name.strip() for name in every if name.strip() and not name.strip().startswith("no:")}
 
 
 class ImpactStrategy(ABC):
@@ -596,7 +601,17 @@ class PytestImpactStrategy(ImpactStrategy):
     dir). A conftest importing changed *application* code is
     :class:`ConftestImportImpactStrategy`'s business. A change reaching a pytest plugin
     impacts every test.
+
+    Args:
+        plugins: The ``-p`` arguments of a run without a pytest session (the ``impacted-tests`` CLI reads
+            them from ``addopts`` and ``PYTEST_ADDOPTS``: ``ini.dash_p_plugins``); a session has its own.
     """
+
+    #: On the class too, so a subclass that never calls ``super().__init__`` has none.
+    plugins: tuple[str, ...] = ()
+
+    def __init__(self, plugins: Iterable[str] = ()):
+        self.plugins = tuple(plugins)
 
     def find_impacted_tests(
         self,
@@ -611,7 +626,7 @@ class PytestImpactStrategy(ImpactStrategy):
     ) -> list[str]:
         """Find impacted tests including pytest-specific dependencies."""
         reached = reached_from(impacted_modules, dep_tree)
-        if session_wide := _session_wide_changes(reached, dep_tree, session):
+        if session_wide := _session_wide_changes(reached, dep_tree, session, self.plugins):
             # pytest registers plugins for the whole session: their fixtures and
             # hooks are visible to every test, wherever they were declared.
             return _every_test(dep_tree, f"pytest plugin changes detected: {session_wide}", session)
@@ -865,6 +880,7 @@ def get_default_strategies(
     invalidate_all_patterns: Sequence[str] = (),
     conftest_imports: bool = False,
     config_file: Path | None = None,
+    plugins: Sequence[str] = (),
 ) -> list[ImpactStrategy]:
     """Return the default (built-in) strategy list for impact analysis.
 
@@ -883,10 +899,12 @@ def get_default_strategies(
             strategy only names such conftests.
         config_file: The pytest configuration file read without a pytest session (the
             ``impacted-tests`` CLI), which :class:`DependencyFileImpactStrategy` watches.
+        plugins: The ``-p`` arguments read without a pytest session (the CLI's, from ``addopts`` and
+            ``PYTEST_ADDOPTS``), plugins whose edits impact every test as in a session.
     """
     strategies: list[ImpactStrategy] = [
         ASTImpactStrategy(),
-        PytestImpactStrategy(),
+        PytestImpactStrategy(plugins=plugins),
         ConftestImportImpactStrategy(report_only=not conftest_imports),
     ]
     if watch_dep_files:

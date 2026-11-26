@@ -222,7 +222,8 @@ def test_a_changed_package_init_is_application_code(tmp_path):
 
 
 def test_a_subclass_need_not_call_the_base_initialiser(project):
-    """``PytestImpactStrategy`` takes no configuration, so subclasses that never call ``super().__init__`` work."""
+    """``PytestImpactStrategy``'s one setting (``plugins``) defaults on the class: a subclass that never calls
+    ``super().__init__`` works."""
 
     class Custom(PytestImpactStrategy):
         def __init__(self, extra: int = 1):

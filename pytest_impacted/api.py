@@ -58,6 +58,7 @@ def build_strategy_with_extensions(
     disabled: Sequence[str] = (),
     ext_config: dict[str, Any] | None = None,
     config_file: Path | None = None,
+    plugins: Sequence[str] = (),
     session: Any = None,
 ) -> ImpactStrategy:
     """Build a composite strategy combining built-in and extension strategies.
@@ -78,6 +79,8 @@ def build_strategy_with_extensions(
         ext_config: Configuration values for extensions.
         config_file: The pytest configuration file read without a pytest session
             (the ``impacted-tests`` CLI), whose edits impact every test.
+        plugins: The ``-p`` arguments read without a pytest session (the CLI's, from ``addopts`` and
+            ``PYTEST_ADDOPTS``): an edit reaching one impacts every test, as in a session.
         session: The pytest session, whose terminal is told of an extension skipped on loading.
 
     Returns:
@@ -88,6 +91,7 @@ def build_strategy_with_extensions(
         invalidate_all_patterns=invalidate_all_patterns,
         conftest_imports=conftest_imports,
         config_file=config_file,
+        plugins=plugins,
     )
     # To pytest's terminal; without a session (the CLI) to the log, which shows it, traceback and all.
     on_skip = (lambda message: warn(message, session)) if session is not None else None

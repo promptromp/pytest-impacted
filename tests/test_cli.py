@@ -73,6 +73,7 @@ DEFAULT_STRATEGY = {
     "disabled": (),
     "ext_config": {},
     "config_file": None,
+    "plugins": [],
 }
 
 
@@ -92,8 +93,9 @@ class Cli(NamedTuple):
 def cli(tmp_path, monkeypatch, entry_points):
     """Run from an empty directory holding ``test_ns/`` and ``tests/``, so ``--root-dir .`` (the default) lands there
     and no pytest configuration is found, and no strategy extension is installed; two impacted tests unless a test
-    sets ``cli.run``'s result."""
+    sets ``cli.run``'s result. No ``PYTEST_ADDOPTS`` either: its ``-p`` plugins are passed on."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
     (tmp_path / "test_ns").mkdir()
     (tmp_path / "tests").mkdir()
     impacted = ["tests/test_example.py", "tests/test_other.py"]

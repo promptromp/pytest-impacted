@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
+from pytest_impacted.ini import PytestConfig, dash_p_plugins, find_pytest_config, load_pytest_config
 
 
 # The tests' own version gates, not ini.py's: a gate moved there by mistake must fail a test here.
@@ -416,3 +416,31 @@ def test_a_pythonpath_item_that_is_no_string_is_an_error_as_in_pytest(pytester):
         pytester.parseconfig(pytester.path).getini("pythonpath")
     with pytest.raises(ValueError, match="pythonpath"):
         find_pytest_config(pytester.path).paths("pythonpath")
+
+
+DASH_P = [
+    pytest.param({"pytest.ini": "[pytest]\naddopts = -p no:aaa -v -pno:bbb\n"}, "", id="pytest.ini"),
+    pytest.param({"tox.ini": "[pytest]\naddopts = -p no:aaa\n"}, "-p no:ccc -pno:ddd", id="tox.ini_and_environment"),
+    pytest.param(
+        {"pyproject.toml": '[tool.pytest.ini_options]\naddopts = ["-p", "no:aaa", "-pno:bbb"]\n'}, "", id="toml_list"
+    ),
+    pytest.param({"setup.cfg": "[tool:pytest]\naddopts = -q\n"}, "-p no:ccc", id="environment_only"),
+    pytest.param({"pytest.ini": "[pytest]\n"}, "", id="none"),
+    pytest.param(
+        {"pytest.toml": '[pytest]\naddopts = ["-p", "no:aaa", "-pno:bbb"]\n'},
+        "",
+        id="native_toml",
+        marks=needs_pytest_9,
+    ),
+]
+
+
+@pytest.mark.parametrize(("files", "environment"), DASH_P)
+def test_dash_p_arguments_read_as_pytest_reads_them(pytester, monkeypatch, files, environment):
+    """``-p`` from ``addopts`` and ``PYTEST_ADDOPTS``, as pytest collects them (``no:`` names, which load nothing)."""
+    write(pytester.path, files)
+    monkeypatch.setenv("PYTEST_ADDOPTS", environment)
+
+    ours = dash_p_plugins(find_pytest_config(pytester.path), {"PYTEST_ADDOPTS": environment})
+
+    assert sorted(ours) == sorted(pytester.parseconfig(pytester.path).option.plugins)

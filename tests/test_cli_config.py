@@ -74,10 +74,12 @@ impacted_conftest_imports = 1
 impacted_ignore_type_checking_imports = true
 impacted_disable_ext = slow-ext
 impacted_backend = python
+addopts = -v -p suite.fixtures
 """
 
 
-def test_every_setting_is_read(calls, tmp_path):
+def test_every_setting_is_read(calls, tmp_path, monkeypatch):
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
     run, build = calls
     write_config(FULL)
 
@@ -104,6 +106,7 @@ def test_every_setting_is_read(calls, tmp_path):
         "disabled": ["slow-ext"],
         "ext_config": {},
         "config_file": tmp_path / "pytest.ini",
+        "plugins": ["suite.fixtures"],
     }
 
 
@@ -480,3 +483,37 @@ def test_an_option_with_no_setting_reads_none(calls, monkeypatch):
     invoke()
 
     assert seen["output"] == "out"
+
+
+PLUGIN = "import pytest\n\n\n@pytest.fixture\ndef thing():\n    return 1\n"
+ALL_TESTS = ["suite/test_a.py", "suite/test_b.py"]
+
+
+@pytest.mark.parametrize(
+    ("addopts", "environment", "selected"),
+    [
+        pytest.param("-p suite.fixtures_plugin", None, ALL_TESTS, id="addopts"),
+        pytest.param("-psuite.fixtures_plugin", None, ALL_TESTS, id="addopts_attached"),
+        pytest.param(None, "-p suite.fixtures_plugin", ALL_TESTS, id="PYTEST_ADDOPTS"),
+        pytest.param("-p no:suite.fixtures_plugin", None, [], id="disabled"),
+    ],
+)
+def test_an_edit_to_a_plugin_loaded_with_dash_p_selects_every_test(
+    make_git_project, monkeypatch, addopts, environment, selected
+):
+    """As under pytest, which loads ``-p`` plugins from ``addopts`` and ``PYTEST_ADDOPTS``: their fixtures and
+    hooks reach every test, so an edit to one selects them all; ``-p no:name`` loads nothing."""
+    if environment is None:
+        monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    else:
+        monkeypatch.setenv("PYTEST_ADDOPTS", environment)
+    ini = "[pytest]\nimpacted_module = app\nimpacted_tests_dir = suite\n" + (
+        f"addopts = {addopts}\n" if addopts else ""
+    )
+    project = make_git_project({**PROJECT, "suite/fixtures_plugin.py": PLUGIN}, ini)
+    edit_file(project, "suite/fixtures_plugin.py")
+
+    result = invoke("--root-dir", str(project.path))
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [str((project.path / test).resolve()) for test in selected]

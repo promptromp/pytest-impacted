@@ -20,7 +20,7 @@ from pytest_impacted.extensions import (
 )
 from pytest_impacted.file_map import parse_file_map
 from pytest_impacted.git import GitError, GitUnavailableError
-from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
+from pytest_impacted.ini import PytestConfig, dash_p_plugins, find_pytest_config, load_pytest_config
 from pytest_impacted.options import CLI_SETTINGS, OPTIONS, Kind
 from pytest_impacted.strategies import parse_invalidation_patterns
 from pytest_impacted.validation import module_problem, tests_dir_problem
@@ -216,10 +216,13 @@ def _run(
         click.secho(f"  warning: {outdated}", fg="yellow", bold=True, err=True)
     try:
         pythonpath = config.paths("pythonpath")
+        plugins = dash_p_plugins(config)  # pytest loads them from addopts and PYTEST_ADDOPTS
     except ValueError as err:  # it names the setting and the file
         raise click.UsageError(str(err)) from err
     if pythonpath:
         click.secho("  pythonpath: {}".format(", ".join(map(str, pythonpath))), fg="blue", bold=True, err=True)
+    if plugins:
+        click.secho("  plugins (-p): {}".format(", ".join(plugins)), fg="blue", bold=True, err=True)
     if disable_ext:
         click.secho("  disable-ext: {}".format(", ".join(disable_ext)), fg="blue", bold=True, err=True)
 
@@ -252,6 +255,7 @@ def _run(
             disabled=disable_ext,
             ext_config=ext_kwargs,
             config_file=config.path,
+            plugins=plugins,
         )
     except ValueError as err:  # an extension's setting that will not convert, named
         raise click.UsageError(str(err)) from err
