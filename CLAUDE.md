@@ -281,8 +281,9 @@ mode is the union of three views — `git diff --cached`, `git diff`, and
 them. Deletions count (`_NON_IMPACTFUL_STATUSES` drops only `X`/`B`), so `changed_files`
 routinely names paths that no longer exist, and files outside the project root arrive as
 absolute paths. A submodule
-reported by its own path is followed by every file it tracks (`git._with_submodule_files`): its path names no
-module, and which of its files changed would take a diff inside it.
+reported by its own path is followed by the files changed inside it (`git._with_submodule_changes`: a diff between
+the commits the superproject records, or against the submodule's working tree; every file it tracks when that
+cannot be had), only for a gitlink in the index that is checked out — one that is not is a notice (`on_fallback`).
 
 **`canonical_root()` is the single origin for every path.** Discovery, graph building and
 the conftest walk all resolve against `root_dir` (the plugin passes `config.rootpath`),

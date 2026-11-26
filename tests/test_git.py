@@ -985,23 +985,59 @@ def repo_with_submodule(real_repo, tmp_path):
     return repo, root
 
 
-def test_an_edit_inside_a_submodule_counts_as_a_change_to_each_of_its_files(repo_with_submodule):
-    """git reports the submodule's own path, which names no module: each file it tracks counts as changed."""
+def test_an_edit_inside_a_submodule_counts_as_a_change_to_the_file(repo_with_submodule):
+    """git reports the submodule's own path, which names no module: the files changed inside it are added."""
     _, root = repo_with_submodule
     (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    (root / "vendor" / "lib" / "new.py").write_text("z = 1\n")  # untracked inside it
 
-    assert unstaged(root) == ["vendor", "vendor/lib/core.py", "vendor/lib/util.py"]
+    assert unstaged(root) == ["vendor", "vendor/lib/core.py", "vendor/lib/new.py"]
 
 
-def test_a_submodule_bumped_on_the_branch_counts_as_a_change_to_each_of_its_files(repo_with_submodule):
+@pytest.mark.parametrize("edit", ["modify", "delete"])
+def test_a_submodule_bumped_on_the_branch_brings_what_changed_inside_it(repo_with_submodule, edit):
+    """Diffed inside the submodule, between the commits the superproject records: a deleted module counts too."""
+    repo, root = repo_with_submodule
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    if edit == "modify":
+        (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    else:
+        (root / "vendor" / "lib" / "core.py").unlink()
+    commit_all(Repo(root / "vendor"), "bump")
+    commit_all(repo, "bump the submodule")
+
+    assert branch(root, base) == ["vendor", "vendor/lib/core.py"]
+
+
+def test_a_submodule_not_checked_out_is_named(repo_with_submodule):
+    """actions/checkout leaves submodules out by default: what changed in one cannot be seen, and is said."""
     repo, root = repo_with_submodule
     base = repo.active_branch.name
     repo.git.checkout("-b", "feature")
     (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
     commit_all(Repo(root / "vendor"), "bump")
     commit_all(repo, "bump the submodule")
+    repo.git.submodule("deinit", "-q", "-f", "vendor")
+    notices: list[str] = []
 
-    assert branch(root, base) == ["vendor", "vendor/lib/core.py", "vendor/lib/util.py"]
+    found = git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base, on_fallback=notices.append)
+
+    assert found == ["vendor"]
+    assert len(notices) == 1 and "not checked out" in notices[0]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges and core.symlinks on Windows")
+def test_only_a_recorded_submodule_is_followed(repo_with_submodule, tmp_path):
+    """An untracked clone in the tree, or a symlink to a repository, is no submodule: its files are not added."""
+    _, root = repo_with_submodule
+    clone = root / "scratch"
+    clone.mkdir()
+    (clone / "pyproject.toml").write_text("")
+    Repo.init(clone).git.add("--all")
+    (root / "alias").symlink_to("vendor", target_is_directory=True)
+
+    assert unstaged(root) == ["alias", "scratch/"]
 
 
 def test_a_submodule_added_on_the_branch_brings_its_files(real_repo, tmp_path):

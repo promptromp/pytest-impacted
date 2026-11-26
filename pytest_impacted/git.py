@@ -307,7 +307,7 @@ def _find_impacted_files(
 
     match git_mode:
         case GitMode.UNSTAGED:
-            impacted_files = impacted_files_for_unstaged_mode(repo)
+            impacted_files = impacted_files_for_unstaged_mode(repo, on_notice=on_fallback)
 
         case GitMode.BRANCH:
             if not base_branch:
@@ -322,7 +322,6 @@ def _find_impacted_files(
 
     if not impacted_files:
         return None
-    impacted_files = _with_submodule_files(repo, impacted_files)
 
     # Normalize git-root-relative paths to working-dir-relative paths
     if repo.working_tree_dir is not None:
@@ -332,29 +331,61 @@ def _find_impacted_files(
     return sorted(set(impacted_files))
 
 
-def _with_submodule_files(repo: Repo, paths: list[str]) -> list[str]:
-    """*paths*, each submodule among them followed by every file it tracks, nested submodules' included.
+def _with_submodule_changes(
+    repo: Repo, paths: list[str], old: str, new: str | None, notice: Callable[[str], None]
+) -> list[str]:
+    """*paths*, each submodule among them followed by the files that changed inside it, under its path.
 
-    git reports a change inside a submodule — a commit bumped, or edits not yet committed there — as the
-    submodule's own path (``vendor``), which names no module: every test was deselected. Which of its files
-    changed would take a diff inside it; each counts as changed, which only ever selects more. The path itself
-    stays, for a glob such as ``vendor/**``. A submodule not checked out (no ``.git`` in it) has no files to add.
+    git reports a change inside a submodule — a new commit recorded, or edits not committed there — by the
+    submodule's own path (``vendor``), which names no module: every test was deselected. The files are those
+    that differ inside it between the commit the superproject recorded at *old* and the one at *new* (``None``:
+    the submodule's working tree, untracked files included), deleted ones too. When that diff cannot be had (a
+    submodule added, its old commit not fetched), every file it tracks counts as changed. The path itself stays,
+    for a glob such as ``vendor/**``. Only a gitlink the superproject records, checked out: an untracked clone
+    in the tree, or a symlink to a repository, is no submodule.
     """
     if repo.working_tree_dir is None:
         return paths
     root = Path(repo.working_tree_dir)
     expanded = list(paths)
-    for path in paths:
+    for path in (path.rstrip("/") for path in paths):
         directory = root / path
-        if not (os.path.isdir(directory) and os.path.exists(directory / ".git")):
+        if os.path.islink(directory) or not os.path.isdir(directory) or not _is_gitlink(repo, path):
             continue
-        try:
-            listed = Repo(directory).git.ls_files("--recurse-submodules", "-z")
-        except (GitCommandError, InvalidGitRepositoryError, NoSuchPathError):
-            logger.warning("Could not list the files of submodule %s; its own path counts as changed", path)
+        if not os.path.exists(directory / ".git"):
+            notice(
+                f"Submodule {path} changed but is not checked out, so nothing in it is analysed (actions/checkout: "
+                "submodules: true)."
+            )
             continue
-        expanded.extend(f"{path}/{file}" for file in listed.split("\0") if file)
+        expanded.extend(f"{path}/{file}" for file in _changed_inside(repo, Repo(directory), path, old, new, notice))
     return expanded
+
+
+def _is_gitlink(repo: Repo, path: str) -> bool:
+    """Whether the superproject records *path* as a submodule (mode 160000 in its index)."""
+    return repo.git.ls_files("-s", "--", path).startswith("160000 ")
+
+
+def _changed_inside(
+    repo: Repo, submodule: Repo, path: str, old: str, new: str | None, notice: Callable[[str], None]
+) -> list[str]:
+    """The files that changed inside *submodule* (see :func:`_with_submodule_changes`), relative to it."""
+    try:
+        before = repo.git.rev_parse("--verify", "--quiet", f"{old}:{path}")
+        after = [repo.git.rev_parse("--verify", "--quiet", f"HEAD:{path}")] if new else []
+        changed = _impactful_paths(_name_status_diff(submodule, *rev_args(before, *after)))
+        if new is None:  # the working tree: untracked files too
+            changed += [file for file in submodule.git.ls_files("--others", "--exclude-standard", "-z").split("\0")]
+        return [file for file in changed if file]
+    except GitCommandError:
+        pass  # no commit recorded before (an added submodule), or not fetched: every file it tracks
+    try:
+        listed = submodule.git.ls_files("--recurse-submodules", "-z")
+    except GitCommandError as err:
+        notice(f"Could not list the files of submodule {path} ({_reason(err)}); nothing in it is analysed.")
+        return []
+    return [file for file in listed.split("\0") if file]
 
 
 def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:
@@ -414,18 +445,21 @@ def _impactful_paths(change_set: ChangeSet) -> list[str]:
     ]
 
 
-def impacted_files_for_unstaged_mode(repo: Repo) -> list[str]:
+def impacted_files_for_unstaged_mode(repo: Repo, *, on_notice: Callable[[str], None] | None = None) -> list[str]:
     """Get the impacted files when in the UNSTAGED git mode.
 
     Uncommitted work is the union of three views: the index against HEAD
     (``git diff --cached``, which also works before the first commit and
     catches a staged edit whose file was reverted on disk), the working tree
     against the index (``git diff``), and untracked files. Diffing only one
-    of them misses the others.
+    of them misses the others. A submodule among them brings the files changed
+    inside it since HEAD's commit for it (see :func:`_with_submodule_changes`);
+    *on_notice* is told what cannot be seen there (by default it is only logged).
     """
     staged = _impactful_paths(_name_status_diff(repo, "--cached"))
     unstaged = _impactful_paths(_name_status_diff(repo))
-    return [*staged, *unstaged, *_untracked_files(repo)]
+    paths = [*staged, *unstaged, *_untracked_files(repo)]
+    return _with_submodule_changes(repo, paths, "HEAD", None, on_notice or logger.warning)
 
 
 def _untracked_files(repo: Repo) -> list[str]:
@@ -469,7 +503,14 @@ def impacted_files_for_branch_mode(
             "instead, which may also select tests for its newer commits."
         )
         starts = [base_branch]
-    paths = {path for start in starts for path in _impactful_paths(_name_status_diff(repo, *rev_args(start, "HEAD")))}
+    notice = on_fallback or logger.warning
+    paths = {
+        path
+        for start in starts
+        for path in _with_submodule_changes(
+            repo, _impactful_paths(_name_status_diff(repo, *rev_args(start, "HEAD"))), start, "HEAD", notice
+        )
+    }
     return sorted(paths)
 
 
