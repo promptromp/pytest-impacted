@@ -320,7 +320,9 @@ skipped scenarios; path alone skipped inherited tests whose base changed with no
 (`from checks import Checks` in a rootless dir). The location is also matched by path
 suffix, the rule the other two were added to, so nothing it selects is lost. Keep
 every half — each only adds tests. Items import analysis cannot judge always run: those
-from non-Python files (`--doctest-glob`, YAML collectors) and `DoctestItem`s — also when
+from non-Python files (`--doctest-glob`, YAML collectors), `DoctestItem`s, and Python test files outside both
+analysed directories (`plugin._unjudged_items`: nothing imports a test, so such a file is no node, and "every
+test" never reached it; counted in the summary through `workeroutput`, like the deselection) — also when
 nothing at all is impacted.
 
 **Unselected items are deselected, unless `--impacted-unimpacted=skip`.** pytest exits 5 when

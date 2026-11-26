@@ -8,6 +8,8 @@ the location skipped every pytest-bdd scenario, and matching only the path skipp
 inherited tests whose base changed without a graph edge to the child.
 """
 
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,7 +17,7 @@ import pytest
 
 from pytest_impacted.plugin import _impacted_items
 
-from .git_helpers import edit_file
+from .git_helpers import assert_selected, edit_file
 
 
 # --- end to end ------------------------------------------------------------------
@@ -179,3 +181,78 @@ def test_doctests_in_a_changed_source_module_run(make_git_project):
     result = run(project, "--doctest-modules", "app", "suite")
 
     result.stdout.fnmatch_lines(["*app/calc.py::app.calc.add PASSED*"])
+
+
+# --- tests outside the analysed directories -----------------------------------------
+
+TWO_TEST_DIRS = {
+    "app/__init__.py": "",
+    "app/a.py": "def a():\n    return 1\n",
+    "app/b.py": "def b():\n    return 2\n",
+    "suite/test_a.py": "from app.a import a\n\ndef test_a():\n    assert a() == 1\n",
+    "suite/test_b.py": "from app.b import b\n\ndef test_b():\n    assert b() == 2\n",
+    "integration/test_flow.py": "from app.a import a\n\ndef test_flow():\n    assert a() == 1\n",
+}
+
+
+@pytest.mark.parametrize(
+    ("ini", "edited", "passed", "deselected"),
+    [
+        pytest.param(INI, "app/b.py", ["test_b.py", "test_flow.py"], ["test_a.py"], id="a second tests dir"),
+        pytest.param(INI, "uv.lock", ["test_a.py", "test_b.py", "test_flow.py"], [], id="every test, all of them"),
+        pytest.param(
+            "[pytest]\npythonpath = .\nimpacted_module = app\n",
+            "app/b.py",
+            ["test_a.py", "test_b.py", "test_flow.py"],
+            [],
+            id="no tests dir at all",
+        ),
+    ],
+)
+@pytest.mark.parametrize("xdist", [[], ["-n", "2"]], ids=["", "xdist"])
+def test_a_test_no_analysis_judges_runs_and_is_counted(make_git_project, ini, edited, passed, deselected, xdist):
+    """Outside --impacted-module and --impacted-tests-dir a test file is no graph node: deselected on every run
+    before, even when a change impacted "every test". It runs, as doctests do, and the summary says why."""
+    project = make_git_project({**TWO_TEST_DIRS, "uv.lock": ""}, ini)
+    edit_file(project, edited)
+
+    result = run(project, *xdist)
+
+    if xdist:  # whose summary leaves the deselected out
+        result.assert_outcomes(passed=len(passed))
+    else:
+        assert_selected(result, passed=passed, deselected=deselected)
+    unjudged = 1 if "impacted_tests_dir" in ini else 3
+    expected = "test" if unjudged == 1 else "tests"
+    result.stdout.fnmatch_lines([f"pytest-impacted: {unjudged} {expected} outside --impacted-module and *"])
+
+
+def test_the_count_is_of_the_unjudged_tests_that_ran(make_git_project):
+    """Counted after -k and -m: one -k leaves out is no test that ran."""
+    project = make_git_project({**TWO_TEST_DIRS, "integration/test_other.py": "def test_other():\n    pass\n"}, INI)
+    edit_file(project, "app/a.py")
+
+    result = run(project, "-k", "flow or test_a")
+
+    assert_selected(result, passed=["test_a.py", "test_flow.py"], deselected=["test_b.py", "test_other.py"])
+    result.stdout.fnmatch_lines(["pytest-impacted: 1 test outside --impacted-module and *"])
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink") or sys.platform == "win32", reason="needs symlinks")
+def test_a_test_reached_through_a_symlink_inside_the_package_is_judged(make_git_project):
+    """The walk follows the link, so the test is judged; resolved, its path lies outside the package."""
+    project = make_git_project(
+        {
+            "app/__init__.py": "",
+            "app/a.py": "def a():\n    return 1\n",
+            "common/shared/__init__.py": "",
+            "common/shared/test_shared.py": "def test_shared():\n    pass\n",
+        },
+        "[pytest]\npythonpath = .\nimpacted_module = app\n",
+    )
+    os.symlink(project.path / "common" / "shared", project.path / "app" / "shared", target_is_directory=True)
+    edit_file(project, "app/a.py")
+
+    result = run(project, "app")
+
+    assert "outside --impacted-module" not in result.stdout.str()
