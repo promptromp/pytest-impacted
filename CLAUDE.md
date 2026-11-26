@@ -240,6 +240,14 @@ option-like values with a clear error) *and* prefixes `--end-of-options` so git 
 parse an operand as an option even if the string check is ever bypassed. This is why the
 project requires git >= 2.24, and why tests assert on the `--end-of-options` token.
 
+**A run without `--impacted` loads none of the analysis.** `plugin.py` is a `pytest11` entry point, imported by
+every pytest run: it reaches `api`, `git`, `file_map`, `strategies` and `traversal` only through `plugin._lazily`
+(functions, never module-like objects: pytest probes every attribute of a plugin module for fixtures, which imported
+an object's module at start-up), and `pytest_impacted/__init__.py` exports its names lazily (PEP 562). Eager, they
+loaded networkx, astroid and GitPython, which runs `git version` as it loads: a one-test run took 249 ms against
+127 ms. `test_a_run_without_impacted_loads_none_of_the_analysis` pins a whole session, not only the import.
+`GitMode` lives in `modes.py` for the options; patch `pytest_impacted.git.GIT_AVAILABLE`, not the plugin's.
+
 **`GIT_AVAILABLE` is not defensive clutter.** `from git import Repo` raises
 `ImportError` when the *git executable* is missing, not just when GitPython is absent —
 and `plugin.py` is a `pytest11` entry point imported on every pytest run, so an

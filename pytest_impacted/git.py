@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 
+from pytest_impacted.modes import GitMode  # re-exported: pytest_impacted.git.GitMode
+
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +97,6 @@ def rev_args(*revs: object) -> list[str]:
     ever slips past the string check.
     """
     return [END_OF_OPTIONS, *(validate_rev(str(rev)) for rev in revs)]
-
-
-class GitMode(StrEnum):
-    """Git modes for the plugin."""
-
-    UNSTAGED = "unstaged"
-    BRANCH = "branch"
 
 
 class GitStatus(StrEnum):

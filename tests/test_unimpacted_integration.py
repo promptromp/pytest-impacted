@@ -330,14 +330,14 @@ def test_under_xdist_a_controller_failure_leaves_the_workers_to_analyse(make_git
     and skip every ``pytest_sessionfinish``; it may also need what only a worker has."""
     pytest.importorskip("xdist")
     fails = (
-        "import pytest\nimport pytest_impacted.plugin as plugin\n\n"
+        "import pytest\nimport pytest_impacted.api as api\n\n"
         "def pytest_configure(config):\n"
-        "    original = plugin.get_impacted_tests\n"
+        "    original = api.get_impacted_tests\n"
         "    def analyse(**kwargs):\n"
         "        if not hasattr(config, 'workerinput'):\n"
         f"            raise {raises}\n"
         "        return original(**kwargs)\n"
-        "    plugin.get_impacted_tests = analyse\n"
+        "    api.get_impacted_tests = analyse\n"
     )
     project = make_git_project({**FILES, "conftest.py": fails}, INI)
     edit(project, "app/a.py")
@@ -418,7 +418,7 @@ def test_a_test_under_the_rootdir_as_given_is_handed_on_relative(project, tmp_pa
     """A strategy may return a path under the root it was given, a symlink, not the resolved one."""
     link = tmp_path / "link"
     link.symlink_to(project.path)
-    monkeypatch.setattr("pytest_impacted.plugin.get_impacted_tests", lambda **_: [str(link / "suite/test_a.py")])
+    monkeypatch.setattr("pytest_impacted.api.get_impacted_tests", lambda **_: [str(link / "suite/test_a.py")])
     config = project.parseconfig("--impacted", "--impacted-git-mode=unstaged", f"--rootdir={link}")
 
     assert _analyse(SimpleNamespace(config=config), config) == [os.path.join("suite", "test_a.py")]

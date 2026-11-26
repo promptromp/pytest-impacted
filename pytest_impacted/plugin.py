@@ -1,3 +1,4 @@
+import importlib
 import os
 import re
 from collections.abc import Callable
@@ -5,13 +6,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 from pytest import Config, DoctestItem, ExitCode, Parser, StashKey, UsageError
 
 from pytest_impacted import _rust
-from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
     check_ext_config,
@@ -20,19 +21,24 @@ from pytest_impacted.extensions import (
     get_ext_cli_flag,
     get_ext_ini_name,
 )
-from pytest_impacted.file_map import parse_file_map, unknown_paths
-from pytest_impacted.git import (
-    GIT_AVAILABLE,
-    GitError,
-    GitMode,
-    GitUnavailableError,
-    InvalidGitRefError,
-    check_repository,
-    find_repo,
-    rev_args,
-)
-from pytest_impacted.strategies import parse_invalidation_patterns
-from pytest_impacted.traversal import canonical_root, real_path, unnameable_tests_dir
+from pytest_impacted.modes import GitMode
+
+
+def _lazily(name: str) -> Callable[[], ModuleType]:
+    """A module, imported at the first call, never at the import of this one."""
+    return lambda: importlib.import_module(name)
+
+
+# The analysis and what it needs (networkx, astroid, GitPython, which runs ``git version`` as it loads) load only
+# once --impacted asks for them: this plugin is a pytest11 entry point, imported by every pytest run, with
+# --impacted or without, and loading them there doubled the start-up of a run with one test (127 ms -> 249 ms).
+# Functions, not module-like objects: pytest probes every attribute of a plugin module for fixtures, which would
+# import such an object's module at start-up.
+_api = _lazily("pytest_impacted.api")
+_file_map = _lazily("pytest_impacted.file_map")
+_git = _lazily("pytest_impacted.git")
+_strategies = _lazily("pytest_impacted.strategies")
+_traversal = _lazily("pytest_impacted.traversal")
 
 
 class Unimpacted(StrEnum):
@@ -355,15 +361,15 @@ def _header_warnings(config: Config) -> list[str]:
     if not get_option("impacted"):
         return []
     lines: list[str] = []
-    if GIT_AVAILABLE and (file_map := _file_map_or_none(get_option("impacted_map"))):
+    if _git().GIT_AVAILABLE and (file_map := _file_map_or_none(get_option("impacted_map"))):
         unknown = _unknown_paths_or_none(file_map, config.rootpath)
         lines.extend(
             f"pytest-impacted: WARNING: --impacted-map path {path} matches no file git knows." for path in unknown
         )
     if outdated := _rust.outdated_for(bool(get_option("impacted_ignore_type_checking_imports"))):
         lines.append(f"pytest-impacted: WARNING: {outdated}")
-    if not GIT_AVAILABLE:
-        lines.append(f"pytest-impacted: WARNING: {GitUnavailableError()} Running every test.")
+    if not _git().GIT_AVAILABLE:
+        lines.append(f"pytest-impacted: WARNING: {_git().GitUnavailableError()} Running every test.")
     return lines
 
 
@@ -430,7 +436,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
     # Any: ini values are untyped, and validate_config has checked the ones that must be set.
     get_option: Callable[[str], Any] = partial(get_option_from_config, config)
     root_dir = config.rootpath
-    strategy = build_strategy_with_extensions(
+    strategy = _api().build_strategy_with_extensions(
         watch_dep_files=not get_option("no_impacted_dep_files"),
         invalidate_all_patterns=get_option("impacted_invalidate_all") or [],
         conftest_imports=get_option("impacted_conftest_imports"),
@@ -439,7 +445,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
         session=session,
     )
     try:
-        impacted_tests = get_impacted_tests(
+        impacted_tests = _api().get_impacted_tests(
             impacted_git_mode=get_option("impacted_git_mode"),
             impacted_base_branch=get_option("impacted_base_branch"),
             root_dir=root_dir,
@@ -448,24 +454,24 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             session=session,
             strategy=strategy,
             use_merge_base=not get_option("impacted_no_merge_base"),
-            file_map=parse_file_map(get_option("impacted_map") or []),
+            file_map=_file_map().parse_file_map(get_option("impacted_map") or []),
             pythonpath=_pythonpath(config),
             ignore_type_checking_imports=bool(get_option("impacted_ignore_type_checking_imports")),
         )
-    except GitError as err:  # validate_config asked first; git may still refuse later (a ref deleted since)
+    except _git().GitError as err:  # validate_config asked first; git may still refuse later (a ref deleted since)
         # Under pytest-xdist the controller's _handoff warns of it and each worker raises it again: rare enough,
         # and raising it there would skip every pytest_sessionfinish (see _handoff).
         raise UsageError(str(err)) from err
-    except GitUnavailableError as err:
+    except _git().GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not
         # warnings.warn — `filterwarnings = error` would turn it into a crash.
         # When git was missing at import, pytest_report_header has already said
         # so; only a failure discovered now needs reporting here.
-        if GIT_AVAILABLE:
+        if _git().GIT_AVAILABLE:
             warn(f"pytest-impacted: {err} Running every test.", session)
         return None
     # The analysis names files under the canonical root; an extension may use the one it was given.
-    roots = [canonical_root(root_dir), root_dir]
+    roots = [_traversal().canonical_root(root_dir), root_dir]
     return [_relative_to(roots, test) for test in impacted_tests or []]
 
 
@@ -493,7 +499,7 @@ def _relative_to(roots: list[Path], test: str) -> str:
 
 def _file_map_or_none(entries) -> list[tuple[str, str]]:
     try:
-        return parse_file_map(entries or [])
+        return _file_map().parse_file_map(entries or [])
     except ValueError:
         return []  # validate_config has said so
 
@@ -501,7 +507,7 @@ def _file_map_or_none(entries) -> list[tuple[str, str]]:
 def _unknown_paths_or_none(file_map: list[tuple[str, str]], root_dir: Path) -> list[str]:
     """For the header: the mapped paths git knows nothing at; none when git cannot tell."""
     try:
-        return unknown_paths(file_map, root_dir)
+        return _file_map().unknown_paths(file_map, root_dir)
     except Exception:  # noqa: BLE001 — a header line, never a failure of its own; the run reports git
         return []
 
@@ -529,7 +535,7 @@ def pytest_collection_modifyitems(session, config, items):
     if impacted_tests is None:
         return
     root_dir = config.rootpath
-    unjudged = _unjudged_items(items, _analysed_dirs(config), real_path(config.rootpath))
+    unjudged = _unjudged_items(items, _analysed_dirs(config), _traversal().real_path(config.rootpath))
     config.stash[_UNJUDGED_ITEMS] = unjudged
     impacted_items = _impacted_items(items, impacted_tests, root_dir) | unjudged
     # A worker analysing for itself skips: another may judge differently, and xdist stops a
@@ -593,7 +599,7 @@ def _analysed_dirs(config: Config) -> list[Path]:
     module, tests_dir = get_option("impacted_module"), get_option("impacted_tests_dir")
     named = [str(module).replace(".", os.sep), *([tests_dir] if tests_dir else [])]
     given = [Path(os.path.abspath(config.rootpath / name)) for name in named]
-    return [*given, *(real_path(directory) for directory in given)]
+    return [*given, *(_traversal().real_path(directory) for directory in given)]
 
 
 def _unjudged_items(items: list[pytest.Item], analysed: list[Path], root: Path) -> set[pytest.Item]:
@@ -608,7 +614,7 @@ def _unjudged_items(items: list[pytest.Item], analysed: list[Path], root: Path) 
 
     def outside(path: Path) -> bool:
         if path not in resolved:
-            real, spelled = real_path(path), Path(os.path.abspath(path))
+            real, spelled = _traversal().real_path(path), Path(os.path.abspath(path))
             judged = any(real.is_relative_to(d) for d in analysed) or (
                 real.is_relative_to(root) and any(spelled.is_relative_to(d) for d in analysed)
             )
@@ -686,12 +692,12 @@ def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_di
     items from non-Python files (a ``--doctest-glob`` text file, a YAML collector)
     and doctests (``--doctest-modules`` collects them from source modules too).
     """
-    impacted = {real_path(root_dir / test) for test in impacted_tests}
+    impacted = {_traversal().real_path(root_dir / test) for test in impacted_tests}
     resolved: dict[Path, Path] = {}
 
     def is_impacted(path: Path) -> bool:
         if path not in resolved:
-            resolved[path] = real_path(path)
+            resolved[path] = _traversal().real_path(path)
         return resolved[path] in impacted
 
     return {
@@ -701,7 +707,7 @@ def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_di
         or isinstance(item, DoctestItem)
         or is_impacted(item.path)
         or is_impacted(root_dir / item.location[0])
-        or matches_impacted_tests(item.location[0], impacted_tests=impacted_tests)
+        or _api().matches_impacted_tests(item.location[0], impacted_tests=impacted_tests)
     }
 
 
@@ -735,11 +741,11 @@ def validate_config(config: Config):
         raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
 
     try:
-        parse_file_map(get_option("impacted_map") or [])
+        _file_map().parse_file_map(get_option("impacted_map") or [])
         # Named where the globs came from: the option given, else the setting and its file.
         given = config.getoption("impacted_invalidate_all", default=None)
         source = "--impacted-invalidate-all" if given else f"impacted_invalidate_all in {config.inipath}"
-        parse_invalidation_patterns(get_option("impacted_invalidate_all") or [], source)
+        _strategies().parse_invalidation_patterns(get_option("impacted_invalidate_all") or [], source)
         check_ext_config(disabled=get_option("impacted_disable_ext") or [], ext_config=_collect_ext_config(config))
     except ValueError as err:
         raise UsageError(str(err)) from err
@@ -768,10 +774,10 @@ def validate_repository(root_dir: Path) -> None:
     Without git there is nothing to check: the run fails open (see :class:`~pytest_impacted.git.GitUnavailableError`).
     """
     try:
-        check_repository(root_dir)
-    except GitUnavailableError:
+        _git().check_repository(root_dir)
+    except _git().GitUnavailableError:
         return
-    except GitError as err:
+    except _git().GitError as err:
         raise UsageError(f"{err} pytest-impacted reads the changed files from git.") from err
 
 
@@ -825,23 +831,23 @@ def validate_tests_dir(tests_dir: str, root_dir: Path) -> None:
             f"Tests directory '{tests_dir}' does not exist under '{root_dir}'. "
             f"Please check the path passed to --impacted-tests-dir."
         )
-    if reason := unnameable_tests_dir(tests_dir, root_dir):
+    if reason := _traversal().unnameable_tests_dir(tests_dir, root_dir):
         raise UsageError(reason)
 
 
 def validate_base_branch(base_branch: str, root_dir: str) -> None:
     """Validate that --impacted-base-branch refers to a valid git ref."""
-    if not GIT_AVAILABLE:
+    if not _git().GIT_AVAILABLE:
         return
 
     # Importable only when GIT_AVAILABLE; see the guarded import in git.py.
     from git import GitCommandError, GitCommandNotFound, InvalidGitRepositoryError  # noqa: PLC0415
 
     try:
-        args = rev_args(base_branch)
-        repo = find_repo(root_dir)
+        args = _git().rev_args(base_branch)
+        repo = _git().find_repo(root_dir)
         repo.git.rev_parse("--verify", *args)
-    except InvalidGitRefError as err:
+    except _git().InvalidGitRefError as err:
         raise UsageError(
             f"Invalid base branch: {err} Please check the value passed to --impacted-base-branch."
         ) from err
