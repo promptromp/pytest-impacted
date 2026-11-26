@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
+import click
 import networkx as nx
 from click.testing import CliRunner
 
 from pytest_impacted import resolve_impacted_tests
-from pytest_impacted.cli import impacted_tests_cli
+from pytest_impacted.cli import _register_extension_options, impacted_tests_cli
 from pytest_impacted.extensions import ConfigOption, clear_extension_cache
 from pytest_impacted.plugin import pytest_report_header
 from pytest_impacted.strategies import CompositeImpactStrategy, ImpactStrategy
@@ -191,3 +192,51 @@ class TestExtensionCLIIntegration:
                 ["--module", "test_ns", "--disable-ext", "some_ext"],
             )
             assert result.exit_code == 0
+
+
+class FlaggedStrategy(ImpactStrategy):
+    """An extension with a string setting and an on/off one."""
+
+    config_options: ClassVar[list[ConfigOption]] = [
+        ConfigOption(name="label", help="A label", type=str, default="none"),
+        ConfigOption(name="strict", help="An on/off setting", type=bool, default=False),
+    ]
+
+    def find_impacted_tests(self, *args, **kwargs):
+        return []
+
+
+@patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+def test_an_extension_s_on_off_setting_is_a_flag(mock_entry_points, pytester):
+    """``--impacted-ext-flagged-strict`` alone turns it on, as ``store_true`` does; no value follows it."""
+    mock_entry_points.return_value = [_make_mock_entry_point("flagged", FlaggedStrategy)]
+    clear_extension_cache()
+
+    config = pytester.parseconfig("--impacted-ext-flagged-strict", "--impacted-ext-flagged-label=x")
+
+    assert config.getoption("impacted_ext_flagged_strict") is True
+    assert config.getoption("impacted_ext_flagged_label") == "x"
+    clear_extension_cache()
+
+
+@patch("pytest_impacted.extensions.importlib.metadata.entry_points")
+def test_an_extension_s_setting_reaches_it_from_the_cli(mock_entry_points, tmp_path):
+    """The CLI registers each extension's settings as options, and hands their values to the extension."""
+    mock_entry_points.return_value = [_make_mock_entry_point("flagged", FlaggedStrategy)]
+    clear_extension_cache()
+    command = click.Command(
+        impacted_tests_cli.name, callback=impacted_tests_cli.callback, params=list(impacted_tests_cli.params)
+    )
+    _register_extension_options(command)
+    (tmp_path / "pkg").mkdir()
+
+    with (
+        patch("pytest_impacted.cli.build_strategy_with_extensions") as build,
+        patch("pytest_impacted.cli.get_impacted_tests", return_value=[]),
+    ):
+        args = ["--root-dir", str(tmp_path), "--module", "pkg", "--impacted-ext-flagged-label", "x"]
+        result = CliRunner().invoke(command, args)
+
+    assert result.exit_code == 0, result.output
+    assert build.call_args.kwargs["ext_config"]["impacted_ext_flagged_label"] == "x"
+    clear_extension_cache()

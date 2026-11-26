@@ -277,6 +277,12 @@ class TestDiscoverExtensionMetadata:
         result = discover_extension_metadata()
         assert result == ()
 
+    @patch("pytest_impacted.extensions.importlib.metadata.entry_points", side_effect=RuntimeError("broken metadata"))
+    def test_a_failed_entry_point_query_finds_no_extension(self, _mock_entry_points, caplog):
+        """Broken package metadata must not fail every pytest run: the plugin asks in ``pytest_addoption``."""
+        assert discover_extension_metadata() == ()
+        assert "Failed to query entry points" in caplog.text
+
     @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
     def test_discover_simple_strategy(self, mock_entry_points):
         mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]

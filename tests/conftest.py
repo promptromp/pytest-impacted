@@ -1,10 +1,12 @@
 """pytest fixtures used by unit-tests."""
 
 import os
+import shutil
 import subprocess
 import textwrap
 
 import pytest
+from git import Repo
 
 from pytest_impacted import _rust
 from pytest_impacted.strategies import clear_dep_tree_cache
@@ -118,3 +120,27 @@ def import_backend(request, monkeypatch):
     elif not _rust.RUST_AVAILABLE:
         pytest.skip("pytest-impacted-rs is not installed")
     return request.param
+
+
+@pytest.fixture(scope="session")
+def committed_repo_template(tmp_path_factory):
+    """A committed repository with a two-module package on ``main``, built once and copied per test."""
+    home = tmp_path_factory.mktemp("git-home")
+    root = tmp_path_factory.mktemp("repo-template")
+    pkg = root / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "a.py").write_text("x = 1\n")
+    (pkg / "b.py").write_text("y = 1\n")
+    env = {**os.environ, **isolated_git_env(home)}
+    for args in (["init", "-q", "-b", "main"], ["add", "--all"], ["commit", "-q", "-m", "init"]):
+        subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True)
+    return root
+
+
+@pytest.fixture
+def real_repo(tmp_path, isolated_git_config, committed_repo_template):
+    """A private copy of :func:`committed_repo_template`, returning ``(repo, root)``."""
+    root = tmp_path / "repo"
+    shutil.copytree(committed_repo_template, root)
+    return Repo(root), root

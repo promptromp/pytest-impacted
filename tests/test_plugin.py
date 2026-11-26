@@ -215,27 +215,30 @@ def testvalidate_tests_dir_without_init(tmp_path):
     validate_tests_dir("my_tests", tmp_path)  # Should not raise
 
 
-def testvalidate_base_branch_nonexistent():
-    """Test that a non-existent base branch gives a helpful error with available refs."""
-    with pytest.raises(pytest.UsageError, match="Base branch 'nonexistent_branch_xyz' does not exist"):
-        validate_base_branch("nonexistent_branch_xyz", ".")
+def test_validate_base_branch_names_the_refs_there_are(real_repo):
+    """An unknown base branch is a usage error listing the repository's refs, to pick the right one from."""
+    repo, root = real_repo
+    repo.git.branch("develop")
+
+    with pytest.raises(pytest.UsageError, match="Base branch 'nonexistent' does not exist") as raised:
+        validate_base_branch("nonexistent", str(root))
+
+    assert "Available refs: develop, main" in str(raised.value)
 
 
-def testvalidate_base_branch_valid():
-    """Test that a valid base branch passes validation."""
-    validate_base_branch("HEAD", ".")  # Should not raise — HEAD exists in any git checkout
+@pytest.mark.parametrize("where", [".", "pkg"], ids=["root", "subdirectory (a monorepo's)"])
+def test_validate_base_branch_accepts_a_ref_there_is(real_repo, where):
+    _repo, root = real_repo
+
+    validate_base_branch("main", str(root / where))
 
 
-def testvalidate_base_branch_from_subdirectory():
-    """validate_base_branch works from a subdirectory of the git root (monorepo)."""
-    # tests/ is a subdirectory of the project; .git is at the project root
-    validate_base_branch("HEAD", "tests")  # Should not raise
+def test_validate_base_branch_refuses_an_option_like_ref(real_repo):
+    """Rejected as a usage error, never passed to git."""
+    _repo, root = real_repo
 
-
-def testvalidate_base_branch_option_like():
-    """An option-like base branch is rejected as a usage error, not passed to git."""
     with pytest.raises(pytest.UsageError, match="Invalid base branch"):
-        validate_base_branch("--output=/tmp/pwned", ".")
+        validate_base_branch("--output=/tmp/pwned", str(root))
 
 
 def testvalidate_base_branch_no_git_repo(tmp_path):

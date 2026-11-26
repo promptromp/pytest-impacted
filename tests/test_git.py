@@ -1,8 +1,6 @@
 """Unit tests for the git module."""
 
-import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
 from unittest.mock import MagicMock, call, patch
@@ -12,8 +10,6 @@ from git import GitCommandError, Repo
 
 from pytest_impacted import git
 from pytest_impacted.git import find_repo, normalize_git_paths
-
-from .git_helpers import isolated_git_env
 
 
 def name_status_z(*records: tuple[str, ...]) -> str:
@@ -535,30 +531,6 @@ def test_find_impacted_files_monorepo_files_outside_cwd(mock_repo):
 # The mocked tests above pin the plumbing; these exercise a real git repository so
 # that a regression in *which* git comparison is used (index vs HEAD vs worktree)
 # cannot hide behind a mock.
-
-
-@pytest.fixture(scope="session")
-def committed_repo_template(tmp_path_factory):
-    """A committed repository with a two-module package, built once and copied per test."""
-    home = tmp_path_factory.mktemp("git-home")
-    root = tmp_path_factory.mktemp("repo-template")
-    pkg = root / "pkg"
-    pkg.mkdir()
-    (pkg / "__init__.py").write_text("")
-    (pkg / "a.py").write_text("x = 1\n")
-    (pkg / "b.py").write_text("y = 1\n")
-    env = {**os.environ, **isolated_git_env(home)}
-    for args in (["init", "-q"], ["add", "--all"], ["commit", "-q", "-m", "init"]):
-        subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True)
-    return root
-
-
-@pytest.fixture
-def real_repo(tmp_path, isolated_git_config, committed_repo_template):
-    """A private copy of :func:`committed_repo_template`, returning ``(repo, root)``."""
-    root = tmp_path / "repo"
-    shutil.copytree(committed_repo_template, root)
-    return Repo(root), root
 
 
 def unstaged(root) -> list[str] | None:
@@ -1155,3 +1127,21 @@ def test_only_directories_are_asked_about_beside_a_submodule(repo_with_submodule
 
     assert "vendor/lib/core.py" in found and len(found) == 52
     assert ["vendor"] in asked and all(len(paths) <= 1 for paths in asked)
+
+
+def test_branch_mode_diffs_from_the_fork_point_by_default(real_repo):
+    """What the base gained since the branch forked is no change of the branch's, unless asked for."""
+    repo, root = real_repo
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+    repo.git.checkout("main")
+    (root / "pkg" / "b.py").write_text("y = 2\n")
+    commit_all(repo)
+    repo.git.checkout("feature")
+
+    assert branch(root, "main") == ["pkg/a.py"]
+    assert sorted(git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "main", use_merge_base=False)) == [
+        "pkg/a.py",
+        "pkg/b.py",
+    ]
