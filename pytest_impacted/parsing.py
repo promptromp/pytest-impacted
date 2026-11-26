@@ -43,8 +43,8 @@ def read_source(file_path: str) -> str | None:
         data = Path(file_path).read_bytes()
         encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
         return data.decode(encoding)
-    except (OSError, SyntaxError, LookupError, UnicodeDecodeError):  # unreadable; an unknown or wrong encoding
-        return None
+    except (OSError, SyntaxError, LookupError, ValueError):  # unreadable; an unknown or wrong encoding
+        return None  # ValueError: UnicodeDecodeError, and the plain UnicodeError some codecs raise (punycode)
 
 
 @contextmanager

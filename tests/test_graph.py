@@ -2812,3 +2812,25 @@ def test_a_test_module_linked_from_outside_the_rootdir_keeps_its_type_only_impor
     dep_tree = graph.build_dep_tree("app", root_dir=root, ignore_type_checking_imports=True)
 
     assert dep_tree.has_edge("app.models", "app.shared.test_x")
+
+
+@pytest.mark.parametrize(
+    ("installed", "splits", "each", "ignore", "says"),
+    [
+        (False, False, False, True, None),
+        (True, True, True, True, None),
+        (True, False, False, True, "predates ignoring type-only imports"),
+        (True, True, False, False, "predates 0.41"),
+        (True, False, False, False, "predates 0.41"),
+    ],
+    ids=["none installed", "current", "before 0.39, option given", "before 0.41", "before 0.39, no option"],
+)
+def test_an_outdated_extension_is_named_with_what_it_lacks(monkeypatch, installed, splits, each, ignore, says):
+    """The fast extra is unpinned, so an older extension is said, with why to upgrade it (the header, the CLI)."""
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", installed)
+    monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", splits)
+    monkeypatch.setattr(_rust, "RUST_PARSES_EACH", each)
+
+    message = _rust.outdated_for(ignore)
+
+    assert message is None if says is None else says in message

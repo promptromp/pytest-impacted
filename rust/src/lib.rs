@@ -20,6 +20,11 @@ const STACK: usize = 256 << 20;
 /// costlier drop in another ruff release. A larger file (generated code) is handed back to the Python side.
 const LARGEST_SOURCE: u64 = 4 << 20;
 
+/// The largest source the older dict functions parse: they read every file, an older pytest-impacted having no
+/// way to read one handed back, but a file over this (generated code) imports nothing there, rather than risk
+/// freeing a tree deeper than `STACK` holds (a 16 MiB chain did).
+const OLDER_LARGEST_SOURCE: u64 = 6 << 20;
+
 /// The pool every batch runs in, with `STACK`-sized threads; `None` when the pool cannot be built (threads
 /// refused, as under strict memory overcommit), and then rayon's global pool, as before.
 fn pool() -> Option<&'static rayon::ThreadPool> {
@@ -306,14 +311,20 @@ fn parse_file_imports(
     Ok(parse_file_imports_core(&source, module_name, is_package, false).0)
 }
 
-/// Parse each `(file_path, module_name, is_package)` in parallel, via rayon, in the pool (see `pool`). Every
-/// file is read, a large one too: an older pytest-impacted calls these, and has no way to read one handed back.
+/// Parse each `(file_path, module_name, is_package)` in parallel, via rayon, in the pool (see `pool`). A file up
+/// to `OLDER_LARGEST_SOURCE` is read, past the hand-back cap: an older pytest-impacted calls these, and has no
+/// way to read one handed back.
 fn parse_all(modules: &[(String, String, bool)], find_type_only: bool) -> Vec<(String, Split)> {
     in_pool(|| {
         modules
             .par_iter()
             .map(|(file_path, module_name, is_package)| {
-                let source = fs::read_to_string(file_path).unwrap_or_default();
+                let fits = fs::metadata(file_path).is_ok_and(|m| m.len() <= OLDER_LARGEST_SOURCE);
+                let source = if fits {
+                    fs::read_to_string(file_path).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 let split =
                     parse_file_imports_core(&source, module_name, *is_package, find_type_only);
                 (module_name.clone(), split)

@@ -82,7 +82,8 @@ def uses_rust(ignore_type_checking_imports: bool = False) -> bool:
 
 
 def outdated_for(ignore_type_checking_imports: bool) -> str | None:
-    """Why the installed extension leaves the parsing to the slower Python backend with these options, if it does.
+    """Why the installed extension should be upgraded, if it should: it leaves the parsing to the slower Python
+    backend with these options, or it predates handing back the files it cannot read.
 
     The ``fast`` extra stays unpinned: the extension's version is stamped from the release tag, and a
     development build is ``0.1.0``, which a pin would refuse. So it is said instead, by whoever reports.
@@ -91,5 +92,11 @@ def outdated_for(ignore_type_checking_imports: bool) -> str | None:
         return (
             "the installed pytest-impacted-rs predates ignoring type-only imports, so the slower pure-Python "
             "parser reads the files: upgrade it (pip install -U pytest-impacted-rs)."
+        )
+    if RUST_AVAILABLE and not RUST_PARSES_EACH:
+        return (
+            "the installed pytest-impacted-rs predates 0.41: a file it cannot read (not in UTF-8, or one its parser "
+            "rejects) imports nothing there, and a long generated expression can crash the run: upgrade it "
+            "(pip install -U pytest-impacted-rs)."
         )
     return None

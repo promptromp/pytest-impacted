@@ -19,6 +19,14 @@ from .git_helpers import write_files
 needs_each = pytest.mark.skipif(not _rust.RUST_PARSES_EACH, reason="pytest-impacted-rs predates parse_imports_each")
 
 
+@pytest.fixture
+def backend_handing_back(import_backend):
+    """``import_backend``, but an extension that cannot hand a file back (before 0.41) is not tested here."""
+    if import_backend == "rust" and not _rust.RUST_PARSES_EACH:
+        pytest.skip("pytest-impacted-rs predates parse_imports_each")
+    return import_backend
+
+
 #: Names a loader too, or the imports-by-name pass's pre-filter would never parse the file.
 HEADER = "import os\nimport importlib\nimportlib.import_module('app.core')\n"
 
@@ -52,8 +60,8 @@ FUNCTIONS = [
 @pytest.mark.parametrize(("function", "rest"), FUNCTIONS, ids=[function for function, _ in FUNCTIONS])
 @pytest.mark.parametrize("source", CRASHERS)
 def test_no_extension_function_crashes_on_a_deep_source(tmp_path, function, rest, source):
-    """In a subprocess: a stack overflow kills the process. A batch of several files runs on rayon's threads, where
-    the overflow happened (a one-file batch runs on the caller's larger stack, which hid it from earlier tests)."""
+    """In a subprocess: a stack overflow kills the process. A batch of several files ran on rayon's threads, where
+    the overflow happened (a one-file batch ran on the caller's larger stack, which hid it from earlier tests)."""
     paths = []
     for index in range(4):
         (tmp_path / f"deep{index}.py").write_text(source)
@@ -104,7 +112,7 @@ FILES = {
     ],
 )
 @pytest.mark.parametrize("ignore_type_checking_imports", [False, True], ids=["", "type-only ignored"])
-@pytest.mark.usefixtures("import_backend")
+@pytest.mark.usefixtures("backend_handing_back")
 def test_a_source_one_parser_gives_up_on_keeps_its_imports(tmp_path, source, ignore_type_checking_imports):
     """CPython compiles each of these: its imports are real, so neither backend may lose them, nor crash."""
     write_files(tmp_path, {**FILES, "tests/test_deep.py": f"from app.core import f\n{source}"})
@@ -116,6 +124,7 @@ def test_a_source_one_parser_gives_up_on_keeps_its_imports(tmp_path, source, ign
     assert dep_tree.has_edge("app.core", "tests.test_deep")
 
 
+@pytest.mark.skipif(_rust.RUST_AVAILABLE and not _rust.RUST_PARSES_EACH, reason="an extension before 0.41 crashes")
 @pytest.mark.parametrize("ignore_type_checking_imports", [False, True], ids=["", "type-only ignored"])
 def test_a_deep_module_through_the_whole_run(tmp_path, ignore_type_checking_imports):
     """End to end in a subprocess, with whichever backend is installed: no crash, and the plain module still links."""
@@ -141,7 +150,7 @@ def test_a_deep_module_through_the_whole_run(tmp_path, ignore_type_checking_impo
     assert result.returncode == 0, f"exit {result.returncode}: {result.stderr[-2000:]}"
 
 
-@pytest.mark.usefixtures("import_backend")
+@pytest.mark.usefixtures("backend_handing_back")
 def test_a_source_in_a_declared_encoding_keeps_its_imports(tmp_path):
     """PEP 263: a latin-1 file declaring so is valid Python. The extension reads UTF-8 only, and hands it back."""
     write_files(tmp_path, FILES)
@@ -180,3 +189,11 @@ def test_the_older_functions_still_read_a_large_file(tmp_path, function):
 
     imports = found["app.generated"]
     assert (imports if function == "rust_parse_all_imports" else imports[0]) == ["os"]
+
+
+@pytest.mark.parametrize("codec", ["punycode", "nosuch"])
+def test_a_source_declaring_a_codec_it_cannot_be_read_with_imports_nothing(tmp_path, codec):
+    """A cookie naming a codec that fails, or none Python knows: unreadable, logged — never a failed run."""
+    (tmp_path / "odd.py").write_bytes(f"# -*- coding: {codec} -*-\nimport os  # \xe9\n".encode("latin-1"))
+
+    assert graph.parse_file_imports(str(tmp_path / "odd.py"), "app.odd") == []

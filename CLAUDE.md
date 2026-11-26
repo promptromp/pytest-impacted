@@ -439,8 +439,10 @@ in a loop, about 64 bytes a term, which overflowed rayon's 2 MiB threads and kil
 cap keeps the need at half the stack. The type-only visitor stops at `DEEPEST` too, every import then a runtime
 one. One accepted exception: astroid gives up near 500 nested terms and its `ast` fallback keeps every import a
 runtime one, so under `--impacted-ignore-type-checking-imports` a file nested 500 to 2,000 deep keeps type-only
-edges in Python that Rust drops (the safe side; pinned in `tests/test_deep_sources.py`). Deep-source tests must run
-a batch of several files in a subprocess: a one-file batch runs on the caller's larger stack. More, only where the running Python cannot parse the file (newer syntax). A table
+edges in Python that Rust drops (the safe side; pinned in `tests/test_deep_sources.py`). Deep-source tests run a
+batch of several files in a subprocess: a crash kills the process, and before the owned pool a one-file batch ran
+on the caller's larger stack (it still does when the pool cannot be built), which hid the crash. The older dict
+functions read up to 6 MiB (`OLDER_LARGEST_SOURCE`), a larger file importing nothing there. More, only where the running Python cannot parse the file (newer syntax). A table
 an older extension cannot read (a new kind or column: ValueError, TypeError) leaves every file to that pass. Only
 UTF-8 crosses into the extension (`_rust.takes`): PyO3 raises UnicodeEncodeError on a surrogate escape, Python's
 spelling of a non-UTF-8 file name on Linux, so both dispatch points leave such a file, path or name, to Python. Check new rules over every file of a real
