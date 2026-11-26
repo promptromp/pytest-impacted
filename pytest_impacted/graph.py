@@ -11,6 +11,7 @@ from typing import NamedTuple
 import networkx as nx
 
 from pytest_impacted import _rust
+from pytest_impacted.dynamic_imports import parse_dynamic_imports
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_test_module,
@@ -770,7 +771,8 @@ def _parse_project(
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """The import candidates of every module, and the ``pytest_plugins`` edges.
 
-    Imports and declarations that name a module outside the walks add it (see
+    A module's candidates are its import statements' and those of its calls that import by name (see
+    :func:`_imports_by_name`). Imports and declarations that name a module outside the walks add it (see
     :class:`_Linker`), and its own imports and declarations are followed in turn. With
     *ignore_type_checking_imports*, the type-only imports of the files in *narrowed* are none
     (see :func:`_parse_by_role`).
@@ -787,6 +789,8 @@ def _parse_project(
     while True:
         imports |= parse({name: path for name, path in pending.items() if name not in imports})[0]
         for name, path in pending.items():
+            # Once each, as the roots are settled: where an object's module ends is found through them.
+            imports[name] = sorted({*imports[name], *_imports_by_name(linker, name, path)})
             for candidate in imports[name]:
                 linker.targets(candidate)
                 # In the fixpoint: what it finds no walk named is parsed in turn.
@@ -796,6 +800,34 @@ def _parse_project(
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
             return imports, plugin_edges
+
+
+def _imports_by_name(linker: _Linker, name: str, path: str) -> list[str]:
+    """The import candidates of the calls in module *name* that import by name (see
+    :mod:`~pytest_impacted.dynamic_imports`): each read as the import statement that imports the same.
+
+    A module named is ``import pkg.mod``. An object's path is ``from pkg.mod import Class`` for
+    ``patch("pkg.mod.Class.method")``, its module being the longest prefix naming a module in the project, as
+    ``pkgutil.resolve_name`` imports the longest one it can. When no prefix names one, as for ``os.environ`` or
+    a module deleted since, the module is the path's parent.
+    """
+    found = parse_dynamic_imports(path, import_base(name), os.path.basename(path) == "__init__.py")
+    return [
+        *found.modules,
+        *(candidate for found_path in found.objects for candidate in _import_of(linker, path, found_path)),
+    ]
+
+
+def _import_of(linker: _Linker, importer_path: str, object_path: str) -> list[str]:
+    """``from <module> import <next part>`` for *object_path*, imported by the module at *importer_path*."""
+    parts = object_path.split(".")
+    for end in range(len(parts), 0, -1):
+        module = ".".join(parts[:end])
+        if linker.targets(module) or (
+            linker.looks_locally(importer_path, module) and linker.local_targets(importer_path, module)
+        ):
+            return [module] if end == len(parts) else [module, f"{module}.{parts[end]}"]
+    return [".".join(parts[:-1]), object_path]
 
 
 def _parse_by_role(
