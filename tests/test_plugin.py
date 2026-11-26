@@ -448,3 +448,13 @@ def test_a_directory_in_a_listable_but_unsearchable_one_is_a_usage_error(tmp_pat
             validate(tmp_path)
     finally:
         locked.chmod(0o755)
+
+
+@pytest.mark.parametrize("module", [".", "./", "../app"])
+def test_validate_module_rejects_a_module_outside_the_rootdir(tmp_path, module):
+    """``.`` read as ``/`` (always a directory) and passed; ``../app`` was read as ``///app``."""
+    (tmp_path / "project").mkdir()
+    (tmp_path / "app").mkdir()
+
+    with pytest.raises(pytest.UsageError, match="names no package inside"):
+        validate_module(module, tmp_path / "project")

@@ -412,7 +412,12 @@ def _analysed_dirs(config: Config) -> list[Path]:
     resolved: a test reached through a symlink inside one is judged, by either spelling."""
     get_option = partial(get_option_from_config, config)
     module, tests_dir = get_option("impacted_module"), get_option("impacted_tests_dir")
-    named = [str(module).replace(".", os.sep), *([tests_dir] if tests_dir else [])]
+    traversal = _traversal()
+    # As the analysis reads them: ``./app`` is ``app``, a dotted tests dir ``suite.unit`` walks ``suite/unit``.
+    named = [
+        traversal.package_name_to_path(_validation().normalized_module(str(module))),
+        *([traversal.walked_directory(tests_dir)] if tests_dir else []),
+    ]
     given = [Path(os.path.abspath(config.rootpath / name)) for name in named]
     return [*given, *(_traversal().real_path(directory) for directory in given)]
 

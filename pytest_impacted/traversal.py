@@ -44,7 +44,7 @@ def unnameable_tests_dir(tests_dir: str, root: Path) -> str | None:
 
     The tests dir travels as a dotted name (:func:`walked_directory`): a directory named ``tests.unit`` would be
     walked as ``tests/unit``, and ``../tests`` as nothing, deselecting every test. A dotted spelling of a real
-    path (``tests.unit`` for ``tests/unit``, which the CLI accepts) names no directory itself, and passes.
+    path (``tests.unit`` for ``tests/unit``, which both front ends accept) names no directory itself, and passes.
     """
     given, walked = root / tests_dir, root / walked_directory(tests_dir)
     if not os.path.isdir(given) or (

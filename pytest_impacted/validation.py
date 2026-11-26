@@ -18,7 +18,10 @@ def normalized_module(module: str) -> str:
 def module_problem(module: str, root: Path, flag: str) -> str | None:
     """Why *module* (given with *flag*) names no package directory under *root*, with a likely fix; ``None`` if it
     does. A path (``src/app``, ``./app``) or a dotted name (``src.app``)."""
-    module_dir = package_name_to_path(normalized_module(module))
+    normalized = normalized_module(module)
+    if normalized in ("", ".") or normalized.split("/")[0] == "..":
+        return f"Module '{module}' names no package inside '{root}': give its path inside the rootdir ({flag}=app)."
+    module_dir = package_name_to_path(normalized)
     # os.path, not Path.is_dir(): inside an unsearchable directory it is missing, rather than raising.
     if os.path.isdir(root / module_dir):
         return None
