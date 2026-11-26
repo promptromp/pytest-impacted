@@ -814,20 +814,24 @@ def _imports_by_name(linker: _Linker, name: str, path: str) -> list[str]:
     return [
         *found.modules,
         *(candidate for found_path in found.objects for candidate in _import_of(linker, found_path)),
+        *(candidate for found_path in found.attributes for candidate in _import_of(linker, found_path, attribute=True)),
     ]
 
 
-def _import_of(linker: _Linker, object_path: str) -> list[str]:
+def _import_of(linker: _Linker, object_path: str, *, attribute: bool = False) -> list[str]:
     """The candidates of *object_path*: its longest prefix naming a module in the project, and every longer one.
 
-    The longer ones name no module, so they link nothing, but they keep its name in ``graph["unresolved"]``
-    for a module deleted since. Which part of ``helpers.Factory.make`` was the deleted module, only the import
-    statement could tell. A path that no module of the project starts, such as ``os.environ``, keeps all its
-    prefixes, its first part included: like every candidate, that one is looked up beside the importer too
-    (pytest's basedirs: ``helpers.func`` beside a test).
+    An *attribute*'s module is a prefix of the path before it: ``patch("app.utils.helper")`` replaces ``helper``
+    on ``app.utils``, which is ``app/utils.py`` even beside an ``app/utils/helper.py``. The longer ones name no
+    module, so they link nothing, but they keep its name in ``graph["unresolved"]`` for a module deleted since:
+    which part of ``helpers.Factory.make`` the deleted module was, only the import statement could tell. A path
+    that no module of the project starts, such as ``os.environ``, keeps all its prefixes, its first part
+    included: like every candidate, that one is looked up beside the importer too (pytest's basedirs:
+    ``helpers.func`` beside a test).
     """
     parts = object_path.split(".")
-    end = next((end for end in range(len(parts), 1, -1) if linker.targets(".".join(parts[:end]))), 1)
+    longest = len(parts) - 1 if attribute else len(parts)
+    end = next((end for end in range(longest, 1, -1) if linker.targets(".".join(parts[:end]))), 1)
     return [".".join(parts[:longer]) for longer in range(end, len(parts) + 1)]
 
 

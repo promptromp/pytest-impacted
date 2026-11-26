@@ -19,7 +19,11 @@ def parse(tmp_path):
     return parse
 
 
-NOTHING = DynamicImports([], [])
+def found(modules=(), objects=(), attributes=()):
+    return DynamicImports(list(modules), list(objects), list(attributes))
+
+
+NOTHING = found()
 
 
 @pytest.mark.parametrize(
@@ -61,7 +65,7 @@ NOTHING = DynamicImports([], [])
     ],
 )
 def test_a_module_named_to_a_loader_is_imported(parse, source):
-    assert parse(source) == DynamicImports(["app.target"], [])
+    assert parse(source) == found(modules=["app.target"])
 
 
 @pytest.mark.parametrize(
@@ -77,7 +81,7 @@ def test_a_module_named_to_a_loader_is_imported(parse, source):
 def test_a_relative_name_resolves_against_its_anchor(parse, source, module, is_package, expected):
     source = "from importlib import import_module\n" + source
 
-    assert parse(source, module, is_package) == DynamicImports([expected], [])
+    assert parse(source, module, is_package) == found(modules=[expected])
 
 
 @pytest.mark.parametrize(
@@ -91,13 +95,13 @@ def test_a_relative_name_resolves_against_its_anchor(parse, source, module, is_p
 )
 def test_import_s_fromlist_names_submodules_too(parse, source, expected):
     """As ``from app import target`` does: ``target`` may be a submodule, which only the project can tell."""
-    assert parse(source) == DynamicImports(expected, [])
+    assert parse(source) == found(modules=expected)
 
 
 @pytest.mark.parametrize(
     "source",
     [
-        # unittest.mock's patchers, under every spelling
+        # unittest.mock's patch, under every spelling
         "from unittest import mock\nmock.patch('app.target.VALUE')",
         "from unittest.mock import patch\npatch('app.target.VALUE')",
         "from unittest.mock import patch as replace\nreplace('app.target.VALUE')",
@@ -106,11 +110,8 @@ def test_import_s_fromlist_names_submodules_too(parse, source, expected):
         "from unittest.mock import patch\n@patch('app.target.VALUE')\ndef test(value):\n    pass",
         "from unittest.mock import patch\ndef test():\n    with patch('app.target.VALUE', 2):\n        pass",
         "from unittest.mock import patch\npatch(target='app.target.VALUE')",
-        "from unittest.mock import patch\npatch.dict('app.target.VALUE', {})",
-        "from unittest.mock import patch\npatch.multiple('app.target.VALUE', x=1)",
         # pytest-mock's fixture, whatever it is called
         "def test(mocker):\n    mocker.patch('app.target.VALUE')",
-        "def test(mocker):\n    mocker.patch.dict('app.target.VALUE', {})",
         "def test(module_mocker):\n    module_mocker.patch('app.target.VALUE')",
         # pytest's monkeypatch, with a string target
         "def test(monkeypatch):\n    monkeypatch.setattr('app.target.VALUE', 2)",
@@ -118,12 +119,38 @@ def test_import_s_fromlist_names_submodules_too(parse, source, expected):
         "def test(monkeypatch):\n    with monkeypatch.context() as m:\n        m.setattr('app.target.VALUE', 2)",
         "import pytest\nwith pytest.MonkeyPatch.context() as mp:\n    mp.setattr('app.target.VALUE', 2)",
         "import pytest\npytest.MonkeyPatch().setattr('app.target.VALUE', 2)",
-        # pkgutil.resolve_name without a colon: where the module ends, only the project can tell
+    ],
+)
+def test_an_attribute_path_named_to_a_loader_is_imported(parse, source):
+    """``patch`` and ``monkeypatch`` split off the last part as the attribute to replace, on what the rest names."""
+    assert parse(source) == found(attributes=["app.target.VALUE"])
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from unittest.mock import patch\npatch.dict('app.target.VALUE', {})",
+        "from unittest.mock import patch\npatch.multiple('app.target.VALUE', x=1)",
+        "def test(mocker):\n    mocker.patch.dict('app.target.VALUE', {})",
+        # without a colon: where the module ends, only the project can tell
         "import pkgutil\npkgutil.resolve_name('app.target.VALUE')",
     ],
 )
 def test_an_object_path_named_to_a_loader_is_imported(parse, source):
-    assert parse(source) == DynamicImports([], ["app.target.VALUE"])
+    """These import their argument whole: the module is its longest importable prefix."""
+    assert parse(source) == found(objects=["app.target.VALUE"])
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import pkgutil\npkgutil.resolve_name('plugins')",
+        "from unittest.mock import patch\npatch.multiple('plugins', DEBUG=True)",
+    ],
+)
+def test_an_object_path_of_one_part_is_a_module(parse, source):
+    """``resolve_name("plugins")`` imports ``plugins``: with no dot, nothing in it is an attribute."""
+    assert parse(source) == found(modules=["plugins"])
 
 
 def test_every_call_counts_once(parse):
@@ -133,7 +160,7 @@ def test_every_call_counts_once(parse):
         "patch('app.c.x')\npatch('app.c.x')\n"
     )
 
-    assert parse(source) == DynamicImports(["app.a", "app.b"], ["app.c.x"])
+    assert parse(source) == found(modules=["app.a", "app.b"], attributes=["app.c.x"])
 
 
 @pytest.mark.parametrize(
@@ -176,10 +203,9 @@ def test_every_call_counts_once(parse):
         "def import_module(name):\n    pass\nimport_module('app.target')",  # not importlib's
         "from loaders import import_module\nimport_module('app.target')",
         "import pytest\npytest.param('app.target')",
-        # an object path of one part names nothing in a module: another API's method of the same name
+        # an attribute path of one part names nothing: another API's method of the same name
         "def configure(config):\n    config.setattr('settings', 1)",
         "def routes(client):\n    client.patch('health')",
-        "import pkgutil\npkgutil.resolve_name('app')",
         # a loader whose origin is not followed: re-exported by another module, star-imported, assigned
         "from .compat import import_module\nimport_module('app.target')",
         "from importlib import *\nimport_module('app.target')",
@@ -210,20 +236,14 @@ def test_every_loader_is_read(parse, loader, by):
     )
     source = imports + call
 
-    found = parse(source)
-
-    expected = (
-        DynamicImports(["app.target.VALUE"], [])
-        if loader.names is Names.MODULE
-        else DynamicImports([], ["app.target.VALUE"])
-    )
-    assert found == expected
+    kind = {Names.MODULE: "modules", Names.OBJECT: "objects", Names.ATTRIBUTE: "attributes"}[loader.names]
+    assert parse(source) == found(**{kind: ["app.target.VALUE"]})
 
 
 def test_the_module_is_never_run(parse):
     source = "raise SystemExit('ran')\nimport importlib\nimportlib.import_module('app.target')\n"
 
-    assert parse(source) == DynamicImports(["app.target"], [])
+    assert parse(source) == found(modules=["app.target"])
 
 
 def test_a_file_that_cannot_be_read_or_parsed_imports_nothing(tmp_path, parse):
@@ -237,14 +257,14 @@ def test_a_warning_turned_error_hides_no_import(parse):
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert parse(source) == DynamicImports(["app.target"], [])
+        assert parse(source) == found(modules=["app.target"])
 
 
 @pytest.mark.parametrize(
     ("source", "imported"),
     [
         ("x = " + "[" * 5000 + "]" * 5000 + "\nimport importlib\n", NOTHING),
-        ("import importlib\nx = " + " + ".join(["importlib.import_module('a.b')"] * 3000), DynamicImports(["a.b"], [])),
+        ("import importlib\nx = " + " + ".join(["importlib.import_module('a.b')"] * 3000), found(modules=["a.b"])),
         ("import importlib\nimportlib" + ".attribute" * 3000 + ".import_module('a.b')", NOTHING),
     ],
     ids=["deep nesting", "a long concatenation", "a long attribute chain"],

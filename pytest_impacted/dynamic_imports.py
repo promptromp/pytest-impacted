@@ -25,7 +25,10 @@ class Names(Enum):
     """What a loader's string argument names."""
 
     MODULE = auto()  # a module: ``import_module("pkg.mod")``
-    OBJECT = auto()  # something in a module: ``patch("pkg.mod.func")``, or ``resolve_name("pkg.mod:func")``
+    # An object, in the module its longest importable prefix names: ``resolve_name("pkg.mod.Class")``.
+    OBJECT = auto()
+    # An attribute of what the path before it names: ``patch("pkg.mod.func")`` replaces ``func`` on ``pkg.mod``.
+    ATTRIBUTE = auto()
 
 
 @dataclass(frozen=True)
@@ -43,10 +46,10 @@ class Loader:
     *callee* is matched against the end of the name a call calls, after resolving the module's import aliases.
     ``importlib.import_module`` matches that function under any name an absolute import gives it, but not one
     re-exported by another module, star-imported or assigned, whose origin is not followed. A bare ``patch``
-    matches ``mock.patch``,
-    ``unittest.mock.patch`` and ``mocker.patch`` alike: fixtures and context managers hand a patcher out under
-    any name. *package* anchors a relative name. *fromlist* names submodules imported too. *level* makes the
-    import relative to its caller's package unless it is 0, and a relative one is not followed.
+    matches ``mock.patch``, ``unittest.mock.patch`` and ``mocker.patch`` alike: fixtures and context managers
+    hand a patcher out under any name. *package* anchors a relative name. *fromlist* names submodules imported
+    too. *level* makes the import relative to its caller's package unless it is 0, and a relative one is not
+    followed.
     """
 
     callee: str
@@ -65,26 +68,29 @@ LOADERS: tuple[Loader, ...] = (
     ),
     Loader("runpy.run_module", Argument(0, "mod_name"), Names.MODULE),
     Loader("pkgutil.resolve_name", Argument(0, "name"), Names.OBJECT),
-    # unittest.mock's patchers, also those of the ``mock`` backport and of pytest-mock's ``mocker``.
-    Loader("patch", Argument(0, "target"), Names.OBJECT),
+    # unittest.mock's patchers, also those of the ``mock`` backport and of pytest-mock's ``mocker``. ``patch``
+    # splits its target as ``target.rsplit(".", 1)``; the others import theirs whole.
+    Loader("patch", Argument(0, "target"), Names.ATTRIBUTE),
     Loader("patch.dict", Argument(0, "in_dict"), Names.OBJECT),
     Loader("patch.multiple", Argument(0, "target"), Names.OBJECT),
     # pytest's helpers: ``monkeypatch.setattr("pkg.mod.attr", value)`` imports ``pkg.mod``.
     Loader("pytest.importorskip", Argument(0, "modname"), Names.MODULE),
-    Loader("setattr", Argument(0, "target"), Names.OBJECT),
-    Loader("delattr", Argument(0, "target"), Names.OBJECT),
+    Loader("setattr", Argument(0, "target"), Names.ATTRIBUTE),
+    Loader("delattr", Argument(0, "target"), Names.ATTRIBUTE),
 )
 
 
 class DynamicImports(NamedTuple):
     """What a file's loader calls import.
 
-    *modules*: modules, by name. *objects*: dotted paths to something inside a module, where only the project
-    can tell which prefix is the module (``pkg.mod.Class.method``).
+    *modules*: modules, by name. *objects* and *attributes*: dotted paths to something inside a module, where
+    only the project can tell which prefix is the module (``pkg.mod.Class.method``). An attribute's module is a
+    prefix of the path before its last part.
     """
 
     modules: list[str]
     objects: list[str]
+    attributes: list[str]
 
 
 _CALLEES = frozenset(loader.callee for loader in LOADERS)
@@ -109,17 +115,14 @@ def parse_dynamic_imports(file_path: str, module_name: str, is_package: bool = F
     """
     source = read_source(file_path)
     if source is None or not _SPELLED.search(source):  # cheap pre-filter
-        return DynamicImports([], [])
+        return DynamicImports([], [], [])
     try:
         with _quiet_parse():
             tree = ast.parse(source)
         found = set(_imports(tree, module_name, is_package))
     except (SyntaxError, ValueError, RecursionError):  # RecursionError: e.g. a 3000-term attribute chain
-        return DynamicImports([], [])
-    return DynamicImports(
-        sorted(name for kind, name in found if kind is Names.MODULE),
-        sorted(name for kind, name in found if kind is Names.OBJECT),
-    )
+        return DynamicImports([], [], [])
+    return DynamicImports(*(sorted(name for kind, name in found if kind is names) for names in Names))
 
 
 def _imports(tree: ast.Module, module_name: str, is_package: bool) -> Iterator[tuple[Names, str]]:
@@ -192,8 +195,8 @@ def _named(call: ast.Call, loader: Loader, module_name: str, is_package: bool) -
     text = _literal(_argument(call, loader.name))
     if text is None or (loader.level and not _is_zero(_argument(call, loader.level))):
         return
-    if loader.names is Names.OBJECT:
-        yield from _object(text)
+    if loader.names is not Names.MODULE:
+        yield from _path(text, loader.names)
         return
     anchor = _anchor(_argument(call, loader.package), module_name, is_package) if loader.package else None
     if (name := _absolute(text, anchor)) is None:
@@ -206,18 +209,22 @@ def _named(call: ast.Call, loader: Loader, module_name: str, is_package: bool) -
                 yield Names.MODULE, f"{name}.{submodule}"
 
 
-def _object(text: str) -> Iterator[tuple[Names, str]]:
-    """What an object path names: its module, before a ``:``; else the path itself.
+def _path(text: str, names: Names) -> Iterator[tuple[Names, str]]:
+    """What an object or attribute path names: the module before a ``:``; else the path itself.
 
-    A path of one part names nothing inside a module. The patchers and ``monkeypatch`` take no such target, and
-    their rows match any receiver, so ``config.setattr("settings", value)`` is some other API's call.
+    An attribute path of one part names nothing: ``patch`` and ``monkeypatch`` split off its attribute and fail
+    without a dot, and their rows match any receiver, so ``config.setattr("settings", value)`` is some other
+    API's. An object path of one part is a module (``resolve_name("plugins")``).
     """
     module, colon, attributes = text.partition(":")
     if colon:
         if _dotted(module) and (not attributes or _dotted(attributes)):
             yield Names.MODULE, module
-    elif _dotted(text) and "." in text:
-        yield Names.OBJECT, text
+    elif _dotted(text):
+        if "." in text:
+            yield names, text
+        elif names is Names.OBJECT:
+            yield Names.MODULE, text
 
 
 def _absolute(name: str, anchor: str | None) -> str | None:

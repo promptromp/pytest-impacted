@@ -36,25 +36,45 @@ def test_a_module_named_is_a_plain_edge(tmp_path):
     assert dep_tree.edges["app.target", "app.loader"] == {}  # placed and linked as an import statement's
 
 
+PACKAGE_WITH_SUBPACKAGE = {
+    "app/target.py": TARGET,
+    "app/sub/__init__.py": "from app.sub.mod import func\n",
+    "app/sub/mod.py": "def func():\n    pass\n",
+}
+
+
+def patching(call):
+    return {"suite/test_patching.py": f"from unittest import mock\n\n@{call}\ndef test_it(m):\n    pass\n"}
+
+
 @pytest.mark.parametrize(
-    ("path", "module"),
+    ("call", "modules"),
     [
-        ("app.target.VALUE", "app.target"),
-        ("app.target.Model.save", "app.target"),  # the longest prefix that is a module
-        ("app.sub.mod.func", "app.sub.mod"),  # not the subpackage, whose __init__ imports whatever it re-exports
-        ("app.sub", "app.sub"),  # a module itself (patch.multiple)
-        ("app.CONSTANT", "app"),  # an attribute of the package's own __init__
+        ("mock.patch('app.target.VALUE')", {"app.target"}),
+        ("mock.patch('app.target.Model.save')", {"app.target"}),  # the longest prefix that is a module
+        ("mock.patch('app.sub.mod.func')", {"app.sub.mod"}),  # not the subpackage, whose __init__ re-exports
+        ("mock.patch('app.CONSTANT')", {"app"}),  # an attribute of the package's own __init__
+        ("mock.patch('app.sub')", {"app", "app.sub"}),  # the attribute sub of app: from app import sub
+        ("mock.patch.multiple('app.sub', func=None)", {"app.sub"}),  # a whole object path, here a module
+        ("mock.patch.dict('app.target.TABLE')", {"app.target"}),
     ],
 )
-def test_an_object_path_is_an_import_of_its_module(tmp_path, path, module):
-    files = {
-        "app/target.py": TARGET,
-        "app/sub/__init__.py": "from app.sub.mod import func\n",
-        "app/sub/mod.py": "def func():\n    pass\n",
-        "suite/test_patching.py": f"from unittest import mock\n\n@mock.patch('{path}')\ndef test_it(m):\n    pass\n",
-    }
+def test_an_object_path_is_an_import_of_its_module(tmp_path, call, modules):
+    dep_tree = build(tmp_path, {**PACKAGE_WITH_SUBPACKAGE, **patching(call)})
 
-    assert imports_of(build(tmp_path, files), "suite.test_patching") == {module}
+    assert imports_of(dep_tree, "suite.test_patching") == modules
+
+
+def test_an_attribute_s_module_is_the_path_before_it(tmp_path):
+    """``patch`` replaces the attribute ``helper`` on ``app.utils``, which Python imports from ``app/utils.py``
+    even beside an ``app/utils/`` holding ``helper.py``: the same as ``from app.utils import helper``."""
+    files = {"app/utils.py": "def helper():\n    pass\n", "app/utils/helper.py": ""}
+    by_name = build(tmp_path / "by_name", {**files, **patching("mock.patch('app.utils.helper')")})
+    statement = {"suite/test_patching.py": "from app.utils import helper\n\ndef test_it():\n    pass\n"}
+    by_statement = build(tmp_path / "by_statement", {**files, **statement})
+
+    assert imports_of(by_name, "suite.test_patching") == imports_of(by_statement, "suite.test_patching")
+    assert "app.utils" in imports_of(by_name, "suite.test_patching")
 
 
 @pytest.mark.parametrize(
@@ -164,6 +184,7 @@ FORMS = {
         "from app.target import VALUE",
     ),
     "patch": ("from unittest import mock\nmock.patch('app.target.VALUE')", "from app.target import VALUE"),
+    "patch, a submodule": ("from unittest import mock\nmock.patch('app.target')", "from app import target"),
     "patch, nested": ("from unittest import mock\nmock.patch('app.target.Model.save')", "from app.target import Model"),
     "patch.dict": (
         "from unittest import mock\nmock.patch.dict('app.target.TABLE', {})",

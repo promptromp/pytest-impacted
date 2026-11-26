@@ -372,31 +372,29 @@ emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg
 disk (`_Linker`), instead. The apparent
 over-emission is the design, not a bug.
 
-**Imports by name are import candidates** (`dynamic_imports.py`). These are the literal arguments of the calls in
-`LOADERS`:
-- the standard library's importers: `importlib.import_module`, `__import__`, `runpy.run_module`, `pkgutil.resolve_name`
-- the mock patchers: `patch`, `patch.dict` and `patch.multiple`, `mocker`'s too
-- pytest's: `importorskip`, and `monkeypatch.setattr`/`delattr` with a string target
-
-The table is data, read by one mechanism. A `Loader.callee` matches the end of the call's name after resolving
-absolute-import aliases (unioned over scopes); a re-export, star import or assignment is not followed. A bare
-`patch` therefore matches any receiver (fixtures, `with monkeypatch.context() as m`), while
-`importlib.import_module` needs that function. So an object path needs a dot: `config.setattr("settings", v)`
-is another API's call, and as a plain edge it could make a test helper application code. Add an API as a row,
-never as a branch. The maintainer
+**Imports by name are import candidates** (`dynamic_imports.py`): the literal arguments of the calls in the
+`LOADERS` table. The table is data, read by one mechanism: add an API as a row, never as a branch. The maintainer
 chose this curated table over a broad rule ("any string spelling a project module"), which measured +13% tests on
-pydantic, about 99% of it noise. Like `parse_pytest_plugins`, it is parsed with stdlib `ast` outside the backends,
-behind a word pre-filter: a file calling a loader spells its name, at the call or at the import.
+pydantic, about 99% of it noise. A `Loader.callee` matches the end of the call's name after resolving
+absolute-import aliases (unioned over scopes); a re-export, star import or assignment is not followed. So a bare
+`patch`/`setattr`/`delattr` matches any receiver (fixtures, `with monkeypatch.context() as m`), and another API's
+method of that name with a dotted literal becomes a plain edge. From application code, that edge could place a
+test helper as application code, turning its conftest rule opt-in. That never happened in six measured projects,
+where application code's by-name edges all reach application modules: a documented trade-off, not a reach-only
+flag. Those rows are `Names.ATTRIBUTE`, since mock and monkeypatch split `target.rsplit(".", 1)`: the path needs a
+dot, and its module is a prefix of the path before the attribute. `Names.OBJECT` rows import the whole path. Like
+`parse_pytest_plugins`, it is parsed with stdlib `ast` outside the backends, behind a word pre-filter: a file
+calling a loader spells its name, at the call or at the import.
 
-In the graph (`_imports_by_name`), a module name reads as `import pkg.mod`. An object path's candidates are its
-longest prefix that `linker.targets`/`local_targets` resolve (as `pkgutil.resolve_name` imports the longest it
-can), else its first part, plus every longer prefix. The longer ones link nothing, but they keep a deleted
-module's name in `graph["unresolved"]`, whichever part of `helpers.Factory.make` it was. Placement, deleted
-targets and basedir edges then behave exactly as for the static statement.
-`test_an_import_by_name_selects_as_the_import_statement_does` pins that for every form, place and change, and
-`test_a_nested_path_selects_as_the_import_statement_does` pins it for every layout.
-They are added after `linker.activate`: only static imports are evidence of an assumed root. Only literals count;
-a computed name is no import.
+In the graph (`_imports_by_name`), a module name reads as `import pkg.mod`. An object or attribute path's
+candidates are its longest prefix `linker.targets` resolves, else its first part, plus every longer prefix; each
+is then looked up through pytest's basedirs like any candidate. The longer ones link nothing, but they keep a
+deleted module's name in `graph["unresolved"]`, whichever part of `helpers.Factory.make` it was. So placement,
+deleted targets and basedir edges behave exactly as for the static statement, which the integration tests pin
+for every form, place, layout and change. One known corner: an object path (`resolve_name`) through a module
+beside a same-named directory resolves to the directory's file, which the walk names though Python imports the
+module. They are added after `linker.activate`: only static imports are evidence of an assumed root. Only literals
+count; a computed name is no import.
 
 **The `impacted-tests` CLI reads the pytest configuration through `ini.py`, never a pytest
 `Config`**: building one imports the initial conftests, which is running project code. `ini.py`
