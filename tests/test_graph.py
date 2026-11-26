@@ -2729,3 +2729,62 @@ def test_a_test_module_inside_the_package_keeps_its_type_only_imports(tmp_path, 
 
     (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / importer).resolve())]
     assert dep_tree.has_edge("pkg.models", node)
+
+
+@pytest.mark.parametrize("ignore_type_checking_imports", [False, True], ids=["", "type-only ignored"])
+@pytest.mark.usefixtures("import_backend")
+def test_only_a_file_named_init_is_a_package(tmp_path, ignore_type_checking_imports):
+    """``test__init__.py`` ends in ``__init__.py`` but is a module: its relative imports resolve from its package."""
+    write_files(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/core.py": "X = 1\n",
+            "tests/__init__.py": "",
+            "tests/helpers.py": "from app.core import X\n",
+            "tests/test__init__.py": "from .helpers import X\n",
+        },
+    )
+
+    dep_tree = graph.build_dep_tree(
+        "app", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=ignore_type_checking_imports
+    )
+
+    assert dep_tree.has_edge("tests.helpers", "tests.test__init__")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_symlink_loop_in_the_tests_dir_is_no_module(tmp_path):
+    """``Path.resolve()`` raises on a loop before Python 3.13; a loop names no file, so it is no node."""
+    write_files(tmp_path, {"app/__init__.py": "", "tests/test_core.py": "import app\n"})
+    os.symlink("loop.py", tmp_path / "tests" / "loop.py")
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert "tests.test_core" in dep_tree
+    assert "tests.loop" not in dep_tree
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_changed_symlink_loop_links_nothing(tmp_path):
+    """git reports an untracked loop like any file; the run must go on, whatever its name."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/core.py": "X = 1\n"})
+    for name in ("current", "gone.py"):
+        os.symlink(name, tmp_path / name)
+    dep_tree = run_copy(graph.build_dep_tree("app", root_dir=tmp_path))
+
+    assert graph.link_changed_files(["current", "gone.py", "app/core.py"], dep_tree, root_dir=tmp_path) == []
+    assert resolve_files_to_modules(["gone.py", "app/core.py"], "app", root_dir=tmp_path) == ["app.core"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_ignoring_type_only_imports_with_a_package_linked_from_outside_the_rootdir(tmp_path):
+    """The package walk follows a symlinked sub-package out of the rootdir; no file out there is a test file."""
+    root, outside = tmp_path / "project", tmp_path / "elsewhere"
+    write_files(outside, {"shared/__init__.py": "", "shared/util.py": "X = 1\n"})
+    write_files(root, {"app/__init__.py": "", "tests/test_util.py": "from app.shared.util import X\n"})
+    os.symlink(outside / "shared", root / "app" / "shared", target_is_directory=True)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=root, ignore_type_checking_imports=True)
+
+    assert dep_tree.has_edge("app.shared.util", "tests.test_util")

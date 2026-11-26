@@ -29,7 +29,7 @@ from pytest_impacted.git import (
     rev_args,
 )
 from pytest_impacted.strategies import parse_invalidation_patterns
-from pytest_impacted.traversal import canonical_root
+from pytest_impacted.traversal import canonical_root, unnameable_tests_dir
 
 
 class Unimpacted(StrEnum):
@@ -727,6 +727,8 @@ def validate_tests_dir(tests_dir: str, root_dir: Path) -> None:
             f"Tests directory '{tests_dir}' does not exist under '{root_dir}'. "
             f"Please check the path passed to --impacted-tests-dir."
         )
+    if reason := unnameable_tests_dir(tests_dir, root_dir):
+        raise UsageError(reason)
 
 
 def validate_base_branch(base_branch: str, root_dir: str) -> None:

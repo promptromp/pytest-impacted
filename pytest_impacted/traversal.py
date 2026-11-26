@@ -30,6 +30,32 @@ def path_to_package_name(path: Path | str) -> str:
     return ".".join(Path(normalized).parts)
 
 
+def walked_directory(tests_dir: str | Path) -> str:
+    """The directory the analysis walks for *tests_dir*, which travels as the dotted name it turns into.
+
+    ``tests/unit`` for ``tests/unit``; but ``tests/unit`` for a directory named ``tests.unit`` too, and nothing
+    under the rootdir for ``../tests`` or ``.tests``: front ends check that it is the directory they were given.
+    """
+    return package_name_to_path(path_to_package_name(tests_dir))
+
+
+def unnameable_tests_dir(tests_dir: str, root: Path) -> str | None:
+    """Why the directory *tests_dir* names under *root* is not the one the analysis would walk, if it is not.
+
+    The tests dir travels as a dotted name (:func:`walked_directory`): a directory named ``tests.unit`` would be
+    walked as ``tests/unit``, and ``../tests`` as nothing, deselecting every test. A dotted spelling of a real
+    path (``tests.unit`` for ``tests/unit``, which the CLI accepts) names no directory itself, and passes.
+    """
+    given, walked = root / tests_dir, root / walked_directory(tests_dir)
+    if not os.path.isdir(given) or (os.path.isdir(walked) and os.path.samefile(given, walked)):
+        return None
+    return (
+        f"Tests directory '{tests_dir}' cannot be analysed as given: the analysis carries it as a dotted name, which "
+        "a '.' in a directory name, or a path outside the rootdir, does not survive. Name it by its path inside the "
+        "rootdir."
+    )
+
+
 def canonical_root(root_dir: str | Path | None) -> Path:
     """Resolve *root_dir* (default: the current directory) to one canonical absolute path.
 
@@ -218,7 +244,10 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
 
     results: dict[str, str] = {}
     for py_file in base_path.rglob("*.py"):
-        results[".".join(module_parts(py_file.relative_to(base_path.parent)))] = str(py_file.resolve())
+        # A regular file only: a symlink loop or a named pipe called ``*.py`` is no module, and reading a pipe
+        # would block the run. os.path.realpath, not Path.resolve(), which raises on a loop before Python 3.13.
+        if os.path.isfile(py_file):
+            results[".".join(module_parts(py_file.relative_to(base_path.parent)))] = os.path.realpath(py_file)
 
     return results
 
@@ -844,7 +873,7 @@ def modules_for_files(
         if not file.endswith(".py"):
             continue
 
-        abs_path = str((root / file).resolve())
+        abs_path = os.path.realpath(root / file)  # not Path.resolve(): it raises on a symlink loop before 3.13
         if abs_path in path_to_module:
             resolved_modules.append(path_to_module[abs_path])
         elif not os.path.exists(abs_path):

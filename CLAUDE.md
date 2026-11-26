@@ -71,7 +71,9 @@ That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
 modules (never raise — it would be an INTERNALERROR), and a symlinked portion is followed
 only while it stays inside the project and does not point back up the tree. Check files with
 `os.path.isfile`/`exists`, never `Path.exists()`/`is_file()`: on Python 3.11–3.13 those raise
-`PermissionError` inside a listable but unsearchable directory, where `os.path` says False.
+`PermissionError` inside a listable but unsearchable directory, where `os.path` says False. Likewise resolve a
+project file with `os.path.realpath`, never `Path.resolve()`, which raises on a symlink loop before 3.13, and
+tell a package by `parsing.is_package_file` (the basename), never `endswith("__init__.py")` (`test__init__.py`).
 
 **One file is one graph node, under one canonical name.** `_discover_project` (behind the
 public `discover_project_modules`) is the only place the package walk, the tests-dir walk

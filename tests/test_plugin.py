@@ -192,6 +192,16 @@ def testvalidate_tests_dir_valid():
     validate_tests_dir("tests", Path.cwd())  # Should not raise
 
 
+@pytest.mark.parametrize("tests_dir", ["tests.unit", ".tests", "../tests"])
+def test_validate_tests_dir_rejects_a_directory_the_analysis_cannot_name(tmp_path, tests_dir):
+    """The tests dir travels as a dotted name: ``tests.unit`` would be walked as ``tests/unit``, finding nothing."""
+    (tmp_path / "project").mkdir()
+    (tmp_path / "project" / tests_dir).mkdir(parents=True)
+
+    with pytest.raises(pytest.UsageError, match="its path inside the rootdir"):
+        validate_tests_dir(tests_dir, tmp_path / "project")
+
+
 def testvalidate_tests_dir_without_init(tmp_path):
     """Test that a tests directory without __init__.py passes validation."""
     test_dir = tmp_path / "my_tests"
