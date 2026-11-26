@@ -286,8 +286,11 @@ class _PackageWalk:
             if os.path.isfile(os.path.join(directory.path, name, "__init__.py")):
                 continue
             portion = self.enter(directory, name)
-            # _is_walkable_link_target, from the real paths at hand: a directory is never inside its own child.
-            if portion.inside and (portion.derived or not Path(directory.real).is_relative_to(portion.real)):
+            # A non-link is inside the project when its directory is, and never above it; a link is checked.
+            safe = (
+                portion.inside if portion.derived else _is_walkable_link_target(portion.path, directory.real, self.root)
+            )
+            if safe:
                 portions.append((name, portion))
         return portions
 
@@ -300,7 +303,7 @@ def _listing(directory: str) -> list[str]:
         return []
 
 
-def _is_walkable_link_target(path: Path, real_parent: Path, root: Path) -> bool:
+def _is_walkable_link_target(path: str | Path, real_parent: str | Path, root: Path) -> bool:
     """Whether a namespace portion's real location is safe to walk.
 
     Before namespace portions were walked, a directory without ``__init__.py`` was
@@ -310,7 +313,7 @@ def _is_walkable_link_target(path: Path, real_parent: Path, root: Path) -> bool:
     changed project file under that name, so both are skipped.
     """
     real = Path(os.path.realpath(path))
-    return real.is_relative_to(root) and not real_parent.is_relative_to(real)
+    return real.is_relative_to(root) and not Path(real_parent).is_relative_to(real)
 
 
 def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:

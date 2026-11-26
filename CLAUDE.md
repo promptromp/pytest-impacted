@@ -69,9 +69,9 @@ a parser as a backend, never as a branch in `graph.py`.
 what `pkgutil.iter_modules` lists, a non-package prefix like `src/` dropped, plus the package's own `__init__.py`
 (`pkgutil` lists children only; without it `from pkg import X` had no edge). `_PackageWalk` mirrors
 `pkgutil._iter_file_finder_modules` rule for rule (an `__init__` of any suffix makes a package, only a dot bars a
-directory, a module needs a regular `<name>.py`) rather than calling it, listing each directory once and taking a
-non-link's real path from its directory's (POSIX only: Windows' `realpath` resolves junctions): `pkgutil` and a
-`realpath` per entry took 0.45 s of Django's 1.0 s build (0.08 s now). `False` walks test directories, naming modules
+directory, a module needs a regular `<name>.py`) rather than calling it, which lists each directory twice: it lists
+each once and takes a non-link's real path from its directory's (POSIX only: Windows' `realpath` resolves
+junctions), never a `realpath` per entry. `False` walks test directories, naming modules
 by path (`os.walk`, following symlinked directories as pytest does, under the package walk's guards; a file reached
 twice is one node, named not through the link). The wrong mode silently names modules differently (`app.tests.x`
 vs `tests.x`) or skips non-identifier directories (`my-dir/`). `True` also walks directories *without*
