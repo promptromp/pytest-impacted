@@ -365,23 +365,29 @@ def test_the_extension_reads_every_ordinary_source_itself(tmp_path, source):
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("source", "by_the_stdlib"),
     [
-        "import importlib\nimportlib.import_module('app.target')\nf(a=1, a=2)\n",  # the compiler's error, not ast's
-        "import importlib\nclass C(metaclass=a, metaclass=b):\n    importlib.import_module('app.target')\n",
-        "import importlib\nx = " + " + ".join(["1"] * 3000) + "\nimportlib.import_module('app.target')\n",
+        # the compiler's errors, not ast's: ruff rejects them, CPython's parser does not
+        ("import importlib\nimportlib.import_module('app.target')\nf(a=1, a=2)\n", found(modules=["app.target"])),
+        (
+            "import importlib\nclass C(metaclass=a, metaclass=b):\n    importlib.import_module('app.target')\n",
+            found(modules=["app.target"]),
+        ),
+        # too deep for the extension's walk; CPython 3.11 gives up on it too, later versions parse it
+        ("import importlib\nx = " + " + ".join(["1"] * 3000) + "\nimportlib.import_module('app.target')\n", None),
     ],
     ids=["a repeated keyword", "a repeated metaclass", "a deep expression"],
 )
-def test_the_extension_leaves_to_the_stdlib_pass_what_it_cannot_read(tmp_path, source):
-    """ruff rejects what CPython's parser accepts here, and the extension walks no tree that deep: it says so
-    (``None``), and the graph has the stdlib pass read the file, so the extension never finds less."""
+def test_the_extension_leaves_to_the_stdlib_pass_what_it_cannot_read(tmp_path, source, by_the_stdlib):
+    """The extension says so (``None``), and the graph has the stdlib pass read the file, so the extension never
+    finds less: exactly what the stdlib pass finds, whatever the running Python makes of the file."""
     path = str(tmp_path / "loader.py")
     (tmp_path / "loader.py").write_text(source)
+    stdlib = parse_dynamic_imports(path, "app.loader")
 
     assert rust_reads(path) is None
-    assert graph._parse_all_dynamic_imports({"app.loader": path})["app.loader"] == found(modules=["app.target"])
-    assert parse_dynamic_imports(path, "app.loader") == found(modules=["app.target"])
+    assert graph._parse_all_dynamic_imports({"app.loader": path})["app.loader"] == stdlib
+    assert by_the_stdlib is None or stdlib == by_the_stdlib
 
 
 def test_the_extension_reads_what_the_running_python_cannot(tmp_path):
