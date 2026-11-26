@@ -2,7 +2,6 @@ name: Publish to PyPI
 
 permissions:
   contents: read
-  pull-requests: write
 
 on: push
 
@@ -22,6 +21,25 @@ jobs:
         python3 -m pip install build --user
     - name: Build a binary wheel and a source tarball
       run: python3 -m build
+    - name: Smoke-test the wheel
+      # Installed alone in a fresh environment, it must select the one test an edit impacts, before it can reach
+      # PyPI: a wheel missing a module or a dependency would fail every user's run.
+      shell: bash
+      run: |
+        python3 -m venv "$RUNNER_TEMP/smoke"
+        "$RUNNER_TEMP/smoke/bin/pip" install dist/*.whl
+        cd "$RUNNER_TEMP" && mkdir project && cd project
+        mkdir app suite
+        : > app/__init__.py
+        printf 'def a():\n    return 1\n' > app/a.py
+        printf 'def b():\n    return 2\n' > app/b.py
+        printf 'from app.a import a\ndef test_a():\n    assert a() == 1\n' > suite/test_a.py
+        printf 'from app.b import b\ndef test_b():\n    assert b() == 2\n' > suite/test_b.py
+        printf '[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n' > pytest.ini
+        git init -q && git add -A && git -c user.name=ci -c user.email=ci@example.com commit -qm init
+        echo "# edit" >> app/b.py
+        "$RUNNER_TEMP/smoke/bin/python" -m pytest --impacted -p no:cacheprovider | tee "$RUNNER_TEMP/out.txt"
+        grep -q "1 passed, 1 deselected" "$RUNNER_TEMP/out.txt"
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
       with:

@@ -1,5 +1,7 @@
 # Build and publish pre-built Rust wheels for pytest-impacted-rs.
-# Triggered on all pushes; publish jobs only run on tag pushes.
+# Triggered on all pushes (the build jobs are required checks); publish jobs only run on tag pushes, and only once
+# every build job passed: each wheel its runner can load (all but macOS x86_64, cross-compiled on an ARM runner)
+# has loaded and parsed a file with each function pytest-impacted uses (.github/scripts/smoke_rust_wheel.py).
 # Version is stamped from the git tag into Cargo.toml before building.
 
 name: Publish Rust Wheels
@@ -16,22 +18,44 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # smoke: how the wheel is loaded before publishing (smoke_rust_wheel.py): "native" on the runner itself,
+        # "alpine" in a musl container; a cross-compiled wheel the runner cannot load has none.
         include:
           # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          # Linux aarch64
-          - os: ubuntu-latest
+            manylinux: auto
+            smoke: native
+          # Linux aarch64, built on an ARM runner, so the wheel can be loaded there
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            manylinux: auto
+            smoke: native
+          # Linux x86_64, musl (Alpine)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            smoke: alpine
+          # Linux aarch64, musl (Alpine), built on an ARM runner
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            smoke: alpine
           # macOS x86_64 (cross-compiled on ARM runner)
           - os: macos-latest
             target: x86_64-apple-darwin
           # macOS ARM (Apple Silicon)
           - os: macos-latest
             target: aarch64-apple-darwin
+            smoke: native
           # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            smoke: native
+          # Windows ARM64, built on an ARM runner (an abi3 wheel links against that Python)
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            smoke: native
 
     steps:
       - uses: actions/checkout@v7
@@ -55,8 +79,21 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          manylinux: auto
+          manylinux: ${{ matrix.manylinux || 'auto' }}
           working-directory: rust
+
+      - name: Smoke-test the wheel
+        if: matrix.smoke == 'native'
+        shell: bash
+        run: |
+          python -m pip install --no-index --find-links rust/dist pytest-impacted-rs
+          python .github/scripts/smoke_rust_wheel.py
+
+      - name: Smoke-test the wheel (musl)
+        if: matrix.smoke == 'alpine'
+        run: >-
+          docker run --rm -v "$PWD:/w" -w /w python:3.13-alpine
+          sh -c "pip install --no-index --find-links rust/dist pytest-impacted-rs && python .github/scripts/smoke_rust_wheel.py"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v7
