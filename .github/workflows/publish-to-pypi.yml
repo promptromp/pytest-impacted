@@ -66,24 +66,48 @@ jobs:
       with:
         name: python-package-distributions
         path: dist/
+    - name: Sign the dists with Sigstore
+      uses: sigstore/gh-action-sigstore-python@v3.5.0
+      with:
+        inputs: >-
+          ./dist/*.tar.gz
+          ./dist/*.whl
     - name: Create GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
-      run: >-
-        gh release create
-        "$GITHUB_REF_NAME"
-        --repo "$GITHUB_REPOSITORY"
-        --notes ""
-    - name: Upload artifact signatures to GitHub Release
+      # The notes are the annotated tag's message, read through the API (this job has no checkout, which
+      # `--notes-from-tag` needs), less its first line when that is the version (the release's title) and less a
+      # signature. Any failure fails the step: a release silently published without its notes is the bug fixed.
+      # Re-run safe: an existing release (an upload below failed) gets its notes edited.
+      shell: bash
+      run: |
+        set -euo pipefail
+        api="repos/$GITHUB_REPOSITORY/git"
+        type=$(gh api "$api/ref/tags/$GITHUB_REF_NAME" --jq .object.type)
+        if [ "$type" = tag ]; then
+          sha=$(gh api "$api/ref/tags/$GITHUB_REF_NAME" --jq .object.sha)
+          gh api "$api/tags/$sha" --jq .message > message.txt
+          awk -v tag="$GITHUB_REF_NAME" '
+            NR == 1 { first = $0; sub(/[ \t]+$/, "", first); if (first == tag) next }
+            /^-----BEGIN (PGP|SSH) SIGNATURE-----$/ { exit }
+            { print }
+          ' message.txt | sed '/./,$!d' > notes.md
+        else
+          : > notes.md  # a lightweight tag carries no message
+        fi
+        if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+        else
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+        fi
+    - name: Upload the dists and their Sigstore bundles to the GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        # Upload to GitHub Release using the `gh` CLI.
-        # `dist/` contains the built packages, and the
-        # sigstore-produced signatures and certificates.
       run: >-
         gh release upload
         "$GITHUB_REF_NAME" dist/**
         --repo "$GITHUB_REPOSITORY"
+        --clobber
 
   publish-to-testpypi:
     name: Publish Python distribution to TestPyPI
