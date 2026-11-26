@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 
+mod dynamic_imports;
 mod type_only;
 
 /// Resolve a relative import to its absolute module path.
@@ -291,11 +292,32 @@ fn parse_all_imports_split(
     Ok(parse_all(&modules, true).into_iter().collect())
 }
 
+/// What each `(file_path, module_name, is_package)` imports by name, in parallel via rayon: its modules, object
+/// paths and attribute paths, in the order given; `None` for a file the stdlib pass must read (see
+/// `dynamic_imports::dynamic_imports`). `loaders` is the table (`dynamic_imports.TABLE`), read by one
+/// mechanism. Mirrors `parse_dynamic_imports` in `pytest_impacted/dynamic_imports.py`.
+#[pyfunction]
+fn parse_all_dynamic_imports(
+    modules: Vec<(String, String, bool)>,
+    loaders: Vec<dynamic_imports::Row>,
+) -> PyResult<Vec<Option<dynamic_imports::Found>>> {
+    let table =
+        dynamic_imports::Table::new(loaders).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok(modules
+        .par_iter()
+        .map(|(file_path, module_name, is_package)| {
+            let source = fs::read_to_string(file_path).unwrap_or_default();
+            dynamic_imports::dynamic_imports(&source, module_name, *is_package, &table)
+        })
+        .collect())
+}
+
 /// Python module definition.
 #[pymodule]
 fn pytest_impacted_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_file_imports, m)?)?;
     m.add_function(wrap_pyfunction!(parse_all_imports, m)?)?;
     m.add_function(wrap_pyfunction!(parse_all_imports_split, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_all_dynamic_imports, m)?)?;
     Ok(())
 }

@@ -436,6 +436,14 @@ def test_parse_file_imports_survives_warnings_as_errors(tmp_path):
         assert parsing.parse_file_imports(str(path), "mod") == ["os"]
 
 
+def test_parse_pytest_plugins_survives_a_right_nested_chain(tmp_path):
+    """CPython's parser raises MemoryError ("parser stack overflowed") on it: no declaration is read, no run fails."""
+    path = tmp_path / "conftest.py"
+    path.write_text('pytest_plugins = ["a"]\nx = ' + "**".join(["2"] * 3000) + "\n")
+
+    assert parsing.parse_pytest_plugins(str(path)) in (["a"], [])
+
+
 def test_parse_pytest_plugins_survives_a_long_concatenation(tmp_path):
     """ast.parse accepts it, but walking a 3000-term ``+`` chain recurses past the limit."""
     path = tmp_path / "conftest.py"

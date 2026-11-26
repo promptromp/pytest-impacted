@@ -202,7 +202,8 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
         with _quiet_parse():
             tree = ast.parse(source)
         return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
-    except (SyntaxError, ValueError, RecursionError):  # RecursionError: e.g. a 3000-term `+` chain
+    # A 3000-term chain: RecursionError (``+``), or MemoryError ("parser stack overflowed", ``**``).
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return []
 
 

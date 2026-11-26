@@ -488,6 +488,7 @@ The Rust extension:
 2. Parses Python ASTs using ruff's hand-written recursive descent parser (the same parser used by the ruff linter)
 3. Extracts import statements by recursively walking all statement bodies (`if`, `try`/`except`/`else`/`finally`, `with`, `for`, `while`, `match`/`case`, function and class blocks), telling type-only imports apart when `--impacted-ignore-type-checking-imports` asks
 4. Returns one `dict[str, list[str]]` mapping module name to its imports — or, with `--impacted-ignore-type-checking-imports`, a `(runtime, type-only)` pair of lists per module — so only the final data crosses the Rust/Python boundary
+5. Finds the [imports by name](#astimpactstrategy) (`importlib.import_module`, `mock.patch`, `monkeypatch.setattr`, …) in parallel too, since 0.40.1, from the same table the pure-Python pass reads. A file ruff rejects, or one nested too deep to walk, it leaves to that pass, so it never finds less. It may find more: in a file the running Python cannot parse, as for import statements (see above). An older `pytest-impacted-rs` leaves them all to that pass, which finds the same imports at a fraction of a second's cost on a thousand-file project
 
 ### Benchmarks
 
