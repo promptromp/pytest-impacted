@@ -65,8 +65,10 @@ class _Handoff:
 
 # The controller's handoff, or None for none: each worker then analyses for itself.
 _HANDOFF = StashKey[_Handoff | None]()
-# The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect.
+# The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect, and those no analysis
+# judged (outside the analysed directories), for it to count once -k and -m have filtered.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
+_UNJUDGED_ITEMS = StashKey[set[pytest.Item]]()
 
 
 def pytest_addoption(parser: Parser):
@@ -518,6 +520,7 @@ def pytest_collection_modifyitems(session, config, items):
         return
     # Afresh: a second collection on one config must not count the first's deselection.
     config.stash[_UNIMPACTED_ITEMS] = set()
+    config.stash[_UNJUDGED_ITEMS] = set()
     _record(config, 0)
     _report(config, _UNJUDGED, _WORKER_UNJUDGED_KEY, 0)
     workerinput = getattr(config, "workerinput", None)
@@ -527,7 +530,7 @@ def pytest_collection_modifyitems(session, config, items):
         return
     root_dir = config.rootpath
     unjudged = _unjudged_items(items, _analysed_dirs(config))
-    _report(config, _UNJUDGED, _WORKER_UNJUDGED_KEY, len(unjudged))
+    config.stash[_UNJUDGED_ITEMS] = unjudged
     impacted_items = _impacted_items(items, impacted_tests, root_dir) | unjudged
     # A worker analysing for itself skips: another may judge differently, and xdist stops a
     # run whose workers collect different tests, not one whose skips differ.
@@ -562,6 +565,9 @@ def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None
         config.hook.pytest_deselected(items=unimpacted)
         items[:] = kept
         _record(config, len(unimpacted))
+    # Counted now, after -k and -m: the summary says how many ran.
+    unjudged = config.stash.get(_UNJUDGED_ITEMS, set())
+    _report(config, _UNJUDGED, _WORKER_UNJUDGED_KEY, sum(item in unjudged for item in kept))
 
 
 def _record(config: Config, count: int) -> None:
@@ -581,11 +587,13 @@ def _report(config: Config, key: StashKey[int], worker_key: str, count: int) -> 
 
 
 def _analysed_dirs(config: Config) -> list[Path]:
-    """The directories the analysis walks, resolved: ``--impacted-module``'s and ``--impacted-tests-dir``'s."""
+    """The directories the analysis walks, ``--impacted-module``'s and ``--impacted-tests-dir``'s, as given and
+    resolved: a test reached through a symlink inside one is judged, by either spelling."""
     get_option = partial(get_option_from_config, config)
     module, tests_dir = get_option("impacted_module"), get_option("impacted_tests_dir")
     named = [str(module).replace(".", os.sep), *([tests_dir] if tests_dir else [])]
-    return [real_path(config.rootpath / name) for name in named]
+    given = [Path(os.path.abspath(config.rootpath / name)) for name in named]
+    return [*given, *(real_path(directory) for directory in given)]
 
 
 def _unjudged_items(items: list[pytest.Item], analysed: list[Path]) -> set[pytest.Item]:
@@ -599,11 +607,12 @@ def _unjudged_items(items: list[pytest.Item], analysed: list[Path]) -> set[pytes
 
     def outside(path: Path) -> bool:
         if path not in resolved:
-            real = real_path(path)
-            resolved[path] = not any(real.is_relative_to(directory) for directory in analysed)
+            spellings = (Path(os.path.abspath(path)), real_path(path))
+            resolved[path] = not any(p.is_relative_to(d) for p in spellings for d in analysed)
         return resolved[path]
 
-    return {item for item in items if item.path.suffix == ".py" and outside(item.path)}
+    # Tests pytest's Python collector made: a linter plugin's items (pytest-ruff, pytest-mypy) are no tests.
+    return {item for item in items if isinstance(item, pytest.Function) and outside(item.path)}
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -646,11 +655,11 @@ def pytest_terminal_summary(terminalreporter, config: Config) -> None:
     if count and config.get_verbosity() > -2:
         tests = "test" if count == 1 else "tests"
         terminalreporter.write_line(f"pytest-impacted: {count} {tests} {NOT_IMPACTED}, deselected")
-    if unjudged := config.stash.get(_UNJUDGED, 0):
+    if (unjudged := config.stash.get(_UNJUDGED, 0)) and config.get_verbosity() > -2:
         tests = "test" if unjudged == 1 else "tests"
         terminalreporter.write_line(
             f"pytest-impacted: {unjudged} {tests} outside --impacted-module and --impacted-tests-dir, which no "
-            "analysis judges, ran: point --impacted-tests-dir at them to select among them.",
+            "analysis judges, ran: set --impacted-tests-dir to a directory holding every test to select among them.",
             yellow=True,
         )
     # pytest leaves the report header out under -q and --no-header; a warning it carries is said here instead.
