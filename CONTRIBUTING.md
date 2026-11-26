@@ -18,15 +18,14 @@ Thank you for your interest in contributing to pytest-impacted! We welcome contr
    git clone https://github.com/YOUR_USERNAME/pytest-impacted.git
    cd pytest-impacted
    ```
-3. Create a virtual environment:
+3. Install the package, its development tools and the optional Rust extension into `.venv` (the extension builds
+   from source, so a Rust toolchain is needed; leave out `--all-extras` without one):
    ```bash
-   uv venv
-   source .venv/bin/activate  # On Windows: venv\Scripts\activate
+   uv sync --all-extras --dev
    ```
-4. Install the package in development mode:
+4. Install the git hooks, which run the linters and the tests your change impacts on each commit:
    ```bash
-   uv sync
-   pip install -e .
+   uv run pre-commit install
    ```
 
 ## How to Contribute
@@ -68,10 +67,11 @@ We welcome feature suggestions! Please use our **Feature Request** template when
    - Ensure existing tests still pass
    - Aim for good test coverage
 
-4. **Run the test suite**:
+4. **Run the test suite** (every test, on every core, as CI does):
    ```bash
-   pytest
+   uv run python -m pytest -n auto
    ```
+   and everything CI enforces: `uv run pre-commit run --all-files`.
 
 5. **Commit your changes**:
    ```bash

@@ -2,7 +2,9 @@
 
 ## Reporting a vulnerability
 
-If you have found a possible vulnerability, please open an Issue and label it with the tag `security`.
+If you have found a possible vulnerability, please report it privately through GitHub's
+[private vulnerability reporting](https://github.com/promptromp/pytest-impacted/security/advisories/new),
+not in a public issue.
 
 ## Bug bounties
 
