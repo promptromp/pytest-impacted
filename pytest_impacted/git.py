@@ -3,7 +3,8 @@
 from __future__ import annotations
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 
@@ -307,7 +308,7 @@ def _find_impacted_files(
 
     match git_mode:
         case GitMode.UNSTAGED:
-            impacted_files = impacted_files_for_unstaged_mode(repo)
+            impacted_files = impacted_files_for_unstaged_mode(repo, on_notice=on_fallback)
 
         case GitMode.BRANCH:
             if not base_branch:
@@ -329,6 +330,169 @@ def _find_impacted_files(
         working_dir = Path(repo_dir).resolve()
         impacted_files = normalize_git_paths(impacted_files, git_root, working_dir)
     return sorted(set(impacted_files))
+
+
+def _with_submodule_changes(
+    repo: Repo, paths: list[str], old: str, new: str | None, notice: Callable[[str], None]
+) -> list[str]:
+    """*paths*, each submodule among them followed by the files that changed inside it, under its path.
+
+    git reports a change inside a submodule — a new commit recorded, or edits not committed there — by the
+    submodule's own path (``vendor``), which names no module, so nothing was selected. The files are those that
+    differ inside it between the commit the superproject recorded at *old* and the one at *new* (``None``: the
+    submodule's working tree, untracked files included), deleted ones too; an added submodule brings every file
+    it tracks, and so does a submodule whose old commit is not there to diff from (a notice: a file it deleted is
+    not seen). What cannot be read — a submodule not checked out, or broken — is a notice. The path itself stays,
+    for a glob such as ``vendor/**``. Only a gitlink the superproject records counts: an untracked clone in the tree
+    is a plain path. A submodule removed is not followed.
+
+    Never less than main selected (nothing), and never a failed run: anything unexpected here is a notice, and
+    the paths as git gave them.
+    """
+    root = Path(repo.working_tree_dir) if repo.working_tree_dir else None
+    if root is None or not (os.path.exists(root / ".gitmodules") or ".gitmodules" in paths):
+        return paths  # no submodules: not one git call more
+    try:
+        return [*paths, *_submodule_files(repo, root, paths, old, new, notice)]
+    except Exception as err:  # noqa: BLE001 — following submodules must never fail a run main did not
+        notice(f"Could not follow the submodules among the changed files ({type(err).__name__}: {err}).")
+        return paths
+
+
+def _submodule_files(
+    repo: Repo, root: Path, paths: list[str], old: str, new: str | None, notice: Callable[[str], None]
+) -> list[str]:
+    """The files changed inside each submodule among *paths* (see :func:`_with_submodule_changes`)."""
+    # A checked-out submodule's path is a directory; a changed or deleted file never is: so few are asked about.
+    candidates = [
+        path
+        for path in dict.fromkeys(path.rstrip("/") for path in paths)  # once each: staged and unstaged may hold it
+        if os.path.isdir(root / path) and not os.path.islink(root / path)
+    ]
+    return [
+        f"{path}/{file}"
+        for path in sorted(_gitlinks(repo, new, candidates))
+        for file in _changed_inside(repo, root, path, old, new, notice)
+    ]
+
+
+def _gitlinks(repo: Repo, revision: str | None, paths: list[str]) -> frozenset[str]:
+    """Which of *paths* the repository records as submodules (mode 160000): in its index, or at *revision*.
+
+    Asked about those paths alone (a whole index or tree costs seconds in a monorepo), a few hundred at a time
+    (a command line has a limit).
+    """
+    found: set[str] = set()
+    for start in range(0, len(paths), 256):
+        chunk = paths[start : start + 256]
+        specs = [f":(literal){path}" for path in chunk]
+        if revision is None:
+            listed = repo.git.ls_files("-s", "-z", "--", *specs)
+        else:
+            listed = repo.git.ls_tree("-z", *rev_args(revision), "--", *specs)
+        wanted = set(chunk)
+        found.update(
+            path
+            for entry in listed.split("\0")
+            if entry.startswith("160000 ") and (path := entry.partition("\t")[2]) in wanted
+        )
+    return frozenset(found)
+
+
+def _changed_inside(
+    repo: Repo, root: Path, path: str, old: str, new: str | None, notice: Callable[[str], None]
+) -> list[str]:
+    """The files that changed inside the submodule at *path* (see :func:`_with_submodule_changes`)."""
+    directory = root / path
+    if os.path.islink(directory) or not os.path.exists(directory / ".git"):
+        notice(
+            f"Submodule {path} changed but is not checked out, so nothing in it is analysed (actions/checkout: "
+            "submodules: true)."
+        )
+        return []
+    with _own_git_environment():
+        try:
+            submodule = Repo(directory)
+        except (InvalidGitRepositoryError, NoSuchPathError, OSError) as err:
+            notice(f"Submodule {path} changed but its repository cannot be opened ({err}); nothing in it is analysed.")
+            return []
+        before = _recorded(repo, old, path)
+        if before is not None:
+            try:
+                after = [] if new is None else [_recorded(repo, new, path) or "HEAD"]
+                changed = _impactful_paths(_name_status_diff(submodule, *rev_args(before, *after)))
+                if new is None:  # the working tree: untracked files too
+                    changed += submodule.git.ls_files("--others", "--exclude-standard", "-z").split("\0")
+                changed = [file for file in changed if file]
+                nested = _gitlinks(submodule, None, [file for file in changed if os.path.isdir(directory / file)])
+                return [
+                    *(file for file in changed if file not in nested),
+                    *(
+                        file
+                        for link in sorted(nested.intersection(changed))
+                        for file in (link, *_tracked(submodule, link))
+                    ),
+                ]
+            except GitCommandError:
+                notice(
+                    f"Submodule {path}'s previous commit is not fetched: every file it tracks counts as changed, but "
+                    "one it deleted is not seen."
+                )
+        try:
+            return _tracked(submodule, "")  # added since, or no commit to diff from: every file it tracks
+        except GitCommandError as err:
+            notice(f"Could not list the files of submodule {path} ({_reason(err)}); nothing in it is analysed.")
+            return []
+
+
+def _tracked(submodule: Repo, path: str) -> list[str]:
+    """Every file *submodule* tracks under *path* (``""``: all of it), nested submodules' included."""
+    listed = submodule.git.ls_files("--recurse-submodules", "-z", *(("--", path) if path else ()))
+    return [file for file in listed.split("\0") if file]
+
+
+def _recorded(repo: Repo, revision: str, path: str) -> str | None:
+    """The commit the superproject records for the submodule at *path* in *revision*; ``None`` if none."""
+    try:
+        return repo.git.rev_parse("--verify", "--quiet", *rev_args(f"{revision}:{path}")) or None
+    except GitCommandError:
+        return None
+
+
+@contextmanager
+def _own_git_environment() -> Iterator[None]:
+    """git's repository-locating variables left out while a submodule's commands run.
+
+    A git hook (the pre-commit one runs this) exports ``GIT_INDEX_FILE=.git/index`` and the like for the
+    superproject; inherited, a submodule's command resolves them inside the submodule and fails. git itself
+    clears them for a submodule (``prepare_submodule_repo_env``).
+    """
+    saved = {name: os.environ.pop(name) for name in _LOCAL_GIT_VARIABLES if name in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+#: ``git rev-parse --local-env-vars`` (git 2.24): the variables that locate a repository.
+_LOCAL_GIT_VARIABLES = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+)
 
 
 def files_git_knows(repo_dir: str | Path, path: str) -> list[str]:
@@ -388,18 +552,21 @@ def _impactful_paths(change_set: ChangeSet) -> list[str]:
     ]
 
 
-def impacted_files_for_unstaged_mode(repo: Repo) -> list[str]:
+def impacted_files_for_unstaged_mode(repo: Repo, *, on_notice: Callable[[str], None] | None = None) -> list[str]:
     """Get the impacted files when in the UNSTAGED git mode.
 
     Uncommitted work is the union of three views: the index against HEAD
     (``git diff --cached``, which also works before the first commit and
     catches a staged edit whose file was reverted on disk), the working tree
     against the index (``git diff``), and untracked files. Diffing only one
-    of them misses the others.
+    of them misses the others. A submodule among them brings the files changed
+    inside it since HEAD's commit for it (see :func:`_with_submodule_changes`);
+    *on_notice* is told what cannot be seen there (by default it is only logged).
     """
     staged = _impactful_paths(_name_status_diff(repo, "--cached"))
     unstaged = _impactful_paths(_name_status_diff(repo))
-    return [*staged, *unstaged, *_untracked_files(repo)]
+    paths = [*staged, *unstaged, *_untracked_files(repo)]
+    return _with_submodule_changes(repo, paths, "HEAD", None, on_notice or logger.warning)
 
 
 def _untracked_files(repo: Repo) -> list[str]:
@@ -443,7 +610,14 @@ def impacted_files_for_branch_mode(
             "instead, which may also select tests for its newer commits."
         )
         starts = [base_branch]
-    paths = {path for start in starts for path in _impactful_paths(_name_status_diff(repo, *rev_args(start, "HEAD")))}
+    notice = on_fallback or logger.warning
+    paths = {
+        path
+        for start in starts
+        for path in _with_submodule_changes(
+            repo, _impactful_paths(_name_status_diff(repo, *rev_args(start, "HEAD"))), start, "HEAD", notice
+        )
+    }
     return sorted(paths)
 
 

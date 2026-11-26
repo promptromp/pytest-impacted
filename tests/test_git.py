@@ -966,3 +966,192 @@ def test_normalize_git_paths_emits_posix_paths_for_windows_paths():
     )
 
     assert result == ["src/m.py", "C:/repo/frontend/a.js"]
+
+
+@pytest.fixture
+def repo_with_submodule(real_repo, tmp_path):
+    """``(repo, root)``: the real repo with a submodule ``vendor`` holding ``lib/core.py`` and ``lib/util.py``."""
+    repo, root = real_repo
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "lib").mkdir()
+    (library / "lib" / "core.py").write_text("x = 1\n")
+    (library / "lib" / "util.py").write_text("y = 1\n")
+    library_repo = Repo.init(library)
+    library_repo.git.add("--all")
+    library_repo.git.commit("-m", "library")
+    repo.git.execute(["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "vendor"])
+    commit_all(repo, "add the submodule")
+    return repo, root
+
+
+def test_an_edit_inside_a_submodule_counts_as_a_change_to_the_file(repo_with_submodule):
+    """git reports the submodule's own path, which names no module: the files changed inside it are added."""
+    _, root = repo_with_submodule
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    (root / "vendor" / "lib" / "new.py").write_text("z = 1\n")  # untracked inside it
+
+    assert unstaged(root) == ["vendor", "vendor/lib/core.py", "vendor/lib/new.py"]
+
+
+@pytest.mark.parametrize("edit", ["modify", "delete"])
+def test_a_submodule_bumped_on_the_branch_brings_what_changed_inside_it(repo_with_submodule, edit):
+    """Diffed inside the submodule, between the commits the superproject records: a deleted module counts too."""
+    repo, root = repo_with_submodule
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    if edit == "modify":
+        (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    else:
+        (root / "vendor" / "lib" / "core.py").unlink()
+    commit_all(Repo(root / "vendor"), "bump")
+    commit_all(repo, "bump the submodule")
+
+    assert branch(root, base) == ["vendor", "vendor/lib/core.py"]
+
+
+def test_a_submodule_not_checked_out_is_named(repo_with_submodule):
+    """actions/checkout leaves submodules out by default: what changed in one cannot be seen, and is said."""
+    repo, root = repo_with_submodule
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    commit_all(Repo(root / "vendor"), "bump")
+    commit_all(repo, "bump the submodule")
+    repo.git.submodule("deinit", "-q", "-f", "vendor")
+    notices: list[str] = []
+
+    found = git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base, on_fallback=notices.append)
+
+    assert found == ["vendor"]
+    assert len(notices) == 1 and "not checked out" in notices[0]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges and core.symlinks on Windows")
+def test_only_a_recorded_submodule_is_followed(repo_with_submodule, tmp_path):
+    """An untracked clone in the tree, or a symlink to a repository, is no submodule: its files are not added."""
+    _, root = repo_with_submodule
+    clone = root / "scratch"
+    clone.mkdir()
+    (clone / "pyproject.toml").write_text("")
+    Repo.init(clone).git.add("--all")
+    (root / "alias").symlink_to("vendor", target_is_directory=True)
+
+    assert unstaged(root) == ["alias", "scratch/"]
+
+
+def test_a_submodule_added_on_the_branch_brings_its_files(real_repo, tmp_path):
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    library = tmp_path / "library"
+    (library / "lib").mkdir(parents=True)
+    (library / "lib" / "core.py").write_text("x = 1\n")
+    library_repo = Repo.init(library)
+    library_repo.git.add("--all")
+    library_repo.git.commit("-m", "library")
+    repo.git.execute(["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "vendor"])
+    commit_all(repo, "add the submodule")
+
+    assert branch(root, base) == [".gitmodules", "vendor", "vendor/lib/core.py"]
+
+
+def test_a_submodule_set_to_be_ignored_is_ignored(repo_with_submodule):
+    """``ignore = all`` in .gitmodules tells git to look away, for a large vendored tree or a broken one: so do we."""
+    repo, root = repo_with_submodule
+    repo.git.config("-f", ".gitmodules", "submodule.vendor.ignore", "all")
+    commit_all(repo, "ignore the submodule")
+    shutil.rmtree(root / ".git" / "modules" / "vendor")  # broken, as main never minded
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+
+    assert unstaged(root) == ["pkg/a.py"]
+
+
+def _bump_on_a_branch(repo, root):
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    commit_all(Repo(root / "vendor"), "bump")
+    commit_all(repo, "bump the submodule")
+    return base
+
+
+@pytest.mark.parametrize(("how", "notices_expected"), [("its gitdir gone", 1), ("removed", 0)])
+def test_a_submodule_that_cannot_be_read_never_fails_the_run(repo_with_submodule, how, notices_expected):
+    """Nothing was selected for a submodule before: one that cannot be read is said, a removed one is not followed."""
+    repo, root = repo_with_submodule
+    if how == "removed":
+        base = repo.active_branch.name
+        repo.git.checkout("-b", "feature")
+        repo.git.rm("-q", "vendor")
+        commit_all(repo, "remove the submodule")
+    else:
+        base = _bump_on_a_branch(repo, root)
+        shutil.rmtree(root / ".git" / "modules" / "vendor")
+    notices: list[str] = []
+
+    found = git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, base, on_fallback=notices.append)
+
+    assert "vendor" in found
+    assert len(notices) == notices_expected, notices
+
+
+def test_many_deleted_files_beside_a_submodule_are_never_asked_about(repo_with_submodule, monkeypatch):
+    """A deleted file is no directory, so no submodule: thousands of them overflowed git's command line."""
+    repo, root = repo_with_submodule
+    repo.git.checkout("-b", "feature")
+    for index in range(300):
+        (root / "pkg" / f"gone{index}.py").write_text("")
+    commit_all(repo, "add")
+    base = repo.git.rev_parse("HEAD")
+    for index in range(300):
+        (root / "pkg" / f"gone{index}.py").unlink()
+    commit_all(repo, "delete")
+    asked = []
+    real = git._gitlinks
+    monkeypatch.setattr(
+        git, "_gitlinks", lambda repo, revision, paths: asked.append(len(paths)) or real(repo, revision, paths)
+    )
+
+    assert len(branch(root, base)) == 300
+    assert all(count == 0 for count in asked), asked
+
+
+def test_a_submodule_s_commands_ignore_a_git_hook_s_environment(repo_with_submodule, monkeypatch):
+    """The pre-commit hook exports GIT_INDEX_FILE=.git/index for the superproject; inside a submodule it is wrong."""
+    _, root = repo_with_submodule
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("GIT_INDEX_FILE", ".git/index")
+
+    assert unstaged(root) == ["vendor", "vendor/lib/core.py"]
+
+
+def test_without_submodules_no_git_call_is_spent_on_them(real_repo, monkeypatch):
+    """One process per changed path made 1,000 untracked files take 23 s: without a .gitmodules, none at all."""
+    _, root = real_repo
+    for index in range(50):
+        (root / "pkg" / f"new{index}.py").write_text("")
+    calls = []
+    monkeypatch.setattr(git, "_gitlinks", lambda *args: calls.append(args) or frozenset())  # no .gitmodules: none
+
+    assert len(unstaged(root)) == 50
+    assert calls == []
+
+
+def test_only_directories_are_asked_about_beside_a_submodule(repo_with_submodule, monkeypatch):
+    """A changed file is no submodule: git is asked about candidate paths alone, never the whole index or tree."""
+    _, root = repo_with_submodule
+    for index in range(50):
+        (root / "pkg" / f"new{index}.py").write_text("")
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    asked = []
+    real = git._gitlinks
+    monkeypatch.setattr(
+        git, "_gitlinks", lambda repo, revision, paths: asked.append(list(paths)) or real(repo, revision, paths)
+    )
+
+    found = unstaged(root)
+
+    assert "vendor/lib/core.py" in found and len(found) == 52
+    assert ["vendor"] in asked and all(len(paths) <= 1 for paths in asked)

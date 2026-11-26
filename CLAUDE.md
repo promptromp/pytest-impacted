@@ -280,7 +280,17 @@ mode is the union of three views — `git diff --cached`, `git diff`, and
 `git ls-files --others` — because a staged edit reverted on disk appears in only one of
 them. Deletions count (`_NON_IMPACTFUL_STATUSES` drops only `X`/`B`), so `changed_files`
 routinely names paths that no longer exist, and files outside the project root arrive as
-absolute paths.
+absolute paths. A submodule
+reported by its own path is followed by the files changed inside it (`git._with_submodule_changes`: a diff between
+the commits the superproject records, or against the submodule's working tree), for a gitlink the superproject
+records and has checked out — one not checked out is a notice (`on_fallback`). Every outcome is at least what main
+selected for a submodule (nothing), and structurally never fails the run: `_with_submodule_changes` turns anything
+unexpected into a notice and the plain paths. No old commit to diff from → every tracked file and a notice; not
+checked out or unreadable → a notice; removed → not followed. Only changed paths that are directories are asked
+about (`_gitlinks`, chunked; none without a `.gitmodules`): one git call per path, a whole-tree listing, and every
+deleted path as a pathspec each cost a review round (23 s, seconds, "argument list too long"). Its commands run
+without a hook's `GIT_INDEX_FILE` (`_own_git_environment`), and a submodule's `ignore` setting is respected
+(`--ignore-submodules=none` walked into every submodule, failing on a broken one main never minded).
 
 **`canonical_root()` is the single origin for every path.** Discovery, graph building and
 the conftest walk all resolve against `root_dir` (the plugin passes `config.rootpath`),
