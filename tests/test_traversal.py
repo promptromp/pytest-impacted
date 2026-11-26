@@ -850,7 +850,7 @@ def test_discover_application_files(tmp_path, tests_package, application):
 
 
 def test_discover_application_files_ignores_a_tests_dir_holding_the_package_despite_symlinks(tmp_path):
-    """The tests walk never follows a symlinked directory the package walk does; that must not matter."""
+    """A tests dir holding the whole package cannot tell tests from the application, whatever the walks follow."""
     for rel in ("app/__init__.py", "app/db.py", "libs/shared/__init__.py", "libs/shared/x.py"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).touch()
@@ -928,3 +928,20 @@ def test_the_tests_walk_lists_only_regular_files(tmp_path):
     os.mkfifo(tmp_path / "tests" / "test_pipe.py")
 
     assert set(discover_submodules("tests", require_init=False, root_dir=tmp_path)) == {"tests.test_core"}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_the_tests_walk_follows_a_symlinked_directory_inside_the_project(tmp_path):
+    """pytest collects through a directory symlinked into the tests dir; the walk follows it, as the package walk does,
+    but not out of the project nor back up the tree."""
+    project, outside = tmp_path / "project", tmp_path / "outside"
+    write_files(project, {"tests/test_plain.py": "", "shared_tests/test_shared.py": ""})
+    write_files(outside, {"test_far.py": ""})
+    os.symlink(project / "shared_tests", project / "tests" / "linked", target_is_directory=True)
+    os.symlink(outside, project / "tests" / "far", target_is_directory=True)
+    os.symlink(project / "tests", project / "tests" / "loop", target_is_directory=True)
+
+    found = discover_submodules("tests", require_init=False, root_dir=project)
+
+    assert set(found) == {"tests.test_plain", "tests.linked.test_shared"}
+    assert found["tests.linked.test_shared"] == str((project / "shared_tests" / "test_shared.py").resolve())

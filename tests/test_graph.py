@@ -2883,3 +2883,16 @@ def test_a_star_import_of_a_helper_package_found_through_a_basedir(tmp_path):
     dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
 
     assert dep_tree.has_edge("suite.helpers.factories", "suite.test_x")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_test_file_the_tests_walk_reaches_twice_is_one_node(tmp_path):
+    """Through a symlinked directory and not: one file, one node, under the name not through the link."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/a.py": "", "tests/real/test_x.py": "import app.a\n"})
+    os.symlink(tmp_path / "tests" / "real", tmp_path / "tests" / "alias", target_is_directory=True)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    nodes = [node for node in dep_tree if str(node).endswith("test_x")]
+    assert nodes == ["tests.real.test_x"]
+    assert dep_tree.graph["aliases"]["tests.alias.test_x"] == "tests.real.test_x"

@@ -239,11 +239,12 @@ def _is_walkable_link_target(path: Path, real_parent: Path, root: Path) -> bool:
 
 
 def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
-    """Discover submodules by walking the filesystem (no __init__.py required).
+    """Discover submodules by walking the filesystem (no __init__.py required), as pytest collects test files.
 
-    Uses Path.rglob to find all .py files regardless of whether intermediate
-    directories contain __init__.py. This matches pytest's own filesystem-based
-    test discovery behavior.
+    Every ``.py`` file beneath, whatever the directories hold, through a symlinked directory too, as pytest
+    collects through one: only while it stays inside the project and does not point back up the tree (see
+    :func:`_is_walkable_link_target`), as the package walk follows one. A file reached twice, through a link and
+    not, is named both ways (``_discover_project`` keeps one name).
     """
     base_path = root / package_name_to_path(package)
     # os.path, not Path.is_dir(): a directory inside an unsearchable one is missing, rather than raising.
@@ -251,12 +252,21 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
         return {}
 
     results: dict[str, str] = {}
-    for py_file in base_path.rglob("*.py"):
-        # A regular file only: a symlink loop or a named pipe called ``*.py`` is no module, and reading a pipe
-        # would block the run. os.path.realpath, not Path.resolve(), which raises on a loop before Python 3.13.
-        if os.path.isfile(py_file):
-            results[".".join(module_parts(py_file.relative_to(base_path.parent)))] = os.path.realpath(py_file)
-
+    for directory, subdirectories, files in os.walk(base_path, followlinks=True):
+        here = Path(directory)
+        real_here = Path(os.path.realpath(here))
+        subdirectories[:] = sorted(
+            name
+            for name in subdirectories
+            if not os.path.islink(here / name) or _is_walkable_link_target(here / name, real_here, root)
+        )
+        for file in sorted(files):
+            # A regular file only: a symlink loop or a named pipe called ``*.py`` is no module, and reading a pipe
+            # would block the run. os.path.realpath, not Path.resolve(), which raises on a loop before Python 3.13.
+            if file.endswith(".py") and os.path.isfile(here / file):
+                results[".".join(module_parts((here / file).relative_to(base_path.parent)))] = os.path.realpath(
+                    here / file
+                )
     return results
 
 
@@ -513,8 +523,14 @@ def _discover_project(
         aliases.setdefault(alias, name)
     if tests_package:
         canonical_of = {path: name for name, path in modules.items()}
-        for name, path in discover_submodules(tests_package, require_init=False, root_dir=root).items():
-            if canonical_of.get(path, name) == name:
+        tests_parts = Path(package_name_to_path(tests_package)).parent.parts
+        walked_tests = discover_submodules(tests_package, require_init=False, root_dir=root)
+        # A file the tests walk reaches twice, through a symlinked directory and not, is one node: the name
+        # not through the link, as for the package walk.
+        for name, path in sorted(
+            walked_tests.items(), key=lambda item: (_reached_through_symlink(item[0], tests_parts, root), item[0])
+        ):
+            if canonical_of.setdefault(path, name) == name:
                 modules[name] = path
             else:
                 aliases.setdefault(name, canonical_of[path])

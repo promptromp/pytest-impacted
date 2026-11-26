@@ -71,6 +71,8 @@ pytest --impacted \
        --impacted-tests-dir=tests
 ```
 
+A directory symlinked into the tests directory is followed, as pytest collects through it (since 0.41), while it stays inside the project and does not point back up the tree; a test file reached both through a link and directly counts once.
+
 The tests directory does **not** need to contain `__init__.py` — the plugin uses filesystem-based discovery that matches pytest's own behavior.
 
 ## Monorepo / src-Layout Support
