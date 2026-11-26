@@ -4,11 +4,13 @@ import os
 import shutil
 import subprocess
 import textwrap
+from unittest.mock import MagicMock
 
 import pytest
 from git import Repo
 
 from pytest_impacted import _rust
+from pytest_impacted.extensions import clear_extension_cache
 from pytest_impacted.strategies import clear_dep_tree_cache
 
 from .git_helpers import isolated_git_env
@@ -131,6 +133,17 @@ def by_name_backend(request, monkeypatch):
     elif not _rust.RUST_PARSES_DYNAMIC_IMPORTS:
         pytest.skip("pytest-impacted-rs is not installed, or predates finding imports by name")
     return request.param
+
+
+@pytest.fixture
+def entry_points(monkeypatch):
+    """The installed strategy extensions, as ``importlib.metadata.entry_points`` reports them: none until a test sets
+    its ``return_value`` (``git_helpers.entry_point``). Discovery's cache is cleared before and after."""
+    clear_extension_cache()
+    query = MagicMock(return_value=[])
+    monkeypatch.setattr("pytest_impacted.extensions.importlib.metadata.entry_points", query)
+    yield query
+    clear_extension_cache()
 
 
 @pytest.fixture(scope="session")

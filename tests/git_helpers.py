@@ -3,6 +3,7 @@
 import os
 import re
 from pathlib import Path
+from unittest.mock import MagicMock
 
 
 def isolated_git_env(home) -> dict[str, str]:
@@ -70,3 +71,12 @@ INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = sui
 def run(project, *args):
     """``pytest --impacted`` in unstaged mode, verbose, inside the pytester *project*."""
     return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
+
+
+def entry_point(name, cls):
+    """A ``pytest_impacted.strategies`` entry point that loads *cls*."""
+    ep = MagicMock()
+    ep.name = name
+    ep.value = f"{cls.__module__}:{cls.__qualname__}"
+    ep.load.return_value = cls
+    return ep
