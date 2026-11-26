@@ -1,5 +1,6 @@
 """Unit-tests for the api module."""
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
@@ -1658,3 +1659,21 @@ def test_a_plugin_whose_file_an_extension_also_gives_to_a_node_that_is_no_string
     )
 
     assert result == ["suite/test_models.py", "suite/test_other.py"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_changed_symlink_loop_named_like_a_conftest_or_a_config_file(tmp_path):
+    """git reports an untracked loop like any file; the conftest and dependency-file rules must not trip on it."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "app/core.py": "X = 1\n", "tests/test_core.py": "from app.core import X\n"},
+    )
+    (tmp_path / "sub").mkdir()
+    for name in ("conftest.py", "pytest.ini"):
+        os.symlink(name, tmp_path / "sub" / name)
+
+    selected, _ = _run_with_notices(
+        tmp_path, ["sub/conftest.py", "sub/pytest.ini", "app/core.py"], ns_module="app", tests_dir="tests"
+    )
+
+    assert selected == ["tests/test_core.py"]

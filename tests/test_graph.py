@@ -2788,3 +2788,26 @@ def test_ignoring_type_only_imports_with_a_package_linked_from_outside_the_rootd
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=root, ignore_type_checking_imports=True)
 
     assert dep_tree.has_edge("app.shared.util", "tests.test_util")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+@pytest.mark.usefixtures("import_backend")
+def test_a_test_module_linked_from_outside_the_rootdir_keeps_its_type_only_imports(tmp_path):
+    """Test code keeps its type-only imports: a test's annotation may be its only link to a fixture's type."""
+    root, outside = tmp_path / "project", tmp_path / "elsewhere"
+    write_files(
+        outside,
+        {
+            "shared/__init__.py": "",
+            "shared/test_x.py": (
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from app.models import User\n\n"
+                "def test_x(user: 'User'):\n    pass\n"
+            ),
+        },
+    )
+    write_files(root, {"app/__init__.py": "", "app/models.py": "class User:\n    pass\n"})
+    os.symlink(outside / "shared", root / "app" / "shared", target_is_directory=True)
+
+    dep_tree = graph.build_dep_tree("app", root_dir=root, ignore_type_checking_imports=True)
+
+    assert dep_tree.has_edge("app.models", "app.shared.test_x")

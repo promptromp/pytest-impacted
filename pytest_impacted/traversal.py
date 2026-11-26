@@ -47,13 +47,21 @@ def unnameable_tests_dir(tests_dir: str, root: Path) -> str | None:
     path (``tests.unit`` for ``tests/unit``, which the CLI accepts) names no directory itself, and passes.
     """
     given, walked = root / tests_dir, root / walked_directory(tests_dir)
-    if not os.path.isdir(given) or (os.path.isdir(walked) and os.path.samefile(given, walked)):
+    if not os.path.isdir(given) or (
+        os.path.isdir(walked) and os.path.samefile(given, walked) and real_path(given).is_relative_to(real_path(root))
+    ):
         return None
     return (
         f"Tests directory '{tests_dir}' cannot be analysed as given: the analysis carries it as a dotted name, which "
         "a '.' in a directory name, or a path outside the rootdir, does not survive. Name it by its path inside the "
         "rootdir."
     )
+
+
+def real_path(path: str | os.PathLike[str]) -> Path:
+    """*path* made absolute with every symlink resolved, as ``Path.resolve()`` does, but never raising on a symlink
+    loop, as that does before Python 3.13: git reports an untracked loop like any file. Use it on every project file."""
+    return Path(os.path.realpath(path))
 
 
 def canonical_root(root_dir: str | Path | None) -> Path:
@@ -141,13 +149,13 @@ def _discover_pkgutil_impl(
             symlinked to one of them would recurse forever, so it is not entered again;
             a symlink elsewhere is followed, as the import system follows it.
     """
-    real_path = os.path.realpath(root / scan_path)
-    if real_path in ancestors:
+    real_dir = os.path.realpath(root / scan_path)
+    if real_dir in ancestors:
         return {}
-    ancestors |= {real_path}
+    ancestors |= {real_dir}
     # os.path, not Path.is_file(): an unsearchable directory has no __init__.py, rather than raising.
     init = root / scan_path / "__init__.py"
-    results = {module_name: str(init.resolve())} if os.path.isfile(init) else {}
+    results = {module_name: str(real_path(init))} if os.path.isfile(init) else {}
     for module_info in iter_namespace(module_name, scan_path=str(root / scan_path)):
         name = module_info.name
         if name in results:
@@ -166,7 +174,7 @@ def _discover_pkgutil_impl(
 
         # os.path, not Path.exists(): a file in an unsearchable directory is missing, rather than raising.
         if os.path.isfile(file_path):
-            results[name] = str(file_path.resolve())
+            results[name] = str(real_path(file_path))
         else:
             logger.warning("Module %s not found at expected path %s", name, file_path)
 
@@ -412,7 +420,7 @@ def _discover_ancestor_conftests(
         directory = (root / package_name_to_path(package)).parent
         while directory.is_relative_to(root):
             conftest = directory / "conftest.py"
-            if os.path.isfile(conftest) and (path := str(conftest.resolve())) not in seen:
+            if os.path.isfile(conftest) and (path := str(real_path(conftest))) not in seen:
                 seen.add(path)
                 candidates[path] = _conftest_candidate(directory, root)
             if directory == root:
@@ -818,7 +826,7 @@ def locate_module(name: str, roots: Iterable[Path], root: Path) -> list[str]:
         file = next(
             (f for f, ending in spellings if os.path.isfile(f) and _spelled_exactly(base, relative + ending)), None
         )
-        if file is not None and (real := file.resolve()).is_relative_to(root):
+        if file is not None and (real := real_path(file)).is_relative_to(root):
             found.append(str(real))
     return list(dict.fromkeys(found))
 
@@ -873,7 +881,7 @@ def modules_for_files(
         if not file.endswith(".py"):
             continue
 
-        abs_path = os.path.realpath(root / file)  # not Path.resolve(): it raises on a symlink loop before 3.13
+        abs_path = str(real_path(root / file))
         if abs_path in path_to_module:
             resolved_modules.append(path_to_module[abs_path])
         elif not os.path.exists(abs_path):

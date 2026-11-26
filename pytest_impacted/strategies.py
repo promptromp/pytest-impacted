@@ -31,6 +31,7 @@ from pytest_impacted.traversal import (
     clear_discovery_cache,
     discover_application_files,
     pythonpath_roots,
+    real_path,
 )
 
 
@@ -265,7 +266,7 @@ def _loaded_config_file(session: Any) -> Path | None:
     session at all (the standalone CLI).
     """
     inipath = getattr(getattr(session, "config", None), "inipath", None)
-    return Path(inipath).resolve() if isinstance(inipath, str | os.PathLike) else None
+    return real_path(inipath) if isinstance(inipath, str | os.PathLike) else None
 
 
 def _resolve_changed_file(changed_file: str, root_dir: Path | None) -> Path | None:
@@ -275,7 +276,7 @@ def _resolve_changed_file(changed_file: str, root_dir: Path | None) -> Path | No
         if root_dir is None:
             return None
         path = Path(root_dir) / path
-    return path.resolve()
+    return real_path(path)  # git reports an untracked symlink loop like any file, conftest.py included
 
 
 def _resolve_changed_file_dir(changed_file: str, root_dir: Path) -> Path | None:
@@ -329,7 +330,7 @@ def _test_modules_under(directories: set[Path], dep_tree: nx.DiGraph, root_dir: 
         for node in dep_tree.nodes
         if is_test_node(dep_tree, node) and (path := _module_path(node, dep_tree, root_dir)) is not None
     }
-    return sorted(nodes_under({directory.resolve() for directory in directories}, paths))
+    return sorted(nodes_under({real_path(directory) for directory in directories}, paths))
 
 
 def _conftest_dirs(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
@@ -379,7 +380,7 @@ class _CodeRoles:
 def _relative(path: Path, root_dir: Path) -> str:
     """*path* relative to the project root, for messages."""
     root = canonical_root(root_dir)
-    resolved = path.resolve()
+    resolved = real_path(path)
     return resolved.relative_to(root).as_posix() if resolved.is_relative_to(root) else str(path)
 
 
@@ -741,7 +742,7 @@ class DependencyFileImpactStrategy(ImpactStrategy):
         """*config_file* is the one the ``impacted-tests`` CLI read, which has no pytest session."""
         self.patterns = patterns
         self.glob_patterns = glob_patterns
-        self.config_file = config_file.resolve() if config_file else None
+        self.config_file = real_path(config_file) if config_file else None
 
     def find_impacted_tests(
         self,

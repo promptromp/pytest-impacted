@@ -35,6 +35,7 @@ from pytest_impacted.traversal import (
     modules_for_files,
     package_name_to_path,
     pythonpath_roots,
+    real_path,
     rootless_test_dirs,
     split_import_roots,
 )
@@ -227,7 +228,7 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
         directory
         for file in filenames
         if PurePosixPath(file).name == "__init__.py"
-        if _runs_for_the_project(directory := Path(os.path.realpath((root / file).parent)), root)
+        if _runs_for_the_project(directory := real_path((root / file).parent), root)
     }
     if not directories:
         return []
@@ -659,9 +660,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     basedir_paths = [Path(directory) for directory in dep_tree.graph.get("rootless_test_dirs", ())]
     added = []
     for file in filenames:
-        # os.path.realpath, not Path.resolve(): git reports an untracked symlink loop, and resolve() raises on one
-        # before Python 3.13, whatever its name.
-        path = Path(os.path.realpath(root / file))
+        path = real_path(root / file)  # git reports an untracked symlink loop, whatever its name
         if not file.endswith(".py") or not path.is_relative_to(root):
             continue
         # The names the project's roots imply first, so a node is named as its path reads.
@@ -929,7 +928,11 @@ def _narrowed_files(package: str, tests_package: str | None, root: Path) -> froz
     return frozenset(
         path
         for path in discover_application_files(package, tests_package, root)
-        if os.path.basename(path) not in {"conftest.py", "__init__.py"} and not _is_test_file(Path(path), root)
+        # Inside the rootdir only: the package walk follows a symlinked sub-package out of it, where a test module's
+        # path no longer reads as one, and narrowing a test loses tests. Keeping an import only selects more.
+        if Path(path).is_relative_to(root)
+        and os.path.basename(path) not in {"conftest.py", "__init__.py"}
+        and not _is_test_file(Path(path), root)
     )
 
 

@@ -192,9 +192,10 @@ def testvalidate_tests_dir_valid():
     validate_tests_dir("tests", Path.cwd())  # Should not raise
 
 
-@pytest.mark.parametrize("tests_dir", ["tests.unit", ".tests", "../tests"])
+@pytest.mark.parametrize("tests_dir", ["tests.unit", ".tests", "../tests", "{outside}"])
 def test_validate_tests_dir_rejects_a_directory_the_analysis_cannot_name(tmp_path, tests_dir):
     """The tests dir travels as a dotted name: ``tests.unit`` would be walked as ``tests/unit``, finding nothing."""
+    tests_dir = tests_dir.format(outside=tmp_path / "other" / "tests")  # absolute, outside the rootdir
     (tmp_path / "project").mkdir()
     (tmp_path / "project" / tests_dir).mkdir(parents=True)
 
