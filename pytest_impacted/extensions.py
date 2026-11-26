@@ -21,6 +21,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from pytest_impacted.display import describe
+
 
 logger = logging.getLogger(__name__)
 
@@ -299,8 +301,8 @@ def load_extensions(
             (e.g. ``"threshold"``) or namespaced ini names
             (e.g. ``"impacted_ext_coverage_threshold"``).
         on_skip: Told, in one line, of each extension skipped because it lacks a required setting or raised on
-            loading; by default it is logged. A front end passes its terminal: a log record is swallowed during
-            collection, and a skipped extension's rule selects nothing.
+            loading. pytest passes its terminal: a log record is swallowed during collection, and a skipped
+            extension's rule selects nothing. By default it is logged, with the traceback (the CLI shows its log).
 
     Returns:
         List of instantiated strategy objects.
@@ -325,9 +327,12 @@ def load_extensions(
         try:
             instance = instantiate_strategy(ext, ext_cfg)
         except Exception as err:
-            logger.debug("Extension '%s' failed to instantiate", ext.name, exc_info=err)
-            reason = f"{type(err).__name__}: {err}"
-            skipped(f"pytest-impacted: extension '{ext.name}' is skipped: it raised on loading ({reason}).")
+            message = f"pytest-impacted: extension '{ext.name}' is skipped: it raised on loading ({describe(err)})."
+            if on_skip is None:
+                logger.warning(message, exc_info=err)
+            else:
+                logger.debug("Extension '%s' failed to instantiate", ext.name, exc_info=err)
+                on_skip(message)
             continue
 
         instances.append(instance)

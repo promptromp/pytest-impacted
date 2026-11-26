@@ -194,9 +194,16 @@ class Failing(ImpactStrategy):
     def teardown(self):
         if self.fail == "teardown":
             raise RuntimeError("boom in teardown")
+        if self.fail == "unprintable":
+            raise Unprintable()
 
     def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
         return []
+
+
+class Unprintable(Exception):
+    def __str__(self):
+        raise AttributeError("never set")
 
 
 class NeedsAKey(Failing):
@@ -226,8 +233,16 @@ def broken_extension(request, monkeypatch):
         (Failing, ["--impacted-ext-broken-fail=enrich"], "boom in enrich_dep_tree"),
         (Failing, ["--impacted-ext-broken-fail=setup"], "boom in setup"),
         (Failing, ["--impacted-ext-broken-fail=teardown"], "boom in teardown"),
+        (Failing, ["--impacted-ext-broken-fail=unprintable"], "Unprintable: <unprintable>"),
     ],
-    ids=["a required setting missing", "__init__ raises", "enrich raises", "setup raises", "teardown raises"],
+    ids=[
+        "a required setting missing",
+        "__init__ raises",
+        "enrich raises",
+        "setup raises",
+        "teardown raises",
+        "an exception that cannot be printed",
+    ],
     indirect=["broken_extension"],
 )
 @pytest.mark.usefixtures("broken_extension")

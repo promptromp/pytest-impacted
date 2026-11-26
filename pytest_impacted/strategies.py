@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 
 import networkx as nx
 
-from pytest_impacted.display import notify, warn
+from pytest_impacted.display import describe, notify, warn
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
 from pytest_impacted.graph import (
     build_dep_tree,
@@ -899,7 +899,7 @@ def _hook_failed(strategy: object, hook: str, err: Exception, consequence: str, 
     """
     name = f"{type(strategy).__module__}.{type(strategy).__qualname__}"
     logger.debug("Strategy %s raised in %s()", name, hook, exc_info=err)
-    warn(f"pytest-impacted: strategy {name} raised in {hook}() ({type(err).__name__}: {err}); {consequence}.", session)
+    warn(f"pytest-impacted: strategy {name} raised in {hook}() ({describe(err)}); {consequence}.", session)
 
 
 class CompositeImpactStrategy(ImpactStrategy):
@@ -975,7 +975,8 @@ class CompositeImpactStrategy(ImpactStrategy):
                     dep_tree=dep_tree,
                 )
             except Exception as err:  # noqa: BLE001 — one misbehaving extension must not block the others
-                _hook_failed(strategy, "setup", err, "its selection may be incomplete", session)
+                consequence = "its find_impacted_tests() still runs, without what setup() prepares"
+                _hook_failed(strategy, "setup", err, consequence, session)
 
     def teardown(self) -> None:
         """Propagate :meth:`teardown` to every sub-strategy in reverse order.
@@ -985,13 +986,14 @@ class CompositeImpactStrategy(ImpactStrategy):
         Exceptions are logged and swallowed for the same fault-tolerance
         reason as :meth:`setup`.
         """
+        session, self._session = getattr(self, "_session", None), None  # this run's, and never kept past it
         for strategy in reversed(self.strategies):
             if (strategy_teardown := getattr(strategy, "teardown", None)) is None:
                 continue
             try:
                 strategy_teardown()
             except Exception as err:  # noqa: BLE001 — every strategy gets its teardown
-                _hook_failed(strategy, "teardown", err, "the others still tear down", getattr(self, "_session", None))
+                _hook_failed(strategy, "teardown", err, "the others still tear down", session)
 
     def find_impacted_tests(
         self,

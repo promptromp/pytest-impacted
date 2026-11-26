@@ -86,9 +86,9 @@ def build_strategy_with_extensions(
         conftest_imports=conftest_imports,
         config_file=config_file,
     )
-    ext_strategies = load_extensions(
-        disabled=disabled, ext_config=ext_config, on_skip=lambda message: warn(message, session)
-    )
+    # To pytest's terminal; without a session (the CLI) to the log, which shows it, traceback and all.
+    on_skip = (lambda message: warn(message, session)) if session is not None else None
+    ext_strategies = load_extensions(disabled=disabled, ext_config=ext_config, on_skip=on_skip)
 
     # Sort extensions by priority (built-ins keep their fixed order)
     ext_strategies.sort(key=lambda s: getattr(s, "priority", 100))
