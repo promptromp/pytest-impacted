@@ -114,27 +114,23 @@ def pytest_addoption(parser: Parser):
 
 def _option_kwargs(option: Option) -> dict[str, Any]:
     """How the command line takes *option*: ``None`` (or ``[]``) when it is not given, so the ini setting applies."""
-    match option.kind:
-        case Kind.FLAG:
-            return {"action": "store_true", "default": None}
-        case Kind.LIST:
-            return {"action": "append", "default": [], "metavar": option.metavar}
-        case Kind.CHOICE:
-            optional = {"nargs": "?"} if option.optional_value else {}
-            return {"choices": list(option.choices), "default": None} | optional
-        case _:
-            return {"default": None, "metavar": option.metavar}
+    if option.kind is Kind.FLAG:
+        return {"action": "store_true", "default": None}
+    if option.kind is Kind.LIST:
+        return {"action": "append", "default": [], "metavar": option.metavar}
+    if option.kind is Kind.CHOICE:
+        optional = {"nargs": "?"} if option.optional_value else {}
+        return {"choices": list(option.choices), "default": None} | optional
+    return {"default": None, "metavar": option.metavar}
 
 
 def _ini_kwargs(option: Option) -> dict[str, Any]:
     """How the pytest configuration takes *option*."""
-    match option.kind:
-        case Kind.FLAG:
-            return {"type": "bool", "default": bool(option.default)}
-        case Kind.LIST:
-            return {"type": "args", "default": []}
-        case _:
-            return {"default": option.default}
+    if option.kind is Kind.FLAG:
+        return {"type": "bool", "default": bool(option.default)}
+    if option.kind is Kind.LIST:
+        return {"type": "args", "default": []}
+    return {"default": option.default}
 
 
 def pytest_configure(config: Config):
