@@ -11,7 +11,7 @@ from typing import NamedTuple
 import networkx as nx
 
 from pytest_impacted import _rust
-from pytest_impacted.dynamic_imports import parse_dynamic_imports
+from pytest_impacted.dynamic_imports import TABLE, DynamicImports, parse_dynamic_imports
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_test_module,
@@ -788,9 +788,10 @@ def _parse_project(
     )
     while True:
         imports |= parse({name: path for name, path in pending.items() if name not in imports})[0]
+        by_name = _parse_all_dynamic_imports(pending)
         for name, path in pending.items():
             # Once each, as the roots are settled: where an object's module ends is found through them.
-            imports[name] = sorted({*imports[name], *_imports_by_name(linker, name, path)})
+            imports[name] = sorted({*imports[name], *_imports_by_name(linker, by_name[name])})
             for candidate in imports[name]:
                 linker.targets(candidate)
                 # In the fixpoint: what it finds no walk named is parsed in turn.
@@ -802,8 +803,8 @@ def _parse_project(
             return imports, plugin_edges
 
 
-def _imports_by_name(linker: _Linker, name: str, path: str) -> list[str]:
-    """The import candidates of the calls in module *name* that import by name (see
+def _imports_by_name(linker: _Linker, found: DynamicImports) -> list[str]:
+    """The import candidates of what a module's calls import by name, *found* (see
     :mod:`~pytest_impacted.dynamic_imports`): each read as the import statement that imports the same.
 
     A module named is ``import pkg.mod``. An object path, ``resolve_name("pkg.mod.Class")``, is
@@ -811,12 +812,29 @@ def _imports_by_name(linker: _Linker, name: str, path: str) -> list[str]:
     ``pkgutil.resolve_name`` imports the longest one it can. An attribute path, ``patch("pkg.mod.Class.method")``,
     is the same with the module among the prefixes before its last part (see :func:`_import_of`).
     """
-    found = parse_dynamic_imports(path, import_base(name), os.path.basename(path) == "__init__.py")
     return [
         *found.modules,
         *(candidate for found_path in found.objects for candidate in _import_of(linker, found_path)),
         *(candidate for found_path in found.attributes for candidate in _import_of(linker, found_path, attribute=True)),
     ]
+
+
+def _parse_all_dynamic_imports(submodules: dict[str, str]) -> dict[str, DynamicImports]:
+    """What each module of ``{name: path}`` imports by name (see :mod:`~pytest_impacted.dynamic_imports`).
+
+    The Rust extension finds it in parallel when it can (``_rust.RUST_PARSES_DYNAMIC_IMPORTS``), from the same
+    table, else the stdlib ``ast`` pass does, file by file. A conftest with no free name is parsed under its
+    :func:`~pytest_impacted.traversal.import_base`, as for its import statements.
+    """
+    modules = [(path, import_base(name), os.path.basename(path) == "__init__.py") for name, path in submodules.items()]
+    if _rust.RUST_PARSES_DYNAMIC_IMPORTS:
+        found = [
+            DynamicImports(modules=names, objects=objects, attributes=attributes)
+            for names, objects, attributes in _rust.rust_parse_all_dynamic_imports(modules, TABLE)
+        ]
+    else:
+        found = [parse_dynamic_imports(*module) for module in modules]
+    return dict(zip(submodules, found, strict=True))
 
 
 def _import_of(linker: _Linker, object_path: str, *, attribute: bool = False) -> list[str]:

@@ -55,7 +55,7 @@ pub fn mentions(text: &str, name: &str) -> bool {
 }
 
 /// A character an identifier may hold: any non-ASCII one counts, so both backends agree on every script.
-fn identifier_char(c: char) -> bool {
+pub(crate) fn identifier_char(c: char) -> bool {
     c == '_' || c.is_ascii_alphanumeric() || !c.is_ascii()
 }
 

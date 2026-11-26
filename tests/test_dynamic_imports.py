@@ -1,20 +1,37 @@
-"""The imports a file makes by name: literal arguments of the known APIs that import them (see dynamic_imports)."""
+"""The imports a file makes by name: literal arguments of the known APIs that import them (see dynamic_imports).
+
+Every case runs through both backends: the stdlib ``ast`` pass, and the Rust extension reading the same table.
+"""
 
 import warnings
 
 import pytest
 
-from pytest_impacted.dynamic_imports import LOADERS, DynamicImports, Names, parse_dynamic_imports
+from pytest_impacted.dynamic_imports import LOADERS, TABLE, DynamicImports, Names, parse_dynamic_imports
+
+
+@pytest.fixture(params=["python", "rust"])
+def engine(request):
+    """A backend's parser of imports by name: ``(file path, module name, is package) -> DynamicImports``."""
+    if request.param == "python":
+        return parse_dynamic_imports
+    rust = pytest.importorskip("pytest_impacted_rs")
+
+    def parse(file_path, module_name, is_package=False):
+        modules, objects, attributes = rust.parse_all_dynamic_imports([(file_path, module_name, is_package)], TABLE)[0]
+        return DynamicImports(modules, objects, attributes)
+
+    return parse
 
 
 @pytest.fixture
-def parse(tmp_path):
+def parse(tmp_path, engine):
     """Factory: what a file of *source* imports by name, as module *module*."""
 
     def parse(source, module="app.loader", is_package=False):
         path = tmp_path / ("__init__.py" if is_package else "loader.py")
         path.write_text(source)
-        return parse_dynamic_imports(str(path), module, is_package)
+        return engine(str(path), module, is_package)
 
     return parse
 
@@ -246,8 +263,10 @@ def test_the_module_is_never_run(parse):
     assert parse(source) == found(modules=["app.target"])
 
 
-def test_a_file_that_cannot_be_read_or_parsed_imports_nothing(tmp_path, parse):
-    assert parse_dynamic_imports(str(tmp_path / "missing.py"), "app.missing") == NOTHING
+def test_a_file_that_cannot_be_read_or_parsed_imports_nothing(tmp_path, engine, parse):
+    assert engine(str(tmp_path / "missing.py"), "app.missing") == NOTHING
+    (tmp_path / "latin1.py").write_bytes(b"import importlib\nimportlib.import_module('app.target')  # caf\xe9\n")
+    assert engine(str(tmp_path / "latin1.py"), "app.latin1") == NOTHING  # not UTF-8: unreadable to both
     assert parse("import importlib\nimportlib.import_module('app.target'\n") == NOTHING
 
 
@@ -272,3 +291,43 @@ def test_a_warning_turned_error_hides_no_import(parse):
 def test_pathological_source_never_fails_the_parse(parse, source, imported):
     """Deep enough to stop a recursive walk: the file imports what can be read of it, or nothing."""
     assert parse(source) in (imported, NOTHING)
+
+
+@pytest.mark.parametrize(
+    ("source", "imported"),
+    [
+        ("\ufeffimport importlib\nimportlib.import_module('app.target')\n", found(modules=["app.target"])),  # a BOM
+        ("import importlib\nimportlib.import_module('app.\\x74arget')\n", found(modules=["app.target"])),  # an escape
+        ("import importlib\nimportlib.import_module('ünï.cödé')\n", found(modules=["ünï.cödé"])),  # any script
+        ("import importlib\nimportlib.import_module('app.✓')\n", found(modules=["app.✓"])),  # non-ASCII counts
+        ("import importlib\nimportlib.import_module('app.1st')\n", NOTHING),
+        ("import importlib\nx = f\"{importlib.import_module('app.target')}\"\n", found(modules=["app.target"])),
+        (
+            "import importlib\ndef f(x=importlib.import_module('app.target')):\n    pass\n",
+            found(modules=["app.target"]),
+        ),
+        (
+            "from unittest import mock\nclass C(metaclass=mock.patch('app.target.M')):\n    pass\n",
+            found(attributes=["app.target.M"]),
+        ),
+        ("import importlib\nlambda: [importlib.import_module(n) for n in ('app.target',)]\n", NOTHING),
+    ],
+    ids=["BOM", "escape", "non-ASCII", "non-ASCII symbol", "leading digit", "f-string", "default", "metaclass", "loop"],
+)
+def test_both_backends_read_the_same_source_alike(parse, source, imported):
+    """Where the backends' trees differ (a BOM, escapes, f-strings) or an identifier's rules might (other scripts:
+    any non-ASCII character counts, so no Unicode version decides)."""
+    assert parse(source) == imported
+
+
+def test_the_extension_refuses_a_table_it_cannot_read():
+    rust = pytest.importorskip("pytest_impacted_rs")
+
+    with pytest.raises(ValueError, match="unknown kind of name"):
+        rust.parse_all_dynamic_imports([], [("patch", 0, "target", "something", None, None, None)])
+
+
+def test_the_table_is_the_loaders():
+    """What the extension reads is the table itself, row by row: the backends cannot hold two tables."""
+    assert [row[0] for row in TABLE] == [loader.callee for loader in LOADERS]
+    assert {row[3] for row in TABLE} == {names.name.lower() for names in Names}

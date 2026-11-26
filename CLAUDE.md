@@ -382,8 +382,9 @@ From application code, that edge could place a test helper as application code, 
 That never happened in six measured projects, where application code's by-name edges all reach application
 modules: a documented trade-off, not a reach-only flag. An object path keeps every prefix longer than its module
 as a candidate, so a deleted module is linked whichever part it was. By-name candidates are added after
-`linker.activate`: only static imports are evidence of an assumed root. It is parsed with stdlib `ast` outside
-the backends, like `parse_pytest_plugins`. Only literals count; a computed name is no import.
+`linker.activate`: only static imports are evidence of an assumed root. The extension finds the calls in
+parallel (`parse_all_dynamic_imports`, reading `dynamic_imports.TABLE`: the backends hold one table), and the
+stdlib `ast` pass does when it is older or absent. Only literals count; a computed name is no import.
 
 **The `impacted-tests` CLI reads the pytest configuration through `ini.py`, never a pytest
 `Config`**: building one imports the initial conftests, which is running project code. `ini.py`
@@ -413,7 +414,11 @@ so a BOM is not a syntax error, and scan `match`/`case` bodies.
 runs every case through both): an `elif TYPE_CHECKING:` is a nested `If` in astroid's `orelse`, a
 clause with its own test in ruff's `elif_else_clauses`; astroid keeps docstrings out of its tree, ruff
 has them as bare string statements, so no bare string counts; an f-string's text is a string to
-neither; type comments are nodes to neither. Check new rules over every file of a real clone too.
+neither; type comments are nodes to neither. So are the imports by name (`tests/test_dynamic_imports.py`
+runs every case through the stdlib pass and `rust/src/dynamic_imports.rs`): an identifier counts any
+non-ASCII character as an identifier's in both, so no Unicode version decides, and the Rust port of
+`importlib.util.resolve_name` must keep its `rsplit` arithmetic. Check new rules over every file of a real
+clone too.
 The extension is a separate distribution and the `fast` extra is unpinned (a development build is
 `0.1.0`, which a pin would refuse), so an install may hold an older one: never change an existing
 function's signature — add a function (`parse_all_imports_split`), import it in `_rust.py` behind

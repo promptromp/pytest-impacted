@@ -6,8 +6,9 @@ parsing never sees, and the latter appears in nearly every test suite. :data:`LO
 data: the standard library's importers, the mock patchers and pytest's helpers. One mechanism reads them all
 (:func:`parse_dynamic_imports`). Only a literal names a module here; a name the code computes is not followed.
 
-Parsed with the stdlib ``ast`` and independent of the parsing backend, as
-:func:`~pytest_impacted.parsing.parse_pytest_plugins` is, so both backends see the same imports.
+Parsed with the stdlib ``ast``. ``rust/src/dynamic_imports.rs`` mirrors this module and reads the same table
+(:data:`TABLE`): the Rust extension finds the imports in parallel when it can, and this pass when it cannot
+(see ``graph._parse_all_dynamic_imports``).
 """
 
 import ast
@@ -102,6 +103,21 @@ _BY_LAST_PART = {
 # (``patch`` for ``patch.dict``). Only such files are parsed.
 _SPELLINGS = sorted(callee.rpartition(".")[2] for callee in _CALLEES if callee.rpartition(".")[0] not in _CALLEES)
 _SPELLED = re.compile(rf"\b(?:{'|'.join(map(re.escape, _SPELLINGS))})\b")
+# LOADERS as plain tuples for the Rust extension, which reads the same table:
+# (callee, position, keyword, names, package, fromlist, level), an argument being (position, keyword) or None.
+TABLE = tuple(
+    (
+        loader.callee,
+        loader.name.position,
+        loader.name.keyword,
+        loader.names.name.lower(),
+        *(
+            (argument.position, argument.keyword) if argument else None
+            for argument in (loader.package, loader.fromlist, loader.level)
+        ),
+    )
+    for loader in LOADERS
+)
 
 
 def parse_dynamic_imports(file_path: str, module_name: str, is_package: bool = False) -> DynamicImports:
@@ -209,7 +225,7 @@ def _named(call: ast.Call, loader: Loader, module_name: str, is_package: bool) -
     if loader.fromlist:
         items = _argument(call, loader.fromlist)
         for item in items.elts if isinstance(items, ast.List | ast.Tuple) else ():
-            if (submodule := _literal(item)) is not None and submodule.isidentifier():
+            if (submodule := _literal(item)) is not None and _is_identifier(submodule):
                 yield Names.MODULE, f"{name}.{submodule}"
 
 
@@ -282,4 +298,16 @@ def _is_zero(node: ast.expr | None) -> bool:
 
 def _dotted(text: str) -> bool:
     """Whether *text* spells a dotted name, such as a module's: ``pkg.mod``, not ``pkg-x.mod`` or ``/items``."""
-    return bool(text) and all(part.isidentifier() for part in text.split("."))
+    return bool(text) and all(_is_identifier(part) for part in text.split("."))
+
+
+def _is_identifier(text: str) -> bool:
+    """Whether *text* is an identifier, any non-ASCII character counting as an identifier's.
+
+    That way both backends agree on every script, whatever their Unicode version, as ``type_only.mentions`` does.
+    """
+    return (
+        bool(text)
+        and not ("0" <= text[0] <= "9")
+        and all(char == "_" or char.isalnum() or not char.isascii() for char in text)
+    )
