@@ -14,6 +14,8 @@ from pytest_impacted.extensions import ConfigOption, clear_extension_cache
 from pytest_impacted.plugin import pytest_report_header
 from pytest_impacted.strategies import CompositeImpactStrategy, ImpactStrategy
 
+from .git_helpers import entry_point
+
 
 class SimpleTestStrategy(ImpactStrategy):
     """Test strategy for integration tests."""
@@ -22,22 +24,8 @@ class SimpleTestStrategy(ImpactStrategy):
         return ["tests.test_simple"]
 
 
-def _make_mock_entry_point(name, cls):
-    ep = MagicMock()
-    ep.name = name
-    ep.value = f"{cls.__module__}:{cls.__qualname__}"
-    ep.load.return_value = cls
-    return ep
-
-
 class TestExtensionPluginIntegration:
     """Test that extensions integrate correctly with the pytest plugin."""
-
-    def setup_method(self):
-        clear_extension_cache()
-
-    def teardown_method(self):
-        clear_extension_cache()
 
     def test_header_format_without_extensions(self, pytester):
         """Report header should show standard fields when no extensions are installed."""
@@ -46,11 +34,9 @@ class TestExtensionPluginIntegration:
         result = pytester.runpytest("-v")
         result.stdout.fnmatch_lines(["*pytest-impacted:*backend=*"])
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_extensions_shown_in_report_header_unit(self, mock_entry_points):
+    def test_extensions_shown_in_report_header_unit(self, entry_points):
         """Extension names should appear in the header via pytest_report_header."""
-        mock_entry_points.return_value = [_make_mock_entry_point("my_ext", SimpleTestStrategy)]
-        clear_extension_cache()
+        entry_points.return_value = [entry_point("my_ext", SimpleTestStrategy)]
 
         config = MagicMock()
         config.getoption.return_value = None
@@ -59,19 +45,16 @@ class TestExtensionPluginIntegration:
         header = pytest_report_header(config)
         assert any("extensions=my_ext" in line for line in header)
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_disable_ext_option_registered(self, mock_entry_points, pytester):
+    def test_disable_ext_option_registered(self, entry_points, pytester):
         """The --impacted-disable-ext option should be available."""
-        mock_entry_points.return_value = []
-        clear_extension_cache()
+        entry_points.return_value = []
 
         pytester.makepyfile(test_dummy="def test_pass(): pass")
 
         result = pytester.runpytest("--help")
         result.stdout.fnmatch_lines(["*--impacted-disable-ext*"])
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_extension_config_options_registered(self, mock_entry_points, pytester):
+    def test_extension_config_options_registered(self, entry_points, pytester):
         """Extension config options should appear as CLI flags."""
 
         class ConfiguredStrategy(ImpactStrategy):
@@ -82,19 +65,16 @@ class TestExtensionPluginIntegration:
             def find_impacted_tests(self, *args, **kwargs):
                 return []
 
-        mock_entry_points.return_value = [_make_mock_entry_point("configured", ConfiguredStrategy)]
-        clear_extension_cache()
+        entry_points.return_value = [entry_point("configured", ConfiguredStrategy)]
 
         pytester.makepyfile(test_dummy="def test_pass(): pass")
 
         result = pytester.runpytest("--help")
         result.stdout.fnmatch_lines(["*--impacted-ext-configured-my-flag*"])
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_no_extensions_header_omits_extensions(self, mock_entry_points, pytester):
+    def test_no_extensions_header_omits_extensions(self, entry_points, pytester):
         """When no extensions are installed, 'extensions=' should not appear in header."""
-        mock_entry_points.return_value = []
-        clear_extension_cache()
+        entry_points.return_value = []
 
         pytester.makepyfile(test_dummy="def test_pass(): pass")
 
@@ -170,17 +150,9 @@ class TestDepTreePassThrough:
 class TestExtensionCLIIntegration:
     """Test that extensions integrate correctly with the Click CLI."""
 
-    def setup_method(self):
-        clear_extension_cache()
-
-    def teardown_method(self):
-        clear_extension_cache()
-
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_cli_disable_ext_option(self, mock_entry_points, tmp_path, monkeypatch):
+    def test_cli_disable_ext_option(self, entry_points, tmp_path, monkeypatch):
         """The --disable-ext option should be accepted by the CLI."""
-        mock_entry_points.return_value = []
-        clear_extension_cache()
+        entry_points.return_value = []
 
         runner = CliRunner()
         monkeypatch.chdir(tmp_path)
@@ -207,29 +179,21 @@ class FlaggedStrategy(ImpactStrategy):
 
 
 class TestAnExtensionsSettings:
-    """Its settings reach it, from pytest and from the CLI; discovery's cache is cleared even when a test fails."""
+    """Its settings reach it, from pytest and from the CLI."""
 
-    def setup_method(self):
-        clear_extension_cache()
-
-    def teardown_method(self):
-        clear_extension_cache()
-
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_an_on_off_setting_is_a_flag(self, mock_entry_points, pytester):
+    def test_an_on_off_setting_is_a_flag(self, entry_points, pytester):
         """``--impacted-ext-flagged-strict`` alone turns it on, as ``store_true`` does; no value follows it."""
-        mock_entry_points.return_value = [_make_mock_entry_point("flagged", FlaggedStrategy)]
+        entry_points.return_value = [entry_point("flagged", FlaggedStrategy)]
 
         config = pytester.parseconfig("--impacted-ext-flagged-strict", "--impacted-ext-flagged-label=x")
 
         assert config.getoption("impacted_ext_flagged_strict") is True
         assert config.getoption("impacted_ext_flagged_label") == "x"
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_the_cli_registers_them_and_hands_their_values_over(self, mock_entry_points, tmp_path):
+    def test_the_cli_registers_them_and_hands_their_values_over(self, entry_points, tmp_path):
         """``impacted-tests`` registers each extension's settings when ``pytest_impacted.cli`` is imported (as an
         install's first import of it does): re-imported here with the extension installed, then without."""
-        mock_entry_points.return_value = [_make_mock_entry_point("flagged", FlaggedStrategy)]
+        entry_points.return_value = [entry_point("flagged", FlaggedStrategy)]
         (tmp_path / "pkg").mkdir()
         try:
             command = importlib.reload(cli_module).impacted_tests_cli
@@ -240,8 +204,8 @@ class TestAnExtensionsSettings:
                 args = ["--root-dir", str(tmp_path), "--module", "pkg", "--impacted-ext-flagged-label", "x"]
                 result = CliRunner().invoke(command, args)
         finally:
-            mock_entry_points.return_value = []
-            clear_extension_cache()
+            entry_points.return_value = []
+            clear_extension_cache()  # before the re-import, or it would register the extension's options again
             importlib.reload(cli_module)
 
         assert result.exit_code == 0, result.output

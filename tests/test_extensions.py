@@ -1,7 +1,7 @@
 """Unit tests for the extension system."""
 
 from typing import ClassVar
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -29,6 +29,8 @@ from pytest_impacted.strategies import (
     PytestImpactStrategy,
     get_default_strategies,
 )
+
+from .git_helpers import entry_point
 
 
 # -- Test fixtures and helpers --
@@ -108,15 +110,6 @@ class LowPriorityStrategy(ImpactStrategy):
 
     def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
         return ["tests.test_low_priority"]
-
-
-def _make_mock_entry_point(name: str, cls: type) -> MagicMock:
-    """Create a mock entry point that loads the given class."""
-    ep = MagicMock()
-    ep.name = name
-    ep.value = f"{cls.__module__}:{cls.__qualname__}"
-    ep.load.return_value = cls
-    return ep
 
 
 # -- Tests --
@@ -265,27 +258,20 @@ class TestInstantiateStrategy:
 class TestDiscoverExtensionMetadata:
     """Test extension discovery."""
 
-    def setup_method(self):
-        clear_extension_cache()
-
-    def teardown_method(self):
-        clear_extension_cache()
-
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_no_extensions(self, mock_entry_points):
-        mock_entry_points.return_value = []
+    def test_no_extensions(self, entry_points):
+        entry_points.return_value = []
         result = discover_extension_metadata()
         assert result == ()
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points", side_effect=RuntimeError("broken metadata"))
-    def test_a_failed_entry_point_query_finds_no_extension(self, _mock_entry_points, caplog):
+    def test_a_failed_entry_point_query_finds_no_extension(self, entry_points, caplog):
         """Broken package metadata must not fail every pytest run: the plugin asks in ``pytest_addoption``."""
+        entry_points.side_effect = RuntimeError("broken metadata")
+
         assert discover_extension_metadata() == ()
         assert "Failed to query entry points" in caplog.text
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_discover_simple_strategy(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_discover_simple_strategy(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         result = discover_extension_metadata()
         assert len(result) == 1
         assert result[0].name == "simple"
@@ -293,69 +279,62 @@ class TestDiscoverExtensionMetadata:
         assert result[0].config_options == []
         assert result[0].priority == 100
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_discover_configurable_strategy(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("conf", ConfigurableStrategy)]
+    def test_discover_configurable_strategy(self, entry_points):
+        entry_points.return_value = [entry_point("conf", ConfigurableStrategy)]
         result = discover_extension_metadata()
         assert len(result) == 1
         assert result[0].name == "conf"
         assert len(result[0].config_options) == 2
         assert result[0].priority == 50
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_discover_duck_typed_strategy(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("duck", DuckTypedStrategy)]
+    def test_discover_duck_typed_strategy(self, entry_points):
+        entry_points.return_value = [entry_point("duck", DuckTypedStrategy)]
         result = discover_extension_metadata()
         assert len(result) == 1
         assert result[0].name == "duck"
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_invalid_class_skipped(self, mock_entry_points):
-        mock_entry_points.return_value = [
-            _make_mock_entry_point("valid", SimpleStrategy),
-            _make_mock_entry_point("invalid", InvalidStrategy),
+    def test_invalid_class_skipped(self, entry_points):
+        entry_points.return_value = [
+            entry_point("valid", SimpleStrategy),
+            entry_point("invalid", InvalidStrategy),
         ]
         result = discover_extension_metadata()
         assert len(result) == 1
         assert result[0].name == "valid"
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_import_error_skipped(self, mock_entry_points):
+    def test_import_error_skipped(self, entry_points):
         broken_ep = MagicMock()
         broken_ep.name = "broken"
         broken_ep.value = "nonexistent:Strategy"
         broken_ep.load.side_effect = ImportError("No module named 'nonexistent'")
 
-        mock_entry_points.return_value = [
+        entry_points.return_value = [
             broken_ep,
-            _make_mock_entry_point("valid", SimpleStrategy),
+            entry_point("valid", SimpleStrategy),
         ]
         result = discover_extension_metadata()
         assert len(result) == 1
         assert result[0].name == "valid"
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_discovery_is_cached(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_discovery_is_cached(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         result1 = discover_extension_metadata()
         result2 = discover_extension_metadata()
         assert result1 is result2
-        mock_entry_points.assert_called_once()
+        entry_points.assert_called_once()
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_cache_clear(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_cache_clear(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         discover_extension_metadata()
         clear_extension_cache()
         discover_extension_metadata()
-        assert mock_entry_points.call_count == 2
+        assert entry_points.call_count == 2
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_multiple_extensions(self, mock_entry_points):
-        mock_entry_points.return_value = [
-            _make_mock_entry_point("simple", SimpleStrategy),
-            _make_mock_entry_point("conf", ConfigurableStrategy),
-            _make_mock_entry_point("duck", DuckTypedStrategy),
+    def test_multiple_extensions(self, entry_points):
+        entry_points.return_value = [
+            entry_point("simple", SimpleStrategy),
+            entry_point("conf", ConfigurableStrategy),
+            entry_point("duck", DuckTypedStrategy),
         ]
         result = discover_extension_metadata()
         assert len(result) == 3
@@ -366,28 +345,19 @@ class TestDiscoverExtensionMetadata:
 class TestLoadExtensions:
     """Test extension loading and instantiation."""
 
-    def setup_method(self):
-        clear_extension_cache()
-
-    def teardown_method(self):
-        clear_extension_cache()
-
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_no_extensions(self, mock_entry_points):
-        mock_entry_points.return_value = []
+    def test_load_no_extensions(self, entry_points):
+        entry_points.return_value = []
         instances = load_extensions()
         assert instances == []
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_simple_extension(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_load_simple_extension(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         instances = load_extensions()
         assert len(instances) == 1
         assert isinstance(instances[0], SimpleStrategy)
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_with_config_namespaced(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("conf", ConfigurableStrategy)]
+    def test_load_with_config_namespaced(self, entry_points):
+        entry_points.return_value = [entry_point("conf", ConfigurableStrategy)]
         instances = load_extensions(
             ext_config={"impacted_ext_conf_threshold": "90", "impacted_ext_conf_data_file": "/tmp/x"}
         )
@@ -395,24 +365,21 @@ class TestLoadExtensions:
         assert instances[0].threshold == 90
         assert instances[0].data_file == "/tmp/x"
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_with_config_raw_names(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("conf", ConfigurableStrategy)]
+    def test_load_with_config_raw_names(self, entry_points):
+        entry_points.return_value = [entry_point("conf", ConfigurableStrategy)]
         instances = load_extensions(ext_config={"threshold": "75"})
         assert len(instances) == 1
         assert instances[0].threshold == 75
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_disabled_extension(self, mock_entry_points):
-        mock_entry_points.return_value = [
-            _make_mock_entry_point("a", SimpleStrategy),
-            _make_mock_entry_point("b", DuckTypedStrategy),
+    def test_load_disabled_extension(self, entry_points):
+        entry_points.return_value = [
+            entry_point("a", SimpleStrategy),
+            entry_point("b", DuckTypedStrategy),
         ]
         instances = load_extensions(disabled=("a",))
         assert len(instances) == 1
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_instantiation_error(self, mock_entry_points):
+    def test_load_instantiation_error(self, entry_points):
         """A strategy that fails during __init__ is skipped."""
 
         class BrokenInit(ImpactStrategy):
@@ -422,36 +389,33 @@ class TestLoadExtensions:
             def find_impacted_tests(self, *args, **kwargs):
                 return []
 
-        mock_entry_points.return_value = [
-            _make_mock_entry_point("broken", BrokenInit),
-            _make_mock_entry_point("valid", SimpleStrategy),
+        entry_points.return_value = [
+            entry_point("broken", BrokenInit),
+            entry_point("valid", SimpleStrategy),
         ]
         instances = load_extensions()
         assert len(instances) == 1
         assert isinstance(instances[0], SimpleStrategy)
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_required_config_provided(self, mock_entry_points):
+    def test_load_required_config_provided(self, entry_points):
         """Required config option is provided — extension loads successfully."""
-        mock_entry_points.return_value = [_make_mock_entry_point("req", RequiredConfigStrategy)]
+        entry_points.return_value = [entry_point("req", RequiredConfigStrategy)]
         instances = load_extensions(ext_config={"impacted_ext_req_api_key": "secret123"})
         assert len(instances) == 1
         assert instances[0].api_key == "secret123"
         assert instances[0].timeout == 30  # default
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_required_config_missing(self, mock_entry_points):
+    def test_load_required_config_missing(self, entry_points):
         """Required config option is missing — extension is skipped."""
-        mock_entry_points.return_value = [_make_mock_entry_point("req", RequiredConfigStrategy)]
+        entry_points.return_value = [entry_point("req", RequiredConfigStrategy)]
         instances = load_extensions(ext_config={})
         assert len(instances) == 0
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_load_required_config_missing_does_not_block_others(self, mock_entry_points):
+    def test_load_required_config_missing_does_not_block_others(self, entry_points):
         """A missing required config skips that extension but loads others."""
-        mock_entry_points.return_value = [
-            _make_mock_entry_point("req", RequiredConfigStrategy),
-            _make_mock_entry_point("simple", SimpleStrategy),
+        entry_points.return_value = [
+            entry_point("req", RequiredConfigStrategy),
+            entry_point("simple", SimpleStrategy),
         ]
         instances = load_extensions(ext_config={})
         assert len(instances) == 1
@@ -461,15 +425,8 @@ class TestLoadExtensions:
 class TestBuildStrategyWithExtensions:
     """Test the full strategy builder."""
 
-    def setup_method(self):
-        clear_extension_cache()
-
-    def teardown_method(self):
-        clear_extension_cache()
-
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_no_extensions_returns_defaults(self, mock_entry_points):
-        mock_entry_points.return_value = []
+    def test_no_extensions_returns_defaults(self, entry_points):
+        entry_points.return_value = []
         strategy = build_strategy_with_extensions()
         assert isinstance(strategy, CompositeImpactStrategy)
         assert [type(s) for s in strategy.strategies] == [
@@ -479,24 +436,21 @@ class TestBuildStrategyWithExtensions:
             DependencyFileImpactStrategy,
         ]
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_no_extensions_no_dep_files(self, mock_entry_points):
-        mock_entry_points.return_value = []
+    def test_no_extensions_no_dep_files(self, entry_points):
+        entry_points.return_value = []
         strategy = build_strategy_with_extensions(watch_dep_files=False)
         assert len(strategy.strategies) == 3
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_invalidation_patterns_reach_builtin_strategy(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_invalidation_patterns_reach_builtin_strategy(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions(invalidate_all_patterns=("*.json",))
         # Built-ins (now 5) still precede extensions.
         assert isinstance(strategy.strategies[4], InvalidationFileImpactStrategy)
         assert strategy.strategies[4].patterns == ("*.json",)
         assert isinstance(strategy.strategies[5], SimpleStrategy)
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_conftest_imports_reaches_builtin_strategies(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_conftest_imports_reaches_builtin_strategies(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions(conftest_imports=True)
         # The option reaches the built-in, which stays ahead of extensions.
         assert isinstance(strategy.strategies[2], ConftestImportImpactStrategy)
@@ -504,25 +458,22 @@ class TestBuildStrategyWithExtensions:
         assert build_strategy_with_extensions().strategies[2].report_only is True
         assert isinstance(strategy.strategies[-1], SimpleStrategy)
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_with_extension(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_with_extension(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions()
         assert len(strategy.strategies) == 5
         # Last strategy is the extension
         assert isinstance(strategy.strategies[4], SimpleStrategy)
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_with_disabled_extension(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("simple", SimpleStrategy)]
+    def test_with_disabled_extension(self, entry_points):
+        entry_points.return_value = [entry_point("simple", SimpleStrategy)]
         strategy = build_strategy_with_extensions(disabled=("simple",))
         assert len(strategy.strategies) == 4  # Only built-ins
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_extension_priority_ordering(self, mock_entry_points):
-        mock_entry_points.return_value = [
-            _make_mock_entry_point("low", LowPriorityStrategy),
-            _make_mock_entry_point("high", HighPriorityStrategy),
+    def test_extension_priority_ordering(self, entry_points):
+        entry_points.return_value = [
+            entry_point("low", LowPriorityStrategy),
+            entry_point("high", HighPriorityStrategy),
         ]
         strategy = build_strategy_with_extensions()
         # Built-ins come first (3), then extensions sorted by priority
@@ -530,9 +481,8 @@ class TestBuildStrategyWithExtensions:
         assert isinstance(ext_strategies[0], HighPriorityStrategy)  # priority=10
         assert isinstance(ext_strategies[1], LowPriorityStrategy)  # priority=200
 
-    @patch("pytest_impacted.extensions.importlib.metadata.entry_points")
-    def test_with_extension_config(self, mock_entry_points):
-        mock_entry_points.return_value = [_make_mock_entry_point("conf", ConfigurableStrategy)]
+    def test_with_extension_config(self, entry_points):
+        entry_points.return_value = [entry_point("conf", ConfigurableStrategy)]
         strategy = build_strategy_with_extensions(
             ext_config={"impacted_ext_conf_threshold": "95"},
         )
