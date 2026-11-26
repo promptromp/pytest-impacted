@@ -14,6 +14,7 @@ from pytest_impacted import _rust
 from pytest_impacted.api import build_strategy_with_extensions, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.display import warn
 from pytest_impacted.extensions import (
+    check_ext_config,
     discover_extension_metadata,
     enabled_extension_metadata,
     get_ext_cli_flag,
@@ -22,9 +23,11 @@ from pytest_impacted.extensions import (
 from pytest_impacted.file_map import parse_file_map, unknown_paths
 from pytest_impacted.git import (
     GIT_AVAILABLE,
+    GitError,
     GitMode,
     GitUnavailableError,
     InvalidGitRefError,
+    check_repository,
     find_repo,
     rev_args,
 )
@@ -335,17 +338,27 @@ def pytest_report_header(config: Config) -> list[str]:
     ]
     if ext_names:
         header.append(f"extensions={','.join(ext_names)}")
-    lines = ["pytest-impacted: " + ", ".join(header)]
-    if get_option("impacted") and GIT_AVAILABLE and (file_map := _file_map_or_none(get_option("impacted_map"))):
+    return ["pytest-impacted: " + ", ".join(header), *_header_warnings(config)]
+
+
+def _header_warnings(config: Config) -> list[str]:
+    """The warnings the report header carries — or, when pytest leaves it out, the terminal summary.
+
+    Both are written by the controller, so they survive pytest-xdist, whose workers run collection and whose
+    terminal output is discarded.
+    """
+    get_option = partial(get_option_from_config, config)
+    if not get_option("impacted"):
+        return []
+    lines: list[str] = []
+    if GIT_AVAILABLE and (file_map := _file_map_or_none(get_option("impacted_map"))):
         unknown = _unknown_paths_or_none(file_map, config.rootpath)
         lines.extend(
             f"pytest-impacted: WARNING: --impacted-map path {path} matches no file git knows." for path in unknown
         )
-    if get_option("impacted") and (outdated := _rust.outdated_for(bool(ignore_type_checking_imports))):
+    if outdated := _rust.outdated_for(bool(get_option("impacted_ignore_type_checking_imports"))):
         lines.append(f"pytest-impacted: WARNING: {outdated}")
-    if get_option("impacted") and not GIT_AVAILABLE:
-        # The header is written by the controller, so this survives pytest-xdist,
-        # whose workers run collection and whose terminal output is discarded.
+    if not GIT_AVAILABLE:
         lines.append(f"pytest-impacted: WARNING: {GitUnavailableError()} Running every test.")
     return lines
 
@@ -434,6 +447,8 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             pythonpath=_pythonpath(config),
             ignore_type_checking_imports=bool(get_option("impacted_ignore_type_checking_imports")),
         )
+    except GitError as err:  # validate_config asked first; git may still refuse later (a ref deleted since)
+        raise UsageError(str(err)) from err
     except GitUnavailableError as err:
         # Fail open: with the changes unknown, every test may be impacted. Not
         # warnings.warn — `filterwarnings = error` would turn it into a crash.
@@ -591,6 +606,10 @@ def pytest_terminal_summary(terminalreporter, config: Config) -> None:
     if count and config.get_verbosity() > -2:
         tests = "test" if count == 1 else "tests"
         terminalreporter.write_line(f"pytest-impacted: {count} {tests} {NOT_IMPACTED}, deselected")
+    # pytest leaves the report header out under -q and --no-header; a warning it carries is said here instead.
+    if config.getoption("verbose") < 0 or config.getoption("no_header"):
+        for line in _header_warnings(config):
+            terminalreporter.write_line(line, yellow=True, bold=True)
 
 
 def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_dir: Path) -> set[pytest.Item]:
@@ -646,6 +665,10 @@ def validate_config(config: Config):
         raise UsageError("No module specified. Please specify a module using --impacted-module.")
     if not get_option("impacted_git_mode"):
         raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
+    if (git_mode := get_option("impacted_git_mode")) not in list(GitMode):
+        # ``choices`` guards the command line only; the setting would reach the analysis and crash it.
+        choices = ", ".join(f"'{mode}'" for mode in GitMode)
+        raise UsageError(f"Invalid impacted_git_mode value {git_mode!r}: expected one of {choices}.")
     unimpacted = get_option("impacted_unimpacted")
     if unimpacted not in list(Unimpacted):
         choices = ", ".join(f"'{action}'" for action in Unimpacted)
@@ -657,6 +680,7 @@ def validate_config(config: Config):
         given = config.getoption("impacted_invalidate_all", default=None)
         source = "--impacted-invalidate-all" if given else f"impacted_invalidate_all in {config.inipath}"
         parse_invalidation_patterns(get_option("impacted_invalidate_all") or [], source)
+        check_ext_config(disabled=get_option("impacted_disable_ext") or [], ext_config=_collect_ext_config(config))
     except ValueError as err:
         raise UsageError(str(err)) from err
 
@@ -672,9 +696,23 @@ def validate_config(config: Config):
     if tests_dir:
         validate_tests_dir(tests_dir, root_dir)
 
+    validate_repository(root_dir)
     base_branch = get_option("impacted_base_branch")
     if get_option("impacted_git_mode") == GitMode.BRANCH and base_branch:
         validate_base_branch(base_branch, str(config.rootpath))
+
+
+def validate_repository(root_dir: Path) -> None:
+    """Refuse a project git cannot read — no repository, or one it refuses — in git's own words.
+
+    Without git there is nothing to check: the run fails open (see :class:`~pytest_impacted.git.GitUnavailableError`).
+    """
+    try:
+        check_repository(root_dir)
+    except GitUnavailableError:
+        return
+    except GitError as err:
+        raise UsageError(f"{err} pytest-impacted reads the changed files from git.") from err
 
 
 def validate_module(module_name: str, root_dir: Path) -> None:

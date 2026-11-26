@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # the problem itself (see GitUnavailableError).
 try:
     from git import Repo
-    from git.exc import GitCommandError, GitCommandNotFound
+    from git.exc import GitCommandError, GitCommandNotFound, InvalidGitRepositoryError, NoSuchPathError
 
     GIT_AVAILABLE = True
 except ImportError:
@@ -29,6 +29,14 @@ except ImportError:
 
 class InvalidGitRefError(ValueError):
     """A ref name was rejected before it could be handed to the git CLI."""
+
+
+class GitError(RuntimeError):
+    """git ran, and refused: no repository, one another user owns (``dubious ownership``), an unknown revision.
+
+    A configuration error, said in one line — git's own reason — rather than GitPython's traceback.
+    Never failed open: with git working, the project is what needs fixing (see :class:`GitUnavailableError`).
+    """
 
 
 class GitUnavailableError(RuntimeError):
@@ -241,11 +249,48 @@ def find_impacted_files_in_repo(
 
     try:
         return _find_impacted_files(repo_dir, git_mode, base_branch, use_merge_base, on_fallback)
+    except (InvalidGitRepositoryError, NoSuchPathError) as err:
+        raise GitError(f"No git repository found at or above '{repo_dir}'.") from err
+    except GitCommandError as err:
+        raise GitError(_reason(err)) from err
     except GitCommandNotFound as err:
         # The import succeeded (e.g. GIT_PYTHON_REFRESH=quiet) but git could not be
         # launched. GitPython uses this for any launch failure, so keep its reason —
         # the first line; the rest is the full command line.
         raise GitUnavailableError(str(err).strip().splitlines()[0]) from err
+
+
+def check_repository(repo_dir: str | Path) -> None:
+    """Raise :class:`GitError` unless git can read the repository at or above *repo_dir*.
+
+    :class:`GitUnavailableError` when git cannot run at all. Asked first, because git's other commands fail
+    confusingly in a repository it refuses: ``git diff --cached`` says "unknown option `cached`".
+    """
+    if not GIT_AVAILABLE:
+        raise GitUnavailableError()
+    try:
+        _readable_repo(repo_dir)
+    except (InvalidGitRepositoryError, NoSuchPathError) as err:
+        raise GitError(f"No git repository found at or above '{repo_dir}'.") from err
+    except GitCommandError as err:
+        raise GitError(_reason(err)) from err
+    except GitCommandNotFound as err:
+        raise GitUnavailableError(str(err).strip().splitlines()[0]) from err
+
+
+def _readable_repo(repo_dir: str | Path) -> Repo:
+    """The repository at or above *repo_dir*, once git itself has agreed to read it."""
+    repo = find_repo(repo_dir)
+    repo.git.rev_parse("--git-dir")  # GitPython opens a repository without git, which may still refuse it
+    return repo
+
+
+def _reason(err: GitCommandError) -> str:
+    """git's own words for failing, on one line: its stderr, which GitPython wraps as ``stderr: '...'``."""
+    stderr = err.stderr if isinstance(err.stderr, str) else (err.stderr or b"").decode("utf-8", "replace")
+    text = stderr.strip().removeprefix("stderr:").strip().removeprefix("'").removesuffix("'")
+    words = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    return f"git {err.command[1] if len(err.command) > 1 else ''} failed: {words or err}".replace("  ", " ")
 
 
 def _find_impacted_files(
@@ -255,7 +300,7 @@ def _find_impacted_files(
     use_merge_base: bool,
     on_fallback: Callable[[str], None] | None,
 ) -> list[str] | None:
-    repo = find_repo(repo_dir)
+    repo = _readable_repo(repo_dir)
     if repo.bare:
         raise ValueError(f"{repo.git_dir} is a bare repository; pytest-impacted needs a working tree to diff.")
 

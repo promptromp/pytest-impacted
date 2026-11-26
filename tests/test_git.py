@@ -932,7 +932,7 @@ def test_branch_mode_with_an_unknown_base_is_an_error_not_a_fallback(real_repo):
     _, root = real_repo
     notices: list[str] = []
 
-    with pytest.raises(GitCommandError):
+    with pytest.raises(git.GitError, match="no-such-branch"):
         git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "no-such-branch", on_fallback=notices.append)
     assert notices == []
 

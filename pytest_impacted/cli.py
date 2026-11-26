@@ -19,7 +19,7 @@ from pytest_impacted.extensions import (
     get_ext_ini_name,
 )
 from pytest_impacted.file_map import parse_file_map
-from pytest_impacted.git import GitMode, GitUnavailableError
+from pytest_impacted.git import GitError, GitMode, GitUnavailableError
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
 from pytest_impacted.strategies import parse_invalidation_patterns
 from pytest_impacted.traversal import unnameable_tests_dir
@@ -318,6 +318,8 @@ def _run(
     except GitUnavailableError as err:
         # Printing nothing would read as "no tests impacted" to a script piping
         # this output into pytest, so fail instead.
+        raise click.ClickException(str(err)) from err
+    except GitError as err:  # no repository, one git refuses, an unknown base branch: git's words, no traceback
         raise click.ClickException(str(err)) from err
 
     if impacted_tests:

@@ -398,8 +398,11 @@ The plugin validates configuration early and provides helpful error messages:
 | `--impacted-base-branch=no_such_branch` | Error listing available git refs |
 | `--impacted-base-branch=--some-option` | Rejected before reaching git — refs may not begin with `-`, since git would parse them as options rather than revisions |
 | No git repository found (branch mode) | Clear error naming the rootdir searched: no `.git` found at or above it |
-| No git repository found (unstaged mode) | Not validated up front — the failure surfaces from GitPython during collection |
-| git executable not installed (or GitPython missing) | **Fails open**: every test runs. If git was missing when the plugin loaded, a `WARNING` line in the report header says so; if it fails only when invoked, a terminal warning does. The `impacted-tests` CLI exits with status 1 instead of printing an empty list. When git *is* available, a missing repository is different — that is a configuration error and stays one |
+| No git repository found (unstaged mode) | The same clear error, up front |
+| git refuses the repository (`detected dubious ownership`, common in CI containers) | Error quoting git, with the `safe.directory` command it suggests |
+| `impacted_git_mode = Branch` (a setting that is no mode) | Error naming the valid modes |
+| An extension setting that does not convert to its type | Error naming the extension, the option and the value |
+| git executable not installed (or GitPython missing) | **Fails open**: every test runs. If git was missing when the plugin loaded, a `WARNING` line in the report header says so (in the terminal summary under `-q` or `--no-header`, which leave the header out); if it fails only when invoked, a terminal warning does. The `impacted-tests` CLI exits with status 1 instead of printing an empty list. When git *is* available, a missing repository is different — that is a configuration error and stays one |
 
 ## All Options
 

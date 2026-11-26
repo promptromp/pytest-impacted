@@ -358,8 +358,12 @@ def test_the_extension_refuses_a_table_it_cannot_read():
 
 @pytest.mark.parametrize(
     "refusal",
-    [ValueError("unknown kind of name in the loader table"), TypeError("a row of another shape")],
-    ids=["a kind it predates", "a row it predates"],
+    [
+        ValueError("unknown kind of name in the loader table"),
+        TypeError("a row of another shape"),
+        OverflowError("can't convert negative int to unsigned"),  # a position out of its range
+    ],
+    ids=["a kind it predates", "a row it predates", "a number out of its range"],
 )
 def test_a_table_the_extension_refuses_is_the_stdlib_pass_s(tmp_path, monkeypatch, refusal):
     """An older extension may meet a newer table (the ``fast`` extra is unpinned): it refuses it, and the stdlib

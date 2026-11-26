@@ -867,7 +867,8 @@ def _rust_dynamic_imports(modules: list[tuple[str, str, bool]]) -> list[tuple[li
     :func:`~pytest_impacted._rust.takes`), and for all if it cannot read the table.
 
     The ``fast`` extra is unpinned, so an older extension may meet a table it predates: a kind of name it does not
-    know is a ValueError, a row of another shape a TypeError. Those are its to refuse, never a failed run.
+    know is a ValueError, a row of another shape a TypeError, a number out of its range an OverflowError. Those are
+    its to refuse, never a failed run.
     """
     taken = [_rust.takes(path, name) for path, name, _ in modules]  # a non-UTF-8 file name: the stdlib pass's
     try:
@@ -877,7 +878,7 @@ def _rust_dynamic_imports(modules: list[tuple[str, str, bool]]) -> list[tuple[li
     except UnicodeEncodeError:  # a ValueError too: a string ``takes`` should have kept back
         logger.debug("pytest-impacted-rs was handed a string that is not UTF-8; the stdlib pass finds imports by name")
         return [None] * len(modules)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         logger.debug("pytest-impacted-rs cannot read the loader table; the stdlib pass finds the imports by name")
         return [None] * len(modules)
     return [next(read) if take else None for take in taken]
