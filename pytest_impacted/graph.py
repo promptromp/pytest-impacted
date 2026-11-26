@@ -12,7 +12,7 @@ import networkx as nx
 
 from pytest_impacted.backends import Backend, Source, resolve_backend
 from pytest_impacted.dynamic_imports import DynamicImports
-from pytest_impacted.graph_keys import Edge, Graph, Node
+from pytest_impacted.graph_keys import AssumedRoot, Edge, Graph, Node
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_package_file,
@@ -77,7 +77,7 @@ def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
     extension added), its name or its file's.
     """
     attributes = dep_tree.nodes[node]
-    if "test" in attributes:
+    if Node.TEST in attributes:
         return bool(attributes[Node.TEST])
     path = attributes.get(Node.PATH)
     by_file = bool(attributes.get(Node.EXTERNAL) and isinstance(path, str | os.PathLike)) and is_test_module(
@@ -378,7 +378,9 @@ def _names_of(path: Path, implied: list[Path], assumed: dict[Path, _Assumed]) ->
 def _import_roots_of(dep_tree: nx.DiGraph, root: Path | None = None) -> tuple[list[Path], dict[Path, _Assumed]]:
     """The graph's import roots: those the names imply, rootdir first, and the assumed ones."""
     assumed = {
-        Path(base): _Assumed(frozenset(how["gateways"]), how["active"], how.get("certain", False))
+        Path(base): _Assumed(
+            frozenset(how[AssumedRoot.GATEWAYS]), how[AssumedRoot.ACTIVE], how.get(AssumedRoot.CERTAIN, False)
+        )
         for base, how in dep_tree.graph.get(Graph.ASSUMED_ROOTS, {}).items()
     }
     default = [str(root)] if root is not None else []
@@ -603,7 +605,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     """
     root = canonical_root(root_dir)
     by_path = _nodes_by_path(dep_tree)
-    aliases = dep_tree.graph.setdefault("aliases", {})
+    aliases = dep_tree.graph.setdefault(Graph.ALIASES, {})
     taken = set(dep_tree) | set(aliases)
     unresolved = dep_tree.graph.get(Graph.UNRESOLVED, {})
     implied, assumed = _import_roots_of(dep_tree, root)
@@ -1010,7 +1012,7 @@ def build_dep_tree(
     for plugin in {plugin for plugins in plugin_edges.values() for plugin in plugins}:
         digraph.nodes[plugin][Node.PYTEST_PLUGIN] = True
     for name in linker.external:
-        digraph.nodes[name].update(external=True, test=_is_test_file(Path(linker.modules[name]), root))
+        digraph.nodes[name].update({Node.EXTERNAL: True, Node.TEST: _is_test_file(Path(linker.modules[name]), root)})
     # Other names each module imports under (see discover_project_modules), for names
     # that come from outside the source, such as ``-p`` plugins.
     digraph.graph[Graph.ALIASES] = linker.aliases
@@ -1023,7 +1025,8 @@ def build_dep_tree(
         digraph.graph[Graph.BASEDIR_EDGES] = True
     digraph.graph[Graph.ASSUMED_ROOTS] = {
         # ``certain`` only when set: a graph without pythonpath entries reads as it always did.
-        str(base): {"gateways": sorted(how.gateways), "active": how.active} | ({"certain": True} if how.certain else {})
+        str(base): {AssumedRoot.GATEWAYS: sorted(how.gateways), AssumedRoot.ACTIVE: how.active}
+        | ({AssumedRoot.CERTAIN: True} if how.certain else {})
         for base, how in linker.assumed.items()
     }
 

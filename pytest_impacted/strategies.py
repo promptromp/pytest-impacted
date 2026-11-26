@@ -25,7 +25,7 @@ from pytest_impacted.graph import (
     reached_from,
     resolve_impacted_tests,
 )
-from pytest_impacted.graph_keys import Node, may_hold_reach_only_edges, only_reaches
+from pytest_impacted.graph_keys import Graph, Node, may_hold_reach_only_edges, only_reaches
 from pytest_impacted.parsing import is_conftest_module, normalize_path
 from pytest_impacted.traversal import (
     canonical_root,
@@ -251,7 +251,7 @@ def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:
     """
     copy = dep_tree.copy()
     copy.graph = deepcopy(dep_tree.graph)
-    copy.graph.setdefault("aliases", {})
+    copy.graph.setdefault(Graph.ALIASES, {})
     return copy
 
 
