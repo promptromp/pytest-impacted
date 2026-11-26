@@ -371,6 +371,27 @@ emits both `pkg` and `pkg.name`; deciding between them would mean importing `pkg
 disk (`_Linker`), instead. The apparent
 over-emission is the design, not a bug.
 
+**Imports by name are import candidates** (`dynamic_imports.py`). These are the literal arguments of the calls in
+`LOADERS`:
+- the standard library's importers: `importlib.import_module`, `__import__`, `runpy.run_module`, `pkgutil.resolve_name`
+- the mock patchers: `patch`, `patch.dict` and `patch.multiple`, `mocker`'s too
+- pytest's: `importorskip`, and `monkeypatch.setattr`/`delattr` with a string target
+
+The table is data, read by one mechanism. A `Loader.callee` matches the end of the call's name after resolving import
+aliases (unioned over scopes). A bare `patch` therefore matches any receiver (fixtures, `with monkeypatch.context()
+as m`), while `importlib.import_module` needs that function. Add an API as a row, never as a branch. The maintainer
+chose this curated table over a broad rule ("any string spelling a project module"), which measured +13% tests on
+pydantic, about 99% of it noise. Like `parse_pytest_plugins`, it is parsed with stdlib `ast` outside the backends,
+behind a word pre-filter: a file calling a loader spells its name, at the call or at the import.
+
+In the graph (`_imports_by_name`), a module name reads as `import pkg.mod`. An object path reads as
+`from M import next_part`, where M is its longest prefix that `linker.targets`/`local_targets` resolve, as
+`pkgutil.resolve_name` imports the longest it can, else its parent. Placement, `graph["unresolved"]` (deleted
+targets) and basedir edges then behave exactly as for the static statement.
+`test_an_import_by_name_selects_as_the_import_statement_does` pins that for every form, place and change.
+They are added after `linker.activate`: only static imports are evidence of an assumed root. Only literals count;
+a computed name is no import.
+
 **The `impacted-tests` CLI reads the pytest configuration through `ini.py`, never a pytest
 `Config`**: building one imports the initial conftests, which is running project code. `ini.py`
 mirrors the installed pytest's search and conversions instead, and `tests/test_ini.py` holds it to

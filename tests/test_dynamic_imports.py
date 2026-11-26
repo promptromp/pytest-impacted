@@ -7,10 +7,16 @@ import pytest
 from pytest_impacted.dynamic_imports import LOADERS, DynamicImports, Names, parse_dynamic_imports
 
 
-def parse(tmp_path, source, module="app.loader", is_package=False):
-    path = tmp_path / ("__init__.py" if is_package else "loader.py")
-    path.write_text(source)
-    return parse_dynamic_imports(str(path), module, is_package)
+@pytest.fixture
+def parse(tmp_path):
+    """Factory: what a file of *source* imports by name, as module *module*."""
+
+    def parse(source, module="app.loader", is_package=False):
+        path = tmp_path / ("__init__.py" if is_package else "loader.py")
+        path.write_text(source)
+        return parse_dynamic_imports(str(path), module, is_package)
+
+    return parse
 
 
 NOTHING = DynamicImports([], [])
@@ -54,8 +60,8 @@ NOTHING = DynamicImports([], [])
         "import pkgutil\npkgutil.resolve_name('app.target:')",
     ],
 )
-def test_a_module_named_to_a_loader_is_imported(tmp_path, source):
-    assert parse(tmp_path, source) == DynamicImports(["app.target"], [])
+def test_a_module_named_to_a_loader_is_imported(parse, source):
+    assert parse(source) == DynamicImports(["app.target"], [])
 
 
 @pytest.mark.parametrize(
@@ -68,10 +74,10 @@ def test_a_module_named_to_a_loader_is_imported(tmp_path, source):
         ("import_module('.', 'app')", "app.loader", False, "app"),
     ],
 )
-def test_a_relative_name_resolves_against_its_anchor(tmp_path, source, module, is_package, expected):
+def test_a_relative_name_resolves_against_its_anchor(parse, source, module, is_package, expected):
     source = "from importlib import import_module\n" + source
 
-    assert parse(tmp_path, source, module, is_package) == DynamicImports([expected], [])
+    assert parse(source, module, is_package) == DynamicImports([expected], [])
 
 
 @pytest.mark.parametrize(
@@ -83,9 +89,9 @@ def test_a_relative_name_resolves_against_its_anchor(tmp_path, source, module, i
         ("__import__('app', fromlist=['target', name])", ["app", "app.target"]),  # the literal items
     ],
 )
-def test_import_s_fromlist_names_submodules_too(tmp_path, source, expected):
+def test_import_s_fromlist_names_submodules_too(parse, source, expected):
     """As ``from app import target`` does: ``target`` may be a submodule, which only the project can tell."""
-    assert parse(tmp_path, source) == DynamicImports(expected, [])
+    assert parse(source) == DynamicImports(expected, [])
 
 
 @pytest.mark.parametrize(
@@ -116,23 +122,23 @@ def test_import_s_fromlist_names_submodules_too(tmp_path, source, expected):
         "import pkgutil\npkgutil.resolve_name('app.target.VALUE')",
     ],
 )
-def test_an_object_path_named_to_a_loader_is_imported(tmp_path, source):
-    assert parse(tmp_path, source) == DynamicImports([], ["app.target.VALUE"])
+def test_an_object_path_named_to_a_loader_is_imported(parse, source):
+    assert parse(source) == DynamicImports([], ["app.target.VALUE"])
 
 
-def test_an_object_path_of_one_part_is_a_module(tmp_path):
+def test_an_object_path_of_one_part_is_a_module(parse):
     """``resolve_name("app")`` imports ``app``: with no dot, nothing in it can be an attribute."""
-    assert parse(tmp_path, "import pkgutil\npkgutil.resolve_name('app')") == DynamicImports(["app"], [])
+    assert parse("import pkgutil\npkgutil.resolve_name('app')") == DynamicImports(["app"], [])
 
 
-def test_every_call_counts_once(tmp_path):
+def test_every_call_counts_once(parse):
     source = (
         "import importlib\nfrom unittest.mock import patch\n"
         "importlib.import_module('app.b')\nimportlib.import_module('app.a')\nimportlib.import_module('app.a')\n"
         "patch('app.c.x')\npatch('app.c.x')\n"
     )
 
-    assert parse(tmp_path, source) == DynamicImports(["app.a", "app.b"], ["app.c.x"])
+    assert parse(source) == DynamicImports(["app.a", "app.b"], ["app.c.x"])
 
 
 @pytest.mark.parametrize(
@@ -181,13 +187,13 @@ def test_every_call_counts_once(tmp_path):
         "PATCHES = ['app.target.VALUE']",
     ],
 )
-def test_no_import_is_inferred(tmp_path, source):
-    assert parse(tmp_path, source) == NOTHING
+def test_no_import_is_inferred(parse, source):
+    assert parse(source) == NOTHING
 
 
 @pytest.mark.parametrize("loader", LOADERS, ids=lambda loader: loader.callee)
 @pytest.mark.parametrize("by", ["position", "keyword"])
-def test_every_loader_is_read(tmp_path, loader, by):
+def test_every_loader_is_read(parse, loader, by):
     """Each entry of the table, called by its own name with its argument in place: adding one needs no code."""
     arguments = ["None"] * loader.name.position + ["'app.target.VALUE'"]
     call = (
@@ -195,10 +201,13 @@ def test_every_loader_is_read(tmp_path, loader, by):
         if by == "position"
         else f"{loader.callee}({loader.name.keyword}='app.target.VALUE')"
     )
-    module, _, _ = loader.callee.rpartition(".")
-    source = (f"import {module}\n" if module and module != "patch" else "from unittest.mock import patch\n") + call
+    head = loader.callee.partition(".")[0]
+    imports = (
+        "from unittest.mock import patch\n" if head == "patch" else f"import {head}\n" if "." in loader.callee else ""
+    )
+    source = imports + call
 
-    found = parse(tmp_path, source)
+    found = parse(source)
 
     expected = (
         DynamicImports(["app.target.VALUE"], [])
@@ -208,35 +217,35 @@ def test_every_loader_is_read(tmp_path, loader, by):
     assert found == expected
 
 
-def test_the_module_is_never_run(tmp_path):
+def test_the_module_is_never_run(parse):
     source = "raise SystemExit('ran')\nimport importlib\nimportlib.import_module('app.target')\n"
 
-    assert parse(tmp_path, source) == DynamicImports(["app.target"], [])
+    assert parse(source) == DynamicImports(["app.target"], [])
 
 
-def test_a_file_that_cannot_be_read_or_parsed_imports_nothing(tmp_path):
+def test_a_file_that_cannot_be_read_or_parsed_imports_nothing(tmp_path, parse):
     assert parse_dynamic_imports(str(tmp_path / "missing.py"), "app.missing") == NOTHING
-    assert parse(tmp_path, "import importlib\nimportlib.import_module('app.target'\n") == NOTHING
+    assert parse("import importlib\nimportlib.import_module('app.target'\n") == NOTHING
 
 
-def test_a_warning_turned_error_hides_no_import(tmp_path):
+def test_a_warning_turned_error_hides_no_import(parse):
     """Under ``-W error`` an invalid escape is a SyntaxError: that must not drop the import (as for pytest_plugins)."""
     source = 'import re, importlib\nPATTERN = re.compile("\\d+")\nimportlib.import_module("app.target")\n'
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert parse(tmp_path, source) == DynamicImports(["app.target"], [])
+        assert parse(source) == DynamicImports(["app.target"], [])
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("source", "imported"),
     [
-        "x = " + "[" * 5000 + "]" * 5000 + "\nimport importlib\n",
-        "import importlib\nx = " + " + ".join(["importlib.import_module('a.b')"] * 3000) + "\n",
-        "import importlib\nimportlib" + ".attribute" * 3000 + ".import_module('app.target')\n",
+        ("x = " + "[" * 5000 + "]" * 5000 + "\nimport importlib\n", NOTHING),
+        ("import importlib\nx = " + " + ".join(["importlib.import_module('a.b')"] * 3000), DynamicImports(["a.b"], [])),
+        ("import importlib\nimportlib" + ".attribute" * 3000 + ".import_module('a.b')", NOTHING),
     ],
+    ids=["deep nesting", "a long concatenation", "a long attribute chain"],
 )
-def test_pathological_source_imports_nothing_rather_than_fail(tmp_path, source):
-    found = parse(tmp_path, source)
-
-    assert isinstance(found, DynamicImports)
+def test_pathological_source_never_fails_the_parse(parse, source, imported):
+    """Deep enough to stop a recursive walk: the file imports what can be read of it, or nothing."""
+    assert parse(source) in (imported, NOTHING)

@@ -198,10 +198,28 @@ def test_an_import_by_name_selects_as_the_import_statement_does(
 
 # Real runs: the dependency an import by name records is one the test has.
 INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
+CONSUMER = "from app.loader import load\n\ndef test_value():\n    assert load() == 1\n"
 
 
 def run(project, *args):
     return project.runpytest("--impacted", "--impacted-git-mode=unstaged", "-v", "-p", "no:cacheprovider", *args)
+
+
+@pytest.fixture
+def loader_project(make_git_project):
+    """Factory: a project whose ``app/loader.py`` is *loader*, imported by one test, beside an unrelated one."""
+
+    def make(loader):
+        files = {
+            "app/__init__.py": "",
+            "app/target.py": "VALUE = 1\n",
+            "app/loader.py": loader,
+            "suite/test_consumer.py": CONSUMER,
+            "suite/test_other.py": "def test_other():\n    pass\n",
+        }
+        return make_git_project(files, INI)
+
+    return make
 
 
 LOADERS = {
@@ -212,35 +230,45 @@ LOADERS = {
     "__import__ with a fromlist": "def load():\n    return __import__('app.target', fromlist=['VALUE']).VALUE\n",
     "resolve_name": "import pkgutil\n\ndef load():\n    return pkgutil.resolve_name('app.target:VALUE')\n",
 }
+CHANGES = {  # to app/target.py
+    "edited": lambda project: edit_file(project, "app/target.py"),
+    "broken": lambda project: (project.path / "app/target.py").write_text("VALUE = 2\n"),
+    "deleted": lambda project: (project.path / "app/target.py").unlink(),
+}
 
 
 @pytest.mark.parametrize("loader", LOADERS)
-@pytest.mark.parametrize("broken", [False, True])
-def test_a_module_loaded_by_name_selects_its_loader_s_tests(make_git_project, loader, broken):
-    """The issue's case: a test importing the loader, not the module it loads, runs when that module changes —
-    and, with the module broken, fails, so the dependency is real. An unrelated test stays deselected."""
-    project = make_git_project(
-        {
-            "app/__init__.py": "",
-            "app/target.py": "VALUE = 1\n",
-            "app/loader.py": LOADERS[loader],
-            "suite/test_consumer.py": "from app.loader import load\n\ndef test_value():\n    assert load() == 1\n",
-            "suite/test_other.py": "def test_other():\n    pass\n",
-        },
-        INI,
-    )
-    if broken:
-        (project.path / "app/target.py").write_text("VALUE = 2\n")
-    else:
-        edit_file(project, "app/target.py")
+@pytest.mark.parametrize("change", CHANGES)
+def test_a_module_loaded_by_name_selects_its_loader_s_tests(loader_project, loader, change):
+    """The issue's case: a test importing the loader, not the module it loads, runs when that module changes.
+    Broken or deleted, the module fails the test, so the dependency is real. An unrelated test stays deselected."""
+    project = loader_project(LOADERS[loader])
+    CHANGES[change](project)
 
     result = run(project)
 
-    if broken:
+    if change == "edited":
+        assert_selected(result, passed=["test_consumer.py"], deselected=["test_other.py"])
+    else:
         result.assert_outcomes(failed=1, deselected=1)
         result.stdout.fnmatch_lines(["*suite/test_consumer.py::test_value FAILED*"])
-    else:
-        assert_selected(result, passed=["test_consumer.py"], deselected=["test_other.py"])
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [
+        "import importlib\n\ndef load():\n    return importlib.import_module('app.' + 'target').VALUE\n",
+        "def load():\n    '''Loads app.target with importlib.import_module(\"app.target\").'''\n    return 1\n",
+    ],
+    ids=["a computed name", "a docstring"],
+)
+def test_a_name_no_literal_argument_spells_selects_nothing(loader_project, loader):
+    """A known limit, pinned: a computed name is no import here (map it with ``--impacted-map``), and a
+    loader's name in a docstring calls nothing."""
+    project = loader_project(loader)
+    edit_file(project, "app/target.py")
+
+    assert_selected(run(project), deselected=["test_consumer.py", "test_other.py"])
 
 
 PATCHING_TESTS = {
@@ -291,47 +319,3 @@ def test_a_test_patching_a_module_runs_when_it_changes(make_git_project, patchin
 
     result.assert_outcomes(failed=1, deselected=1)
     result.stdout.fnmatch_lines(["*suite/test_total.py::test_total FAILED*"])
-
-
-def test_a_deleted_module_loaded_by_name_selects_its_loader_s_tests(make_git_project):
-    project = make_git_project(
-        {
-            "app/__init__.py": "",
-            "app/target.py": "VALUE = 1\n",
-            "app/loader.py": LOADERS["import_module"],
-            "suite/test_consumer.py": "from app.loader import load\n\ndef test_value():\n    assert load() == 1\n",
-            "suite/test_other.py": "def test_other():\n    pass\n",
-        },
-        INI,
-    )
-    (project.path / "app/target.py").unlink()
-
-    result = run(project)
-
-    result.assert_outcomes(failed=1, deselected=1)
-    result.stdout.fnmatch_lines(["*suite/test_consumer.py::test_value FAILED*"])
-
-
-@pytest.mark.parametrize(
-    "loader",
-    [
-        "import importlib\n\ndef load():\n    return importlib.import_module('app.' + 'target').VALUE\n",
-        "def load():\n    '''Loads app.target with importlib.import_module(\"app.target\").'''\n    return 1\n",
-    ],
-    ids=["a computed name", "a docstring"],
-)
-def test_a_name_no_literal_argument_spells_selects_nothing(make_git_project, loader):
-    """A known limit, pinned: a computed name is no import here (map it with ``--impacted-map``), and a
-    loader's name in a docstring calls nothing."""
-    project = make_git_project(
-        {
-            "app/__init__.py": "",
-            "app/target.py": "VALUE = 1\n",
-            "app/loader.py": loader,
-            "suite/test_consumer.py": "from app.loader import load\n\ndef test_value():\n    assert load() == 1\n",
-        },
-        INI,
-    )
-    edit_file(project, "app/target.py")
-
-    run(project).assert_outcomes(deselected=1)

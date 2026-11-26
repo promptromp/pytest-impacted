@@ -913,7 +913,10 @@ def build_dep_tree(
     ``external`` (see :class:`_Linker`). Every node carries its absolute file in the
     ``path`` attribute. Modules named in a ``pytest_plugins`` declaration count as
     imports (see :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are
-    flagged with the ``pytest_plugin`` attribute. Every import the walks do not
+    flagged with the ``pytest_plugin`` attribute. A call that imports by name counts as the import
+    statement that imports the same: ``importlib.import_module("pkg.mod")`` as ``import pkg.mod``,
+    ``mock.patch("pkg.mod.func")`` as ``from pkg.mod import func`` (see :func:`_imports_by_name`).
+    Every import the walks do not
     define — found on disk or not — is kept in ``graph["unresolved"]`` with its
     importers, for :func:`link_changed_files`. An import found only under an assumed
     import root (``graph["assumed_roots"]``, see
