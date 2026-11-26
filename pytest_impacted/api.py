@@ -30,6 +30,7 @@ from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ImpactStrategy,
     cached_build_dep_tree,
+    clear_dep_tree_cache,
     get_default_strategies,
     run_copy,
 )
@@ -209,6 +210,9 @@ def get_impacted_tests(
     base_branch = impacted_base_branch
     ns_module = normalized_module(ns_module)  # ``./app/`` names ``app``: the analysis reads dots as separators
     resolve_backend(backend, ignore_type_checking_imports)  # an unknown name fails here, before git runs
+    # Each run analyses the project as it is now: an earlier run in this process (``pytest.main`` again, an IDE
+    # runner, a watch tool) built its graph and listings before files were edited, added or committed.
+    clear_dep_tree_cache()
 
     # Use default strategy if none provided
     if strategy is None:
@@ -251,9 +255,9 @@ def get_impacted_tests(
     impacted_files = map_changed_files(impacted_files, file_map, root_dir, session)
 
     # Build the dependency graph once and pass it to the strategy pipeline.
-    # The result is LRU-cached and must not be mutated, so we hand each run a
-    # copy. Strategies that implement enrich_dep_tree() mutate the copy,
-    # leaving the cached base graph pristine for subsequent runs.
+    # The result is cached for this run (an extension calling cached_build_dep_tree gets it) and must not be
+    # mutated, so the run takes a copy. Strategies that implement enrich_dep_tree() mutate the copy,
+    # leaving the cached graph pristine for the rest of the run.
     cached = cached_build_dep_tree(
         ns_module,
         tests_package=tests_package,
