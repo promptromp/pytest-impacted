@@ -1,5 +1,6 @@
 """Unit tests for the git module."""
 
+import os
 import shutil
 import sys
 from pathlib import Path, PureWindowsPath
@@ -41,7 +42,8 @@ class DummyRepo:
         # The base has not moved since the fork, so the fork point *is* the base ref
         # (merge-base is called as: --all --end-of-options <base> <head>).
         self.git.merge_base = MagicMock(side_effect=lambda *args: args[-2])
-        self.working_tree_dir = working_tree_dir or str(Path.cwd())
+        # No directory there, so no .gitmodules: never the working directory, which may be a real repository.
+        self.working_tree_dir = working_tree_dir or str(Path(os.devnull).parent / "no-such-dummy-repository")
         self._staged, self._unstaged, self._branch = staged, unstaged, diff_branch_result
 
     def _diff(self, *args):
@@ -52,10 +54,11 @@ class DummyRepo:
         return self._unstaged
 
 
-def test_find_impacted_files_in_repo_invalid_mode():
-    """Test find_impacted_files_in_repo with an invalid git_mode."""
+def test_find_impacted_files_in_repo_invalid_mode(real_repo):
+    _repo, root = real_repo
+
     with pytest.raises(ValueError, match="Invalid git mode: invalid_mode"):
-        git.find_impacted_files_in_repo(".", "invalid_mode", "main")
+        git.find_impacted_files_in_repo(root, "invalid_mode", "main")
 
 
 @pytest.mark.parametrize(
@@ -548,7 +551,7 @@ def test_bare_repo_is_a_clear_error(tmp_path, isolated_git_config, mode):
         git.check_repository(tmp_path)
 
 
-def test_git_that_cannot_launch_keeps_its_reason(monkeypatch):
+def test_git_that_cannot_launch_keeps_its_reason(monkeypatch, tmp_path):
     """GitPython raises GitCommandNotFound for any launch failure, so the reason must survive."""
     from git import GitCommandNotFound  # noqa: PLC0415
 
@@ -558,7 +561,7 @@ def test_git_that_cannot_launch_keeps_its_reason(monkeypatch):
     monkeypatch.setattr(git, "_find_impacted_files", launch_fails)
 
     with pytest.raises(git.GitUnavailableError) as excinfo:
-        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+        git.find_impacted_files_in_repo(tmp_path, git.GitMode.UNSTAGED, None)
 
     assert "WinError 206" in str(excinfo.value)
     assert "cmdline" not in str(excinfo.value)  # only the reason, not GitPython's full command line
@@ -574,12 +577,12 @@ def test_git_unavailable_error_survives_copy():
     assert str(copy.copy(err)) == str(pickle.loads(pickle.dumps(err))) == str(err)
 
 
-def test_find_impacted_files_raises_without_git(monkeypatch):
+def test_find_impacted_files_raises_without_git(monkeypatch, tmp_path):
     """Unknown changes are an error, never ``None`` — which callers read as "nothing changed"."""
     monkeypatch.setattr(git, "GIT_AVAILABLE", False)
 
     with pytest.raises(git.GitUnavailableError, match="changed files cannot be determined"):
-        git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
+        git.find_impacted_files_in_repo(tmp_path, git.GitMode.UNSTAGED, None)
 
 
 # --- BRANCH mode against a real repository ---------------------------------------

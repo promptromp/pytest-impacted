@@ -69,18 +69,18 @@ def test_matches_impacted_tests(item_path, impacted_tests, expected):
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
-def test_get_impacted_tests_no_impacted_files(mock_find_impacted_files):
+def test_get_impacted_tests_no_impacted_files(mock_find_impacted_files, tmp_path):
     mock_find_impacted_files.return_value = []
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
         impacted_base_branch="main",
-        root_dir=Path("."),
+        root_dir=tmp_path,
         ns_module="project_ns",
         tests_dir="tests",
     )
     assert result is None
     mock_find_impacted_files.assert_called_once_with(
-        Path("."), git_mode=GitMode.UNSTAGED, base_branch="main", use_merge_base=True, on_fallback=ANY
+        tmp_path, git_mode=GitMode.UNSTAGED, base_branch="main", use_merge_base=True, on_fallback=ANY
     )
 
 
@@ -93,6 +93,7 @@ def test_get_impacted_tests_invalidate_all_patterns(
     mock_resolve_modules_to_files,
     mock_resolve_files_to_nodes,
     mock_find_impacted_files,
+    tmp_path,
 ):
     """A changed file matching a user-supplied invalidation pattern marks every test module as impacted."""
     dep_tree = nx.DiGraph()
@@ -105,7 +106,7 @@ def test_get_impacted_tests_invalidate_all_patterns(
     result = get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
         impacted_base_branch="main",
-        root_dir=Path("."),
+        root_dir=tmp_path,
         ns_module="project_ns",
         tests_dir="tests",
         invalidate_all_patterns=["*.json"],
@@ -167,9 +168,7 @@ class _LifecycleSpy(ImpactStrategy):
 @patch("pytest_impacted.api.resolve_files_to_nodes")
 @patch("pytest_impacted.api.resolve_modules_to_files")
 def test_get_impacted_tests_calls_setup_find_teardown_in_order(
-    mock_resolve_modules_to_files,
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
+    mock_resolve_modules_to_files, mock_resolve_files_to_nodes, mock_find_impacted_files, tmp_path
 ):
     """api.get_impacted_tests must invoke setup → find → teardown on the strategy."""
     mock_find_impacted_files.return_value = ["src/mod.py"]
@@ -180,7 +179,7 @@ def test_get_impacted_tests_calls_setup_find_teardown_in_order(
     get_impacted_tests(
         impacted_git_mode=GitMode.UNSTAGED,
         impacted_base_branch="main",
-        root_dir=Path("."),
+        root_dir=tmp_path,
         ns_module="pkg",
         tests_dir="tests",
         strategy=spy,
@@ -191,8 +190,7 @@ def test_get_impacted_tests_calls_setup_find_teardown_in_order(
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
 @patch("pytest_impacted.api.resolve_files_to_nodes")
 def test_get_impacted_tests_teardown_fires_even_when_find_raises(
-    mock_resolve_files_to_nodes,
-    mock_find_impacted_files,
+    mock_resolve_files_to_nodes, mock_find_impacted_files, tmp_path
 ):
     """The try/finally in api.py must guarantee teardown when find_impacted_tests raises."""
     mock_find_impacted_files.return_value = ["src/mod.py"]
@@ -203,7 +201,7 @@ def test_get_impacted_tests_teardown_fires_even_when_find_raises(
         get_impacted_tests(
             impacted_git_mode=GitMode.UNSTAGED,
             impacted_base_branch="main",
-            root_dir=Path("."),
+            root_dir=tmp_path,
             ns_module="pkg",
             tests_dir="tests",
             strategy=spy,
@@ -299,7 +297,7 @@ def test_changed_files_resolve_through_the_graph_the_run_uses(mock_find_impacted
 
 
 @patch("pytest_impacted.api.find_impacted_files_in_repo")
-def test_changed_files_resolve_against_the_run_graph_before_enrichment(mock_find_impacted_files):
+def test_changed_files_resolve_against_the_run_graph_before_enrichment(mock_find_impacted_files, tmp_path):
     """The run's own copy of the graph, as the strategies receive it, before any extension enriched it."""
     mock_find_impacted_files.return_value = ["file1.py"]
     calls = []
@@ -312,7 +310,7 @@ def test_changed_files_resolve_against_the_run_graph_before_enrichment(mock_find
         get_impacted_tests(
             impacted_git_mode=GitMode.UNSTAGED,
             impacted_base_branch="main",
-            root_dir=Path("."),
+            root_dir=tmp_path,
             ns_module="project_ns",
             strategy=strategy,
         )

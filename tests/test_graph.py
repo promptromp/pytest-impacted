@@ -61,6 +61,12 @@ def test_resolve_impacted_tests(sample_dep_tree, modified_modules, expected_impa
     assert set(impacted) == expected_impacted
 
 
+def build(root, files, *args, **kwargs):
+    """``graph.build_dep_tree`` over a project of *files* (``{path: source}``) written under *root*."""
+    write_files(root, files)
+    return graph.build_dep_tree(*args, root_dir=root, **kwargs)
+
+
 def test_resolve_impacted_tests_dangling_test_module(sample_dep_tree):
     """Test that a dangling test module is directly included as impacted."""
     impacted = graph.resolve_impacted_tests(["test_new_feature"], sample_dep_tree)
@@ -108,9 +114,12 @@ def test_the_graph_links_no_init_to_the_modules_of_its_package(tmp_path):
     """``import pkg.core`` runs ``pkg/__init__.py`` too, yet no edge says so: the run adds a changed
     ``__init__``'s package members to the impacted modules instead (``package_members``). Edges would make
     every importer of ``pkg.*`` depend on everything the ``__init__`` imports."""
-    write_files(tmp_path, {"pkg/__init__.py": "", "pkg/core.py": "", "tests/test_core.py": "import pkg.core\n"})
-
-    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(
+        tmp_path,
+        {"pkg/__init__.py": "", "pkg/core.py": "", "tests/test_core.py": "import pkg.core\n"},
+        "pkg",
+        tests_package="tests",
+    )
 
     assert graph.resolve_impacted_tests(["pkg"], dep_tree) == []
 
@@ -124,9 +133,7 @@ def test_resolving_an_init_node_reaches_only_its_importers(tmp_path):
         "tests/test_core.py": "import pkg.core\n",
         "tests/test_utils.py": "import pkg.utils\n",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "pkg", tests_package="tests")
 
     assert graph.resolve_impacted_tests(["pkg", "pkg.core"], dep_tree) == ["tests.test_core"]
 
@@ -139,9 +146,7 @@ def test_a_module_importing_from_its_package_root_links_its_tests_to_the_init(tm
         "tests/test_core.py": "from app.core import thing\n",
         "tests/test_other.py": "",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "app", tests_package="tests")
 
     assert graph.resolve_impacted_tests(["app"], dep_tree) == ["tests.test_core"]
 
@@ -181,9 +186,7 @@ def test_ancestor_conftest_relative_imports_resolve_in_src_layout(tmp_path):
         "src/app/core/__init__.py": "",
         "src/app/core/db.py": "def connect(): ...\n",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("src/app/core", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "src/app/core")
 
     assert dep_tree.has_edge("app.core.db", "app.conftest")
 
@@ -202,9 +205,7 @@ def test_ancestor_conftest_whose_short_name_clashes_keeps_its_full_name(tmp_path
         "tests/app/conftest.py": "import app.core.db\n",
         "tests/app/unit/test_x.py": "",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("src/app", tests_package="tests/app/unit", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "src/app", tests_package="tests/app/unit")
 
     assert dep_tree.nodes["app.conftest"]["path"] == str((tmp_path / "src/app/conftest.py").resolve())
     assert dep_tree.has_edge("app.core.db", "tests.app.conftest")
@@ -218,9 +219,7 @@ def test_pytest_plugins_declaration_is_an_edge(tmp_path):
         "tests/fixtures.py": "from app.db import connect\n",
         "conftest.py": 'pytest_plugins = ["tests.fixtures", "pytester"]\n',
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "app", tests_package="tests")
 
     assert dep_tree.has_edge("tests.fixtures", "conftest")
     assert nx.has_path(dep_tree, "app.db", "conftest")
@@ -233,9 +232,7 @@ def test_pytest_plugin_targets_are_flagged(tmp_path):
         "tests/fixtures.py": "",
         "tests/test_a.py": 'pytest_plugins = "tests.fixtures"\n',
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "app", tests_package="tests")
 
     assert dep_tree.nodes["tests.fixtures"].get("pytest_plugin") is True
     assert not dep_tree.nodes["tests.test_a"].get("pytest_plugin")
@@ -249,9 +246,7 @@ def test_namespace_subpackage_modules_are_linked_by_absolute_and_relative_import
         "app/processors/util.py": "",
         "tests/test_ocr.py": "from app.processors.ocr import run\n",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "app", tests_package="tests")
 
     assert dep_tree.has_edge("app.processors.util", "app.processors.ocr")
     assert dep_tree.has_edge("app.processors.ocr", "tests.test_ocr")
@@ -266,9 +261,7 @@ def test_a_test_importing_from_the_package_root_sees_what_its_init_imports(tmp_p
         "tests/test_app.py": "from app import Thing\n",
         "tests/test_other.py": "",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "app", tests_package="tests")
 
     assert dep_tree.has_edge("app.core", "app")
     assert dep_tree.has_edge("app", "tests.test_app")
@@ -328,9 +321,7 @@ def test_a_conftest_named_like_one_in_the_package_keeps_its_edges(tmp_path):
         "mysite/mysite/models.py": "",
         "mysite/mysite/views.py": "",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("mysite/mysite", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "mysite/mysite")
 
     assert dep_tree.nodes[".mysite.conftest"]["path"] == str((tmp_path / "mysite/conftest.py").resolve())
     assert dep_tree.has_edge("mysite.models", ".mysite.conftest")
@@ -351,9 +342,7 @@ def test_a_conftest_with_no_free_name_keeps_its_relative_imports(tmp_path):
         "x/x/tests/helpers.py": "",
         "x/x/tests/test_a.py": "",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("x/x", tests_package="x/x/tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "x/x", tests_package="x/x/tests")
 
     assert dep_tree.nodes[".x.conftest"]["path"] == str((tmp_path / "x/conftest.py").resolve())
     assert dep_tree.has_edge("x.x.tests.helpers", ".x.conftest")
@@ -369,9 +358,7 @@ def test_a_module_in_a_regular_package_reaches_its_conftest_by_relative_import(t
         "y/conftest.py": "",
         "y/tests/test_a.py": "from y.pkg import mod\n",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("x/y/pkg", tests_package="y/tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "x/y/pkg", tests_package="y/tests")
 
     conftest = graph.resolve_files_to_nodes(["x/y/conftest.py"], dep_tree, root_dir=tmp_path)
     assert graph.resolve_impacted_tests(conftest, dep_tree) == ["tests.test_a"]
@@ -448,9 +435,7 @@ def test_a_file_reached_under_two_names_is_one_node(tmp_path):
         "app/tests/helpers.py": "import app.core\n",
         "app/tests/test_a.py": "from tests.helpers import make\n",
     }
-    write_files(tmp_path, files)
-
-    dep_tree = graph.build_dep_tree("app", tests_package="app/tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, files, "app", tests_package="app/tests")
 
     paths = [dep_tree.nodes[node]["path"] for node in dep_tree.nodes]
     assert len(paths) == len(set(paths))
@@ -723,9 +708,12 @@ def test_a_deleted_module_imported_from_a_regular_package_above_the_analysed_one
 )
 def test_a_name_from_outside_the_source_is_looked_up_under_the_import_roots(tmp_path, extra, named):
     """``-p app.plugin`` is spelled by nothing in the source, so no import made it an alias."""
-    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "src/app/plugin.py": "", "tests/test_a.py": "", **extra})
-
-    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(
+        tmp_path,
+        {**SRC_IS_A_PACKAGE, "src/app/plugin.py": "", "tests/test_a.py": "", **extra},
+        "src/app",
+        tests_package="tests",
+    )
 
     assert "app.plugin" not in dep_tree.graph["aliases"]
     assert graph.nodes_named(["app.plugin", "src.app.core", "pytester", "no.such.module"], dep_tree) == {
@@ -1041,9 +1029,7 @@ REDIS = {
 def test_a_file_a_guess_reaches_keeps_its_own_relative_imports(tmp_path, evidence):
     """``import redis`` may match ``backend/redis.py`` once ``backend/`` looks like it is on ``sys.path``; the file
     is still named ``backend.redis``, as its path reads, so ``from .types import …`` is ``backend.types``."""
-    write_files(tmp_path, {**REDIS, **evidence})
-
-    dep_tree = graph.build_dep_tree("backend/app", tests_package="suite", root_dir=tmp_path)
+    dep_tree = build(tmp_path, {**REDIS, **evidence}, "backend/app", tests_package="suite")
 
     assert dep_tree.has_edge("backend.types", "backend.redis")
     assert "suite.test_cache" in graph.resolve_impacted_tests(["backend.types"], dep_tree)
@@ -1144,9 +1130,7 @@ def test_a_new_module_is_found_by_the_next_graph_built_in_the_same_process(tmp_p
         },
     )
     graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
-    write_files(tmp_path, {"lib/base.py": ""})
-
-    dep_tree = graph.build_dep_tree("other", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, {"lib/base.py": ""}, "other", tests_package="tests")
 
     (base,) = graph.resolve_files_to_nodes(["lib/base.py"], dep_tree, root_dir=tmp_path)
     assert graph.resolve_impacted_tests([base], dep_tree) == ["tests.test_a"]
@@ -1990,9 +1974,13 @@ def test_the_cached_graph_is_keyed_on_the_pythonpath(tmp_path):
 def test_a_namespace_package_in_a_pythonpath_entry_is_looked_up_there(tmp_path):
     """``import sub.mod`` names a directory of ``lib/``, not a file. Without an ``__init__.py`` it has
     no alias of its own (a regular package's ``sub.mod`` is one): only the entry leads to it."""
-    write_files(tmp_path, {"lib/sub/mod.py": "", "tests/test_mod.py": "import sub.mod\n"})
-
-    dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath=[tmp_path / "lib"])
+    dep_tree = build(
+        tmp_path,
+        {"lib/sub/mod.py": "", "tests/test_mod.py": "import sub.mod\n"},
+        "lib",
+        tests_package="tests",
+        pythonpath=[tmp_path / "lib"],
+    )
 
     assert "tests.test_mod" in dep_tree.successors("lib.sub.mod")
 
@@ -2013,9 +2001,7 @@ def test_a_pythonpath_entry_the_names_imply_is_unchanged(tmp_path, entry):
 
 
 def test_a_lone_string_is_one_pythonpath_entry(tmp_path):
-    write_files(tmp_path, FLAT_LIB)
-
-    dep_tree = graph.build_dep_tree("lib", tests_package="tests", root_dir=tmp_path, pythonpath="lib")
+    dep_tree = build(tmp_path, FLAT_LIB, "lib", tests_package="tests", pythonpath="lib")
 
     assert "tests.test_awake" in dep_tree.successors("lib.alpha")
 
@@ -2064,9 +2050,13 @@ def test_a_guessed_root_on_the_pythonpath_looks_up_every_name_and_still_only_rea
 
 def test_pythonpath_entries_given_as_an_iterator_are_read_once(tmp_path):
     """Read twice, an iterator reads empty the second time: the guessed root lost ``certain``."""
-    write_files(tmp_path, {**SRC_IS_A_PACKAGE, "src/shared.py": "", "tests/test_x.py": "import shared\n"})
-
-    dep_tree = graph.build_dep_tree("src/app", tests_package="tests", root_dir=tmp_path, pythonpath=iter(["src"]))
+    dep_tree = build(
+        tmp_path,
+        {**SRC_IS_A_PACKAGE, "src/shared.py": "", "tests/test_x.py": "import shared\n"},
+        "src/app",
+        tests_package="tests",
+        pythonpath=iter(["src"]),
+    )
 
     assert dep_tree.graph["assumed_roots"][str((tmp_path / "src").resolve())].get("certain") is True
 
@@ -2090,9 +2080,7 @@ ROOTLESS = {
 def test_a_test_module_s_directory_outside_any_package_is_where_its_imports_are_looked_up(tmp_path):
     """pytest's default import mode puts the directory of a test module outside any package on
     ``sys.path`` before importing it: ``import shapes`` beside it means ``tests/unit/shapes.py``."""
-    write_files(tmp_path, ROOTLESS)
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests/unit", root_dir=tmp_path)
+    dep_tree = build(tmp_path, ROOTLESS, "app", tests_package="tests/unit")
 
     assert "unit.test_shapes" in dep_tree.successors("unit.shapes")
     assert "unit.test_orders_totals" in dep_tree.successors("unit.test_orders")
@@ -2100,9 +2088,7 @@ def test_a_test_module_s_directory_outside_any_package_is_where_its_imports_are_
 
 def test_a_test_module_s_directory_inside_a_package_is_not_where_its_imports_are_looked_up(tmp_path):
     """With ``tests/unit/__init__.py`` pytest puts ``tests/`` on ``sys.path``, not ``tests/unit/``."""
-    write_files(tmp_path, {**ROOTLESS, "tests/unit/__init__.py": ""})
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests/unit", root_dir=tmp_path)
+    dep_tree = build(tmp_path, {**ROOTLESS, "tests/unit/__init__.py": ""}, "app", tests_package="tests/unit")
 
     assert "unit.test_shapes" not in dep_tree.successors("unit.shapes")
 
@@ -2401,9 +2387,9 @@ def test_a_pytest_plugins_entry_beside_a_conftest_above_its_declarer_is_a_plugin
 def test_an_app_module_s_bare_name_reaches_through_test_basedirs_either_way(tmp_path, root_conftest):
     """``suite/`` is on ``sys.path`` at test time whether or not a root conftest makes the rootdir a basedir."""
     files = {"app/__init__.py": "", "app/x.py": "import helpers\n", "suite/helpers.py": "", "suite/test_a.py": ""}
-    write_files(tmp_path, {**files, **({"conftest.py": ""} if root_conftest else {})})
-
-    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=tmp_path)
+    dep_tree = build(
+        tmp_path, {**files, **({"conftest.py": ""} if root_conftest else {})}, "app", tests_package="suite"
+    )
 
     assert dep_tree.edges["suite.helpers", "app.x"].get("basedir") is True
 
@@ -2509,9 +2495,7 @@ TYPE_ONLY = {
 
 def test_a_type_only_import_is_an_edge_by_default(tmp_path):
     """Kept unless asked: a type checker, or code evaluating annotations, may still read it."""
-    write_files(tmp_path, TYPE_ONLY)
-
-    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path)
+    dep_tree = build(tmp_path, TYPE_ONLY, "pkg", tests_package="tests")
 
     assert dep_tree.has_edge("pkg.b", "pkg.a")
     assert dep_tree.nodes["shared_types"].get("external") is True
@@ -2521,9 +2505,7 @@ def test_a_type_only_import_is_an_edge_by_default(tmp_path):
 def test_an_ignored_type_only_import_is_no_edge_nor_followed_nor_awaited(tmp_path):
     """``if TYPE_CHECKING:`` never runs: no edge, no module outside the walks followed through it, and a
     deleted module it names reaches nothing (``graph["unresolved"]``)."""
-    write_files(tmp_path, TYPE_ONLY)
-
-    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+    dep_tree = build(tmp_path, TYPE_ONLY, "pkg", tests_package="tests", ignore_type_checking_imports=True)
 
     assert not dep_tree.has_edge("pkg.b", "pkg.a")
     assert dep_tree.has_edge("pkg.a", "tests.test_a")
@@ -2652,9 +2634,13 @@ def test_a_package_init_keeps_its_type_only_imports(tmp_path, init):
         "def check(user: 'User') -> None: ...\n"
     )
     files = {"pkg/__init__.py": "", "pkg/sub/__init__.py": "", "pkg/models.py": "class User: ...\n"}
-    write_files(tmp_path, {**files, init: guarded, "pkg/plain.py": guarded})
-
-    dep_tree = graph.build_dep_tree("pkg", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+    dep_tree = build(
+        tmp_path,
+        {**files, init: guarded, "pkg/plain.py": guarded},
+        "pkg",
+        tests_package="tests",
+        ignore_type_checking_imports=True,
+    )
 
     (node,) = [name for name in dep_tree if dep_tree.nodes[name]["path"] == str((tmp_path / init).resolve())]
     assert dep_tree.has_edge("pkg.models", node)

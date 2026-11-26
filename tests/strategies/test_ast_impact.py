@@ -1,29 +1,27 @@
-"""Unit-tests for the AST impact strategy module."""
+"""The AST strategy: the tests that import a changed module, directly or through other modules."""
 
-from unittest.mock import MagicMock, patch
+import networkx as nx
 
-from pytest_impacted.strategies import (
-    ASTImpactStrategy,
-)
+from pytest_impacted.strategies import ASTImpactStrategy
 
 
-class TestASTImpactStrategy:
-    """Test the AST-based impact strategy."""
+def test_the_tests_importing_a_changed_module_directly_or_not():
+    """An edge points from a module to its importer: ``core`` reaches ``api``, and both tests through it."""
+    dep_tree = nx.DiGraph(
+        [
+            ("pkg.core", "pkg.api"),
+            ("pkg.api", "tests.test_api"),
+            ("pkg.core", "tests.test_core"),
+            ("pkg.other", "tests.test_other"),
+        ]
+    )
 
-    @patch("pytest_impacted.strategies.resolve_impacted_tests")
-    def test_find_impacted_tests(self, mock_resolve):
-        """Test that AST strategy uses the provided dep_tree."""
-        mock_dep_tree = MagicMock()
-        mock_resolve.return_value = ["test_module_a", "test_module_b"]
+    result = ASTImpactStrategy().find_impacted_tests(
+        changed_files=["pkg/core.py"],
+        impacted_modules=["pkg.core"],
+        ns_module="pkg",
+        tests_package="tests",
+        dep_tree=dep_tree,
+    )
 
-        strategy = ASTImpactStrategy()
-        result = strategy.find_impacted_tests(
-            changed_files=["src/module_a.py"],
-            impacted_modules=["module_a"],
-            ns_module="mypackage",
-            tests_package="tests",
-            dep_tree=mock_dep_tree,
-        )
-
-        mock_resolve.assert_called_once_with(["module_a"], mock_dep_tree)
-        assert result == ["test_module_a", "test_module_b"]
+    assert sorted(result) == ["tests.test_api", "tests.test_core"]

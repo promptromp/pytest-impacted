@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import networkx as nx
+import pytest
 
 from pytest_impacted.strategies import (
     ASTImpactStrategy,
@@ -11,6 +12,7 @@ from pytest_impacted.strategies import (
     ConftestImportImpactStrategy,
     DependencyFileImpactStrategy,
     ImpactStrategy,
+    InvalidationFileImpactStrategy,
     PytestImpactStrategy,
     get_default_strategies,
 )
@@ -73,31 +75,43 @@ class TestCompositeImpactStrategy:
         strategy.find_impacted_tests.assert_called_once()
 
 
-class TestGetDefaultStrategies:
-    """Test the get_default_strategies factory function."""
+BUILT_IN = [ASTImpactStrategy, PytestImpactStrategy, ConftestImportImpactStrategy]
 
-    def test_default_includes_the_built_in_strategies(self):
-        """Default composition: AST, Pytest, ConftestImport (reporting only), DependencyFile."""
-        strategies = get_default_strategies()
-        assert [type(s) for s in strategies] == [
-            ASTImpactStrategy,
-            PytestImpactStrategy,
-            ConftestImportImpactStrategy,
-            DependencyFileImpactStrategy,
-        ]
 
-    def test_watch_dep_files_false_excludes_dependency_strategy(self):
-        """When watch_dep_files=False, DependencyFileImpactStrategy is excluded."""
-        strategies = get_default_strategies(watch_dep_files=False)
-        assert [type(s) for s in strategies] == [ASTImpactStrategy, PytestImpactStrategy, ConftestImportImpactStrategy]
-        assert not any(isinstance(s, DependencyFileImpactStrategy) for s in strategies)
+@pytest.mark.parametrize(
+    ("options", "extra"),
+    [
+        pytest.param({}, [DependencyFileImpactStrategy], id="defaults"),
+        pytest.param({"watch_dep_files": False}, [], id="dependency files unwatched"),
+        pytest.param({"conftest_imports": True}, [DependencyFileImpactStrategy], id="conftest imports select"),
+        pytest.param(
+            {"invalidate_all_patterns": ["*.json"]},
+            [DependencyFileImpactStrategy, InvalidationFileImpactStrategy],
+            id="invalidation globs, after the dependency files",
+        ),
+        pytest.param(
+            {"watch_dep_files": False, "invalidate_all_patterns": ["*.json"], "conftest_imports": True},
+            [InvalidationFileImpactStrategy],
+            id="each switch independent",
+        ),
+    ],
+)
+def test_the_default_composition(options, extra):
+    """AST, pytest and conftest-import strategies always (the last naming conftests unless asked to select), then
+    the dependency-file strategy unless unwatched, then the invalidation globs when any are given."""
+    strategies = get_default_strategies(**options)
 
-    def test_returns_new_instances_each_call(self):
-        """Each call should return fresh strategy instances."""
-        strategies_a = get_default_strategies()
-        strategies_b = get_default_strategies()
-        assert strategies_a is not strategies_b
-        assert strategies_a[0] is not strategies_b[0]
+    assert [type(strategy) for strategy in strategies] == BUILT_IN + extra
+    assert strategies[2].report_only is not options.get("conftest_imports", False)
+    if "invalidate_all_patterns" in options:
+        assert strategies[-1].patterns == ("*.json",)
+
+
+def test_the_default_composition_is_new_each_call():
+    first, second = get_default_strategies(), get_default_strategies()
+
+    assert first is not second
+    assert all(a is not b for a, b in zip(first, second, strict=True))
 
 
 class _Spy(ImpactStrategy):
