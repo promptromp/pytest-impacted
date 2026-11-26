@@ -867,6 +867,9 @@ def _rust_dynamic_imports(modules: list[tuple[str, str, bool]]) -> list[tuple[li
         read = iter(
             _rust.rust_parse_all_dynamic_imports([m for m, take in zip(modules, taken, strict=True) if take], TABLE)
         )
+    except UnicodeEncodeError:  # a ValueError too: a string ``takes`` should have kept back
+        logger.debug("pytest-impacted-rs was handed a string that is not UTF-8; the stdlib pass finds imports by name")
+        return [None] * len(modules)
     except (TypeError, ValueError):
         logger.debug("pytest-impacted-rs cannot read the loader table; the stdlib pass finds the imports by name")
         return [None] * len(modules)

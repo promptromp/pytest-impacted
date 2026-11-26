@@ -94,16 +94,35 @@ def test_finding_imports_by_name_leaves_an_odd_file_to_python(monkeypatch, files
     assert parse.handed == ["app.models"]
 
 
-def test_the_real_extension_is_never_handed_an_odd_file(files):
-    """The same with the extension itself, whose PyO3 conversion is what raised."""
+def test_the_real_extension_is_never_handed_an_odd_file(monkeypatch, files):
+    """The same with the extension itself, whose PyO3 conversion is what raised: it parses the other file."""
     if not (_rust.RUST_AVAILABLE and _rust.RUST_SPLITS_TYPE_ONLY and _rust.RUST_PARSES_DYNAMIC_IMPORTS):
         pytest.skip("pytest-impacted-rs is not installed, or predates finding imports by name")
     with pytest.raises(UnicodeEncodeError):
         _rust.rust_parse_all_imports([(files[f"app.{ODD}"], f"app.{ODD}", False)])  # what failed the run
+    handed: dict[str, list[str]] = {}
+
+    def recording(function):
+        real = getattr(_rust, function)
+
+        def call(modules, *rest):
+            handed.setdefault(function, []).extend(name for _, name, _ in modules)
+            return real(modules, *rest)
+
+        return call
+
+    for function in ("rust_parse_all_imports", "rust_parse_all_imports_split", "rust_parse_all_dynamic_imports"):
+        monkeypatch.setattr(_rust, function, recording(function))
 
     for ignore in (False, True):
         assert graph._parse_all_module_imports(files, ignore)[0]["app.models"] == ["os"]
     assert set(graph._parse_all_dynamic_imports(files)) == set(files)
+
+    assert handed == {
+        "rust_parse_all_imports": ["app.models"],
+        "rust_parse_all_imports_split": ["app.models"],
+        "rust_parse_all_dynamic_imports": ["app.models"],
+    }
 
 
 INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
@@ -111,15 +130,12 @@ INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = sui
 
 @pytest.mark.parametrize("args", [(), ("--impacted-ignore-type-checking-imports",)], ids=["", "type-only ignored"])
 def test_a_package_holding_a_file_named_in_latin_1_runs(pytester, make_git_project, args):
-    """The whole run, on a filesystem that takes such a name: it is analysed, and the selection is unchanged."""
+    """The whole run, on a filesystem that takes such a name: no failure, the file analysed, the selection right."""
+    (pytester.path / "app").mkdir()
     try:
         fd = os.open(os.fsencode(pytester.path / "app") + b"/caf\xe9.py", os.O_CREAT | os.O_WRONLY)
-    except FileNotFoundError:
-        (pytester.path / "app").mkdir()
-        try:
-            fd = os.open(os.fsencode(pytester.path / "app") + b"/caf\xe9.py", os.O_CREAT | os.O_WRONLY)
-        except OSError as error:  # macOS: Illegal byte sequence
-            pytest.skip(f"the filesystem refuses a file name that is not UTF-8: {error}")
+    except (OSError, UnicodeDecodeError) as error:  # macOS: Illegal byte sequence; Windows decodes bytes as UTF-8
+        pytest.skip(f"the filesystem refuses a file name that is not UTF-8: {error}")
     os.write(fd, b"import importlib\nimportlib.import_module('app.target')\n")
     os.close(fd)
     project = make_git_project(
@@ -136,3 +152,5 @@ def test_a_package_holding_a_file_named_in_latin_1_runs(pytester, make_git_proje
     result = project.runpytest("--impacted", "--impacted-git-mode=unstaged", "-v", "-p", "no:cacheprovider", *args)
 
     assert_selected(result, passed=["test_target.py"], deselected=["test_other.py"])
+    dep_tree = graph.build_dep_tree("app", tests_package="suite", root_dir=pytester.path)
+    assert dep_tree.has_edge("app.target", f"app.{ODD}")  # it is analysed: its import by name is an edge
