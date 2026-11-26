@@ -60,7 +60,8 @@ since astroid v4.
 importable package — `pkgutil.iter_modules`, with a non-package prefix like `src/`
 dropped from names, plus the package's own `__init__.py` under its importable name
 (`pkgutil` lists children only; without it, `from pkg import X` had no edge, nor did
-anything the `__init__` re-exports); `False` uses `Path.rglob` for test directories,
+anything the `__init__` re-exports); `False` walks test directories (`os.walk`, following a symlinked directory as pytest collects through one, under the
+package walk's guards; a file reached twice is one node, named not through the link),
 which frequently lack `__init__.py`, naming modules by path. Picking the wrong one
 silently names modules differently (`app.tests.x` under `True`, `tests.x` under `False`) or
 skips directories that are not identifiers (`my-dir/`), so imports stop matching nodes.

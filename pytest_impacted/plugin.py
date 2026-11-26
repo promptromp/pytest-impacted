@@ -529,7 +529,7 @@ def pytest_collection_modifyitems(session, config, items):
     if impacted_tests is None:
         return
     root_dir = config.rootpath
-    unjudged = _unjudged_items(items, _analysed_dirs(config))
+    unjudged = _unjudged_items(items, _analysed_dirs(config), real_path(config.rootpath))
     config.stash[_UNJUDGED_ITEMS] = unjudged
     impacted_items = _impacted_items(items, impacted_tests, root_dir) | unjudged
     # A worker analysing for itself skips: another may judge differently, and xdist stops a
@@ -596,19 +596,23 @@ def _analysed_dirs(config: Config) -> list[Path]:
     return [*given, *(real_path(directory) for directory in given)]
 
 
-def _unjudged_items(items: list[pytest.Item], analysed: list[Path]) -> set[pytest.Item]:
-    """The Python test items outside every analysed directory: no analysis judged them, so they run.
+def _unjudged_items(items: list[pytest.Item], analysed: list[Path], root: Path) -> set[pytest.Item]:
+    """The Python test items no walk reaches: no analysis judged them, so they run.
 
     Their files are no graph node (nothing in the application imports a test), so a rule that impacts "every
     test" never reached them either, and they were deselected on every run: a second tests directory, or the
-    tests themselves when only ``--impacted-module`` is set.
+    tests themselves when only ``--impacted-module`` is set. A walk reaches a file under an analysed directory,
+    resolved, or through a symlink under one that stays inside the project (*root*), as the walks follow links.
     """
     resolved: dict[Path, bool] = {}
 
     def outside(path: Path) -> bool:
         if path not in resolved:
-            spellings = (Path(os.path.abspath(path)), real_path(path))
-            resolved[path] = not any(p.is_relative_to(d) for p in spellings for d in analysed)
+            real, spelled = real_path(path), Path(os.path.abspath(path))
+            judged = any(real.is_relative_to(d) for d in analysed) or (
+                real.is_relative_to(root) and any(spelled.is_relative_to(d) for d in analysed)
+            )
+            resolved[path] = not judged
         return resolved[path]
 
     # Tests pytest's Python collector made: a linter plugin's items (pytest-ruff, pytest-mypy) are no tests.

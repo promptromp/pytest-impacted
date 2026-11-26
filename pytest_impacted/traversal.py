@@ -239,11 +239,13 @@ def _is_walkable_link_target(path: Path, real_parent: Path, root: Path) -> bool:
 
 
 def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
-    """Discover submodules by walking the filesystem (no __init__.py required).
+    """Discover submodules by walking the filesystem (no __init__.py required), as pytest collects test files.
 
-    Uses Path.rglob to find all .py files regardless of whether intermediate
-    directories contain __init__.py. This matches pytest's own filesystem-based
-    test discovery behavior.
+    Every ``.py`` file beneath, whatever the directories hold — through a symlinked directory too, as pytest
+    collects through one, but only while it stays inside the project and does not point back up the tree (see
+    :func:`_is_walkable_link_target`), never into a directory already walked (two directories linking to each
+    other), nor ``node_modules`` and the like. A file reached two ways is named as its own directory reads: the
+    tree before any directory link, and regular files before file links.
     """
     base_path = root / package_name_to_path(package)
     # os.path, not Path.is_dir(): a directory inside an unsearchable one is missing, rather than raising.
@@ -251,13 +253,46 @@ def _discover_via_filesystem(package: str, root: Path) -> dict[str, str]:
         return {}
 
     results: dict[str, str] = {}
-    for py_file in base_path.rglob("*.py"):
-        # A regular file only: a symlink loop or a named pipe called ``*.py`` is no module, and reading a pipe
-        # would block the run. os.path.realpath, not Path.resolve(), which raises on a loop before Python 3.13.
-        if os.path.isfile(py_file):
-            results[".".join(module_parts(py_file.relative_to(base_path.parent)))] = os.path.realpath(py_file)
-
+    named: set[str] = set()  # the real files named already
+    linked_files: list[Path] = []
+    walked: set[str] = set()
+    starts: list[Path] = [base_path]
+    while starts:
+        start = starts.pop(0)
+        real_start = os.path.realpath(start)
+        if real_start in walked:
+            continue
+        for directory, subdirectories, files in os.walk(start):  # each directory link walked as a start of its own
+            here = Path(directory)
+            real_here = os.path.join(real_start, os.path.relpath(directory, start))  # no realpath per directory
+            walked.add(os.path.normpath(real_here))
+            links = {name for name in subdirectories if os.path.islink(here / name)}
+            starts += [
+                here / name
+                for name in sorted(links)
+                if name not in _NEVER_PACKAGES and _is_walkable_link_target(here / name, Path(real_here), root)
+            ]
+            subdirectories[:] = sorted(
+                name
+                for name in subdirectories
+                if name not in links and os.path.normpath(os.path.join(real_here, name)) not in walked
+            )
+            for file in sorted(name for name in files if name.endswith(".py")):
+                if os.path.islink(here / file):
+                    linked_files.append(here / file)
+                else:
+                    _add_test_file(results, named, here / file, base_path)
+    for linked in linked_files:
+        _add_test_file(results, named, linked, base_path)
     return results
+
+
+def _add_test_file(results: dict[str, str], named: set[str], file: Path, base_path: Path) -> None:
+    """Name *file* as the tests walk does, unless its real file has a name already (*named*). A regular file only:
+    a symlink loop or a named pipe called ``*.py`` is no module, and reading a pipe would block the run."""
+    if os.path.isfile(file) and (real := os.path.realpath(file)) not in named:
+        named.add(real)
+        results[".".join(module_parts(file.relative_to(base_path.parent)))] = real
 
 
 @lru_cache
@@ -513,8 +548,9 @@ def _discover_project(
         aliases.setdefault(alias, name)
     if tests_package:
         canonical_of = {path: name for name, path in modules.items()}
+        # The tests walk names a file once, as its own directory reads (it walks the tree before any link).
         for name, path in discover_submodules(tests_package, require_init=False, root_dir=root).items():
-            if canonical_of.get(path, name) == name:
+            if canonical_of.setdefault(path, name) == name:
                 modules[name] = path
             else:
                 aliases.setdefault(name, canonical_of[path])
@@ -535,17 +571,25 @@ def discover_application_files(
     """The files of *package* that are code under test: the package walk's, less the tests dir's.
 
     A tests dir inside the package (``app/tests``) holds test code, so its files are
-    left out. A tests dir holding the whole package cannot tell tests from the
-    application and is ignored — decided on the configured directories, not on the two
-    walks' results, which differ wherever the package walk follows a symlink the tests
-    walk does not. Conftests inside the package are included; callers exclude them by
-    file name (see ``strategies._CodeRoles``).
+    left out — those inside the tests dir itself: a symlink from the tests dir into the
+    package (which the tests walk follows) makes no application file test code. A tests
+    dir holding the whole package cannot tell tests from the application and is ignored —
+    decided on the configured directories. Conftests inside the package are included;
+    callers exclude them by file name (see ``strategies._CodeRoles``).
     """
     root = canonical_root(root_dir)
     application = set(discover_submodules(package, require_init=True, root_dir=root).values())
     package_dir = Path(package_name_to_path(package))
     if tests_package and not package_dir.is_relative_to(package_name_to_path(tests_package)):
-        application -= set(discover_submodules(tests_package, require_init=False, root_dir=root).values())
+        # What lies in the tests dir's own tree, a file symlinked there too: not what a directory link reaches
+        # (one into the package would make application code test code, and its conftest rule opt-out).
+        tests_dir = root / package_name_to_path(tests_package)
+        application -= {
+            os.path.realpath(os.path.join(directory, file))
+            for directory, _, files in os.walk(tests_dir)
+            for file in files
+            if file.endswith(".py")
+        }
     return frozenset(application)
 
 

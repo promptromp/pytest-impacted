@@ -256,3 +256,19 @@ def test_a_test_reached_through_a_symlink_inside_the_package_is_judged(make_git_
     result = run(project, "app")
 
     assert "outside --impacted-module" not in result.stdout.str()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_test_reached_through_a_link_out_of_the_project_runs(make_git_project, tmp_path):
+    """pytest collects through it, no walk follows a link out of the project: no analysis judges it, so it runs."""
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "test_far.py").write_text("def test_far():\n    pass\n")
+    project = make_git_project(TWO_TEST_DIRS, INI)
+    os.symlink(outside, project.path / "suite" / "far", target_is_directory=True)
+    edit_file(project, "app/b.py")
+
+    result = run(project, "suite")
+
+    result.assert_outcomes(passed=2, deselected=1)
+    result.stdout.fnmatch_lines(["*test_far.py::test_far PASSED*", "pytest-impacted: 1 test outside *"])
