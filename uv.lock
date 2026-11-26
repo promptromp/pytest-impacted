@@ -659,7 +659,7 @@ provides-extras = ["fast"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "coverage", specifier = ">=7.8.0" },
+    { name = "coverage", specifier = ">=7.10" },
     { name = "mypy", specifier = ">=1.15.0" },
     { name = "pre-commit", specifier = ">=4.6.1" },
     { name = "pytest-cov", specifier = ">=6.1.1" },

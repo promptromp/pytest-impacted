@@ -318,6 +318,7 @@ class TestImpactedTestsCLI:
 
         assert result.exit_code != 0
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     def test_cli_nonexistent_module(self):
         """Test CLI fails with non-existent namespace module."""
         result = self.runner.invoke(

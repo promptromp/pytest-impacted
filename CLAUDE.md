@@ -548,8 +548,9 @@ repo fixtures are set up before any function-scoped one.
 
 **The suite dogfoods the plugin.** `[tool.pytest.ini_options]` sets `impacted_module` and
 `impacted_tests_dir`, so the pre-commit hook runs `pytest -n auto --impacted --impacted-git-mode=unstaged`:
-only what the staged change impacts, under xdist. CI still runs every test on every cell (`-n auto`),
-and its impacted job reruns the selection serially and under xdist. The config also sets
+only what the staged change impacts, under xdist — except a change to `pytest_impacted/` or `rust/`
+(`--impacted-invalidate-all`), where the code choosing the tests is the code under test, so every test runs.
+CI runs every test on every cell (`-n auto`), and its impacted job reruns the selection serially and under xdist. The config also sets
 `--strict-markers`, `--strict-config`, `xfail_strict` and `filterwarnings = error` (spelled out, not pytest
 9's `strict = true`, which the older-pytest step would refuse). A test must not read the repository's own
 configuration through the working directory: run it from `tmp_path`, as `in_tmp_dir` does.
