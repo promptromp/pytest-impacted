@@ -8,11 +8,19 @@ use std::collections::HashSet;
 use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{Alias, Expr, ExprContext, Stmt};
 
+use crate::dynamic_imports::DEEPEST;
+
 /// The addresses (see `address`) of the import statements in `suite` whose names only annotations use.
+///
+/// None in a module nested deeper than `DEEPEST`, which the walk does not enter: every import of it then counts
+/// as a runtime one, the safe side (an edge kept selects more tests, never fewer).
 pub fn type_only_imports(suite: &[Stmt]) -> HashSet<usize> {
     let modules = module_names(suite);
     let mut walk = TypeOnlyWalk::new(&modules, HashSet::new());
     walk.visit_body(suite);
+    if walk.too_deep {
+        return HashSet::new();
+    }
     let watched: HashSet<String> = walk
         .guarded
         .iter()
@@ -26,6 +34,9 @@ pub fn type_only_imports(suite: &[Stmt]) -> HashSet<usize> {
     let guarded = walk.guarded;
     let mut uses = TypeOnlyWalk::new(&modules, watched);
     uses.visit_body(suite);
+    if uses.too_deep {
+        return HashSet::new();
+    }
     guarded
         .into_iter()
         .filter(|(_, names)| {
@@ -145,6 +156,9 @@ struct TypeOnlyWalk<'m> {
     watched: HashSet<String>,
     /// Inside how many annotations and `if TYPE_CHECKING:` bodies: no code runs there.
     depth: usize,
+    /// How deep in nested expressions the walk is, and whether it met one deeper than `DEEPEST`.
+    nesting: usize,
+    too_deep: bool,
     guarded: Vec<(usize, Option<Vec<String>>)>,
     typed: HashSet<String>,
     runtime: HashSet<String>,
@@ -156,6 +170,8 @@ impl<'m> TypeOnlyWalk<'m> {
             modules,
             watched,
             depth: 0,
+            nesting: 0,
+            too_deep: false,
             guarded: Vec::new(),
             typed: HashSet::new(),
             runtime: HashSet::new(),
@@ -223,6 +239,10 @@ impl<'a> Visitor<'a> for TypeOnlyWalk<'_> {
     }
 
     fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.nesting == DEEPEST {
+            self.too_deep = true;
+            return;
+        }
         match expr {
             Expr::Name(name)
                 if matches!(name.ctx, ExprContext::Load)
@@ -243,6 +263,8 @@ impl<'a> Visitor<'a> for TypeOnlyWalk<'_> {
             }
             _ => {}
         }
+        self.nesting += 1;
         visitor::walk_expr(self, expr);
+        self.nesting -= 1;
     }
 }

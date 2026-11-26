@@ -198,9 +198,9 @@ pub fn dynamic_imports(
     ))
 }
 
-/// How deep the walk goes into nested expressions: the visitor recurses, and a rayon worker's stack is small.
-/// Real code is nowhere near; a 3000-term `+` chain is. Deeper, the stdlib pass reads the file.
-const DEEPEST: usize = 2_000;
+/// How deep a walk goes into nested expressions: the visitors recurse. Real code is nowhere near; a 3000-term `+`
+/// chain is. Deeper, the stdlib pass reads the file here, and `type_only` keeps every import a runtime one.
+pub(crate) const DEEPEST: usize = 2_000;
 
 /// One walk of the module: the names its absolute imports bind anywhere, unioned over scopes (a name bound
 /// in two places may call either), and every call passing an argument.

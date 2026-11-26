@@ -1,8 +1,10 @@
 """Python code parsing (AST) utilities."""
 
 import ast
+import io
 import logging
 import os
+import tokenize
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -32,14 +34,17 @@ def normalize_path(path_like: str | os.PathLike[str]) -> Path:
 
 
 def read_source(file_path: str) -> str | None:
-    """A source file's text, or ``None`` if it cannot be read.
+    """A source file's text, decoded as Python decodes it, or ``None`` if it cannot be read.
 
-    ``utf-8-sig`` drops a BOM, as ruff does — a parity point with the Rust backend.
+    By its PEP 263 coding cookie (``# -*- coding: latin-1 -*-``), else as UTF-8, a BOM dropped as ruff drops it — a
+    parity point with the Rust backend, which hands a file not in UTF-8 back to this side.
     """
     try:
-        return Path(file_path).read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError):
-        return None
+        data = Path(file_path).read_bytes()
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+        return data.decode(encoding)
+    except (OSError, SyntaxError, LookupError, ValueError):  # unreadable; an unknown or wrong encoding
+        return None  # ValueError: UnicodeDecodeError, and the plain UnicodeError some codecs raise (punycode)
 
 
 @contextmanager
@@ -178,6 +183,11 @@ def split_file_imports(
     except astroid.exceptions.AstroidSyntaxError:
         logger.warning("Syntax error while parsing %s", file_path)
         return [], []
+    except RecursionError:
+        # astroid's tree builder recurses in Python, giving up near 500 nested terms (a long ``a + b + ...`` in
+        # generated code) where CPython's parser, and ruff, go on: read the imports as they do, every one at
+        # runtime (no type-only split without astroid's tree; keeping an edge only selects more).
+        return _imports_by_ast(source, file_path, package), []
 
     type_only = {id(node) for node in type_only_imports(tree)} if find_type_only else set()
     runtime: set[str] = set()
@@ -185,6 +195,29 @@ def split_file_imports(
     for node in tree.nodes_of_class((Import, ImportFrom)):
         (typed if id(node) in type_only else runtime).update(_extract_imports_from_node(node, package))
     return sorted(runtime), sorted(typed - runtime)
+
+
+def _imports_by_ast(source: str, file_path: str, package: str) -> list[str]:
+    """The import candidates of *source* by the stdlib parser, as :func:`_extract_imports_from_node` reads them.
+
+    ``ast.walk`` is iterative, so only the parse itself can give up; then the file imports nothing, logged.
+    """
+    try:
+        with _quiet_parse():
+            module = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as err:
+        logger.warning("Could not parse %s: %s", file_path, type(err).__name__)
+        return []
+    found: set[str] = set()
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = _resolve_relative_import(package, node.level, node.module) if node.level else (node.module or "")
+            if base:
+                found.add(base)
+            found.update(f"{base}.{alias.name}" if base else alias.name for alias in node.names if alias.name != "*")
+    return sorted(found)
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:

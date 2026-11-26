@@ -83,8 +83,8 @@ def _parse_imports(
         return _parse_imports_in_python(submodules, ignore_type_checking_imports)
     taken = {name: path for name, path in submodules.items() if _rust.takes(path, name)}
     runtime, type_only = _parse_imports_in_rust(taken, ignore_type_checking_imports)
-    if len(taken) < len(submodules):
-        rest = {name: path for name, path in submodules.items() if name not in taken}
+    # What the extension could not be handed, or handed back (a file ruff rejects: never fewer imports than astroid).
+    if rest := {name: path for name, path in submodules.items() if name not in runtime}:
         rest_runtime, rest_type_only = _parse_imports_in_python(rest, ignore_type_checking_imports)
         runtime |= rest_runtime
         type_only |= rest_type_only
@@ -94,7 +94,14 @@ def _parse_imports(
 def _parse_imports_in_rust(
     submodules: dict[str, str], ignore_type_checking_imports: bool
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """What the extension parses of *submodules*; a module it hands back (``None``, see
+    :data:`~pytest_impacted._rust.RUST_PARSES_EACH`) is in neither dict, for astroid to read."""
     modules_info = [(path, name, is_package_file(path)) for name, path in submodules.items()]
+    if _rust.RUST_PARSES_EACH:
+        each = _rust.rust_parse_imports_each(modules_info, ignore_type_checking_imports)
+        parsed = {name: split for (_, name, _), split in zip(modules_info, each, strict=True) if split is not None}
+        typed = {name: split[1] for name, split in parsed.items()} if ignore_type_checking_imports else {}
+        return {name: split[0] for name, split in parsed.items()}, typed
     if not ignore_type_checking_imports:
         return _rust.rust_parse_all_imports(modules_info), {}
     split = _rust.rust_parse_all_imports_split(modules_info)

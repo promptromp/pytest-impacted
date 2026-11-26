@@ -371,8 +371,9 @@ a test module using `pytest_plugins = "pytester"`, and still could not see a rem
 declaration. `parse_pytest_plugins` uses stdlib `ast`, outside the backend on purpose (it
 cannot break Rust/Python parity), behind a text pre-filter, with warnings silenced so
 `-W error` cannot turn a `SyntaxWarning` into a lost declaration — `_quiet_parse` does the
-same for the astroid import parser. Do not catch `RecursionError` in `parse_file_imports`:
-ruff would still return the imports, and a silent `[]` there breaks backend parity.
+same for the astroid import parser. astroid gives up near 500 nested terms where CPython and ruff go on, so its
+`RecursionError` falls back to stdlib `ast` (`_imports_by_ast`, every candidate a runtime one) — never a silent
+`[]`, which would break backend parity.
 `read_source` and `is_conftest_module` are the shared reader and conftest-name check —
 don't re-implement either.
 
@@ -428,9 +429,20 @@ neither; type comments are nodes to neither. So are the imports by name (`tests/
 runs every case through the stdlib pass and `rust/src/dynamic_imports.rs`): an identifier counts any
 non-ASCII character as an identifier's in both (but lone surrogates and the U+FFFD ruff makes of them), so no
 Unicode version decides, and the Rust port of `importlib.util.resolve_name` must keep its `rsplit` arithmetic.
-A file ruff rejects though CPython's parser accepts it (`f(a=1, a=2)`), or nested deeper than `DEEPEST` (the
-visitor recurses on a small rayon stack), is `None` from the extension, and the graph has the stdlib pass read
-it: never less than that pass. More, only where the running Python cannot parse the file (newer syntax). A table
+A file ruff rejects though CPython's parser accepts it (`f(a=1, a=2)`, 203 nested conditionals), or nested deeper
+than `DEEPEST`, is `None` from the extension, for imports by name and (`parse_imports_each`, since 0.41) import
+statements alike, and the Python side reads it: never less than that side. So is a file not UTF-8 (`read_source`
+decodes a PEP 263 cookie), over `LARGEST_SOURCE`, or unreadable — but the older dict functions read every file,
+since an older pytest-impacted cannot read one handed back. Every batch runs in an owned pool with 256 MiB stacks
+(`in_pool`, reserved, not committed): freeing a parsed tree recurses down a left-deep `a + b + ...` that ruff builds
+in a loop, about 64 bytes a term, which overflowed rayon's 2 MiB threads and killed the host process; the 4 MiB
+cap keeps the need at half the stack. The type-only visitor stops at `DEEPEST` too, every import then a runtime
+one. One accepted exception: astroid gives up near 500 nested terms and its `ast` fallback keeps every import a
+runtime one, so under `--impacted-ignore-type-checking-imports` a file nested 500 to 2,000 deep keeps type-only
+edges in Python that Rust drops (the safe side; pinned in `tests/test_deep_sources.py`). Deep-source tests run a
+batch of several files in a subprocess: a crash kills the process, and before the owned pool a one-file batch ran
+on the caller's larger stack (it still does when the pool cannot be built), which hid the crash. The older dict
+functions read up to 6 MiB (`OLDER_LARGEST_SOURCE`), a larger file importing nothing there. More, only where the running Python cannot parse the file (newer syntax). A table
 an older extension cannot read (a new kind or column: ValueError, TypeError) leaves every file to that pass. Only
 UTF-8 crosses into the extension (`_rust.takes`): PyO3 raises UnicodeEncodeError on a surrogate escape, Python's
 spelling of a non-UTF-8 file name on Linux, so both dispatch points leave such a file, path or name, to Python. Check new rules over every file of a real

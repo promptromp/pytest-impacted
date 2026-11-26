@@ -8,11 +8,13 @@ pure-Python astroid-based implementation is used as a fallback.
 __all__ = [
     "RUST_AVAILABLE",
     "RUST_PARSES_DYNAMIC_IMPORTS",
+    "RUST_PARSES_EACH",
     "RUST_SPLITS_TYPE_ONLY",
     "outdated_for",
     "rust_parse_all_dynamic_imports",
     "rust_parse_all_imports",
     "rust_parse_all_imports_split",
+    "rust_parse_imports_each",
     "takes",
     "uses_rust",
 ]
@@ -48,6 +50,18 @@ except ImportError:
     RUST_PARSES_DYNAMIC_IMPORTS = False
 
 
+# From 0.41.0 it parses each file or hands it back (``None``): one ruff rejects though CPython compiles it (nested
+# deeper than 202 levels), one not UTF-8, one too large. The Python backend reads those; an older extension
+# returned no imports for them, so a test was lost.
+try:
+    from pytest_impacted_rs import parse_imports_each as rust_parse_imports_each
+
+    RUST_PARSES_EACH = True
+except ImportError:
+    rust_parse_imports_each = None  # type: ignore[assignment]
+    RUST_PARSES_EACH = False
+
+
 def takes(*texts: str) -> bool:
     """Whether the extension can be handed these strings: a file's path and module name.
 
@@ -68,7 +82,8 @@ def uses_rust(ignore_type_checking_imports: bool = False) -> bool:
 
 
 def outdated_for(ignore_type_checking_imports: bool) -> str | None:
-    """Why the installed extension leaves the parsing to the slower Python backend with these options, if it does.
+    """Why the installed extension should be upgraded, if it should: it leaves the parsing to the slower Python
+    backend with these options, or it predates handing back the files it cannot read.
 
     The ``fast`` extra stays unpinned: the extension's version is stamped from the release tag, and a
     development build is ``0.1.0``, which a pin would refuse. So it is said instead, by whoever reports.
@@ -77,5 +92,11 @@ def outdated_for(ignore_type_checking_imports: bool) -> str | None:
         return (
             "the installed pytest-impacted-rs predates ignoring type-only imports, so the slower pure-Python "
             "parser reads the files: upgrade it (pip install -U pytest-impacted-rs)."
+        )
+    if RUST_AVAILABLE and not RUST_PARSES_EACH:
+        return (
+            "the installed pytest-impacted-rs predates 0.41: a file it cannot read (not in UTF-8, or one its parser "
+            "rejects) imports nothing there, and a long generated expression can crash the run: upgrade it "
+            "(pip install -U pytest-impacted-rs)."
         )
     return None

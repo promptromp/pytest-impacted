@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::sync::OnceLock;
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -7,6 +8,54 @@ use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 
 mod dynamic_imports;
 mod type_only;
+
+/// The stack of each thread a batch runs on. Freeing a parsed tree recurses down an expression's left spine
+/// (`a + b + ...`, `x.a.b...`, `f()()...`: ruff parses those in a loop, so its nesting limit does not apply),
+/// about 64 bytes a term: on rayon's 2 MiB default a 33,000-term chain overflowed it, and the host process died
+/// with no traceback. The stack is reserved, not committed, until a thread uses it.
+const STACK: usize = 256 << 20;
+
+/// The largest source `parse_imports_each` and `parse_all_dynamic_imports` parse: a file of N bytes holds at
+/// most N/2 terms, so freeing its tree needs at most 32·N bytes of stack — half of `STACK`, leaving a margin for a
+/// costlier drop in another ruff release. A larger file (generated code) is handed back to the Python side.
+const LARGEST_SOURCE: u64 = 4 << 20;
+
+/// The largest source the older dict functions parse: they read every file, an older pytest-impacted having no
+/// way to read one handed back, but a file over this (generated code) imports nothing there, rather than risk
+/// freeing a tree deeper than `STACK` holds (a 16 MiB chain did).
+const OLDER_LARGEST_SOURCE: u64 = 6 << 20;
+
+/// The pool every batch runs in, with `STACK`-sized threads; `None` when the pool cannot be built (threads
+/// refused, as under strict memory overcommit), and then rayon's global pool, as before.
+fn pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .stack_size(STACK)
+            .thread_name(|index| format!("pytest-impacted-rs-{index}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
+
+/// Run `work` in the pool (see `pool`): its parallel iterators, and freeing every tree they build, on its stacks.
+fn in_pool<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    match pool() {
+        Some(pool) => pool.install(work),
+        None => work(),
+    }
+}
+
+/// A source the hand-back functions parse: readable, UTF-8, no larger than `LARGEST_SOURCE`. `None` otherwise,
+/// for the Python side to read (it decodes a PEP 263 encoding, and reports an unreadable file).
+fn source_of(file_path: &str) -> Option<String> {
+    let size = fs::metadata(file_path).ok()?.len();
+    if size > LARGEST_SOURCE {
+        return None;
+    }
+    fs::read_to_string(file_path).ok()
+}
 
 /// Resolve a relative import to its absolute module path.
 ///
@@ -205,15 +254,23 @@ fn parse_file_imports_core(
     is_package: bool,
     find_type_only: bool,
 ) -> Split {
-    if source.trim().is_empty() {
-        return (Vec::new(), Vec::new());
-    }
+    parsed_imports(source, module_name, is_package, find_type_only).unwrap_or_default()
+}
 
-    // Parse with ruff's parse_module (returns Parsed<ModModule> directly)
-    let parsed = match ruff_python_parser::parse_module(source) {
-        Ok(p) => p,
-        Err(_) => return (Vec::new(), Vec::new()),
-    };
+/// A source's runtime and type-only candidates (see `parse_file_imports_core`), or `None` for one ruff rejects.
+///
+/// ruff refuses sources CPython compiles: nested deeper than 202 levels (`a if c else ...` ×203), or with a
+/// compiler error the parser leaves to the compiler (`f(a=1, a=2)`). Those are the Python backend's.
+fn parsed_imports(
+    source: &str,
+    module_name: &str,
+    is_package: bool,
+    find_type_only: bool,
+) -> Option<Split> {
+    if source.trim().is_empty() {
+        return Some((Vec::new(), Vec::new()));
+    }
+    let parsed = ruff_python_parser::parse_module(source).ok()?;
 
     let suite = parsed.into_suite();
     let mut walk = Walk {
@@ -233,7 +290,7 @@ fn parse_file_imports_core(
     runtime.sort();
     let mut typed: Vec<String> = walk.typed.difference(&walk.runtime).cloned().collect();
     typed.sort();
-    (runtime, typed)
+    Some((runtime, typed))
 }
 
 /// Parse imports from a Python source file.
@@ -254,16 +311,49 @@ fn parse_file_imports(
     Ok(parse_file_imports_core(&source, module_name, is_package, false).0)
 }
 
-/// Parse each `(file_path, module_name, is_package)` in parallel, via rayon.
+/// Parse each `(file_path, module_name, is_package)` in parallel, via rayon, in the pool (see `pool`). A file up
+/// to `OLDER_LARGEST_SOURCE` is read, past the hand-back cap: an older pytest-impacted calls these, and has no
+/// way to read one handed back.
 fn parse_all(modules: &[(String, String, bool)], find_type_only: bool) -> Vec<(String, Split)> {
-    modules
-        .par_iter()
-        .map(|(file_path, module_name, is_package)| {
-            let source = fs::read_to_string(file_path).unwrap_or_default();
-            let split = parse_file_imports_core(&source, module_name, *is_package, find_type_only);
-            (module_name.clone(), split)
+    in_pool(|| {
+        modules
+            .par_iter()
+            .map(|(file_path, module_name, is_package)| {
+                let fits = fs::metadata(file_path).is_ok_and(|m| m.len() <= OLDER_LARGEST_SOURCE);
+                let source = if fits {
+                    fs::read_to_string(file_path).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let split =
+                    parse_file_imports_core(&source, module_name, *is_package, find_type_only);
+                (module_name.clone(), split)
+            })
+            .collect()
+    })
+}
+
+/// Each `(file_path, module_name, is_package)`'s runtime and type-only import candidates, in the order given
+/// and in parallel; `None` for a file the Python backend must read: one ruff rejects, one not UTF-8, one over
+/// `LARGEST_SOURCE`, one that cannot be read. So the extension never finds fewer imports than astroid would.
+/// Without `find_type_only` every candidate is a runtime one.
+#[pyfunction]
+fn parse_imports_each(
+    py: Python<'_>,
+    modules: Vec<(String, String, bool)>,
+    find_type_only: bool,
+) -> PyResult<Vec<Option<Split>>> {
+    Ok(py.detach(|| {
+        in_pool(|| {
+            modules
+                .par_iter()
+                .map(|(file_path, module_name, is_package)| {
+                    let source = source_of(file_path)?;
+                    parsed_imports(&source, module_name, *is_package, find_type_only)
+                })
+                .collect()
         })
-        .collect()
+    }))
 }
 
 /// Parse imports from multiple Python source files in parallel.
@@ -303,13 +393,16 @@ fn parse_all_dynamic_imports(
 ) -> PyResult<Vec<Option<dynamic_imports::Found>>> {
     let table =
         dynamic_imports::Table::new(loaders).map_err(pyo3::exceptions::PyValueError::new_err)?;
-    Ok(modules
-        .par_iter()
-        .map(|(file_path, module_name, is_package)| {
-            let source = fs::read_to_string(file_path).unwrap_or_default();
-            dynamic_imports::dynamic_imports(&source, module_name, *is_package, &table)
-        })
-        .collect())
+    Ok(in_pool(|| {
+        modules
+            .par_iter()
+            .map(|(file_path, module_name, is_package)| {
+                // A file the batch will not parse is the stdlib pass's, as one ruff rejects is.
+                let source = source_of(file_path)?;
+                dynamic_imports::dynamic_imports(&source, module_name, *is_package, &table)
+            })
+            .collect()
+    }))
 }
 
 /// Python module definition.
@@ -319,5 +412,6 @@ fn pytest_impacted_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_all_imports, m)?)?;
     m.add_function(wrap_pyfunction!(parse_all_imports_split, m)?)?;
     m.add_function(wrap_pyfunction!(parse_all_dynamic_imports, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_imports_each, m)?)?;
     Ok(())
 }
