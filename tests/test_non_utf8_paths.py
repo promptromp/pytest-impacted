@@ -13,7 +13,7 @@ import pytest
 from pytest_impacted import _rust, graph
 from pytest_impacted.dynamic_imports import DynamicImports
 
-from .git_helpers import assert_selected, edit_file
+from .git_helpers import INI, assert_selected, edit_file
 
 
 ODD = "caf\udce9"  # how Python spells the file name b"caf\xe9" on Linux
@@ -135,9 +135,6 @@ def test_the_real_extension_is_never_handed_an_odd_file(monkeypatch, files):
         }
     )
     assert handed == {**imports, "rust_parse_all_dynamic_imports": ["app.models"]}
-
-
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 
 
 @pytest.mark.parametrize("args", [(), ("--impacted-ignore-type-checking-imports",)], ids=["", "type-only ignored"])

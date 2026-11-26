@@ -12,7 +12,7 @@ import pytest
 
 from pytest_impacted import _rust, api, graph
 
-from .git_helpers import assert_selected, edit_file, write_files
+from .git_helpers import INI, assert_selected, edit_file, run, write_files
 
 
 pytestmark = pytest.mark.usefixtures("by_name_backend")  # every test, with each backend
@@ -303,12 +303,7 @@ def test_a_nested_path_selects_as_the_import_statement_does(tmp_path, selection,
 
 
 # Real runs: the dependency an import by name records is one the test has.
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 CONSUMER = "from app.loader import load\n\ndef test_value():\n    assert load() == 1\n"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "--impacted-git-mode=unstaged", "-v", "-p", "no:cacheprovider", *args)
 
 
 @pytest.fixture

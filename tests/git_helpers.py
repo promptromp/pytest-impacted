@@ -60,3 +60,13 @@ def assert_selected(result, *, passed=(), deselected=()) -> None:
     for name in deselected:
         assert any(Path.cwd().rglob(name)), f"no {name} in the project"
         result.stdout.no_re_match_line(rf"(.*/)?{re.escape(name)}::")
+
+
+#: The ini most end-to-end projects use: the application in ``app``, its tests in ``suite`` (never ``tests``,
+#: which would clash with this repository's own package in ``sys.modules``).
+INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
+
+
+def run(project, *args):
+    """``pytest --impacted`` in unstaged mode, verbose, inside the pytester *project*."""
+    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)

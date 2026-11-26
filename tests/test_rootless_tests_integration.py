@@ -8,7 +8,7 @@ to a helper selected none of the tests importing it.
 
 import pytest
 
-from .git_helpers import edit_file as edit
+from .git_helpers import edit_file as edit, run
 
 
 FILES = {
@@ -21,10 +21,6 @@ FILES = {
     "suite/test_other.py": "def test_other():\n    assert True\n",
 }
 INI = "[pytest]\nimpacted_module = app\nimpacted_tests_dir = suite\n"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 @pytest.mark.parametrize(

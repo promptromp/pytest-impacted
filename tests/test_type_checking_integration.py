@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from pytest_impacted import _rust
 from pytest_impacted.cli import impacted_tests_cli
 
-from .git_helpers import edit_file as edit
+from .git_helpers import INI, edit_file as edit, run
 
 
 FILES = {
@@ -27,12 +27,7 @@ FILES = {
     "suite/test_a.py": "from app.a import f\n\ndef test_a():\n    assert f(None) == 1\n",
     "suite/test_b.py": "from app.b import X\n\ndef test_b():\n    assert X()\n",
 }
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 FLAG = "--impacted-ignore-type-checking-imports"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 def cli(project, *args):

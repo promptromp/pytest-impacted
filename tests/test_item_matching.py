@@ -17,7 +17,7 @@ import pytest
 
 from pytest_impacted.plugin import _impacted_items
 
-from .git_helpers import assert_selected, edit_file
+from .git_helpers import INI, assert_selected, edit_file, run
 
 
 # --- end to end ------------------------------------------------------------------
@@ -47,11 +47,6 @@ ROOTLESS = {
     "suite/tests/test_child.py": "from checks import Checks\n\n\nclass TestChild(Checks):\n    pass\n",
     "suite/tests/test_other.py": "def test_other():\n    assert True\n",
 }
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 @pytest.mark.parametrize(

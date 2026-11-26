@@ -14,7 +14,7 @@ from pytest import ExitCode
 from pytest_impacted.cli import impacted_tests_cli
 from pytest_impacted.file_map import files_at
 
-from .git_helpers import edit_file as edit
+from .git_helpers import INI, edit_file as edit, run
 
 
 FILES = {
@@ -28,12 +28,7 @@ FILES = {
     "suite/slow/conftest.py": "import pytest\n\n@pytest.fixture\ndef data():\n    return 1\n",
     "suite/slow/test_slow.py": "def test_slow(data):\n    assert data\n",
 }
-INI = "[pytest]\npythonpath = .\nimpacted_module = app\nimpacted_tests_dir = suite\n"
 EVERY = ["test_bench.py", "test_loader.py", "test_other.py", "test_slow.py"]
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 @pytest.fixture

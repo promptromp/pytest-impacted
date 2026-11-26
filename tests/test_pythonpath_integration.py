@@ -12,7 +12,7 @@ from click.testing import CliRunner
 from pytest_impacted.cli import impacted_tests_cli
 from pytest_impacted.plugin import _pythonpath
 
-from .git_helpers import edit_file as edit
+from .git_helpers import edit_file as edit, run
 
 
 FILES = {
@@ -24,10 +24,6 @@ FILES = {
     "suite/test_other.py": "import other\n\ndef test_other():\n    assert other.other() == 1\n",
 }
 INI = "[pytest]\npythonpath = lib\nimpacted_module = lib\nimpacted_tests_dir = suite\n"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 @pytest.fixture

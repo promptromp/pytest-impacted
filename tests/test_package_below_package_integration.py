@@ -10,7 +10,7 @@ from click.testing import CliRunner
 
 from pytest_impacted.cli import impacted_tests_cli
 
-from .git_helpers import edit_file
+from .git_helpers import edit_file, run
 
 
 def files(module: str) -> dict[str, str]:
@@ -29,10 +29,6 @@ def files(module: str) -> dict[str, str]:
 def ini(module: str) -> str:
     pythonpath = "src" if module == "app" else "."
     return f"[pytest]\npythonpath = {pythonpath}\nimpacted_module = src/app\nimpacted_tests_dir = suite\n"
-
-
-def run(project, *args):
-    return project.runpytest("--impacted", "-p", "no:cacheprovider", "--impacted-git-mode=unstaged", "-v", *args)
 
 
 IMPORTED_AS = pytest.mark.parametrize("module", ["app", "src.app"], ids=["src_on_sys_path", "the_rootdir_on_sys_path"])
