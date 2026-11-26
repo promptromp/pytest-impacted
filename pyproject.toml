@@ -78,6 +78,24 @@ exclude = ["rust", "rust.*", "benchmarks", "benchmarks.*"]
 [tool.setuptools_scm]
 # can be empty if no extra settings are needed, presence enables setuptools-scm
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Spelled out rather than pytest 9's `strict = true`: CI reruns the config tests under pytest 8.0 and 8.4.
+addopts = ["--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]
+# What --impacted analyses when this suite dogfoods the plugin (the pre-commit hook, CI's impacted job).
+impacted_module = "pytest_impacted"
+impacted_tests_dir = "tests"
+
+[tool.coverage.run]
+branch = true
+source = ["pytest_impacted"]
+# The plugin is a pytest11 entry point, imported before pytest-cov starts: measure with `coverage run`, which
+# starts first, and follow the pytest-xdist workers and the subprocess tests into their own processes.
+parallel = true
+patch = ["subprocess"]
+
 [tool.mypy]
 namespace_packages = true
 ignore_missing_imports = true

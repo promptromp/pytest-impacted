@@ -293,11 +293,14 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 # Setup (builds the Rust extension from source: needs a Rust toolchain, 1.98+ on macOS 27 and later)
 uv sync --all-extras --dev
 
-# Run tests
-uv run python -m pytest
+# Run tests (on every core)
+uv run python -m pytest -n auto
+
+# Only the tests your uncommitted change impacts, as the pre-commit hook does
+uv run python -m pytest -n auto --impacted --impacted-git-mode=unstaged
 
 # Run tests with coverage
-uv run python -m pytest --cov=pytest_impacted --cov-branch tests
+uv run coverage run -m pytest -n auto && uv run coverage combine && uv run coverage report
 
 # Lint + format + type check
 uv run pre-commit run --all-files

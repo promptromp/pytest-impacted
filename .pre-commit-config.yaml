@@ -73,9 +73,11 @@ repos:
     language: system
     types: [rust]
     pass_filenames: false
+  # Dogfoods the plugin: only the tests the staged change impacts (unstaged mode sees the index too), on every
+  # core, with the module and tests dir from pyproject.toml. CI runs the whole suite on every Python and backend.
   - id: pytest
-    name: pytest [with coverage, without slow]
-    entry: bash -ec "uv run python -m pytest --cov=pytest_impacted --cov-branch tests -m 'not slow'"
+    name: pytest [impacted, xdist]
+    entry: bash -ec "uv run python -m pytest -n auto --impacted --impacted-git-mode=unstaged -q"
     language: system
     types: [python]
     pass_filenames: false

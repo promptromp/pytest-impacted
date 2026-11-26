@@ -267,8 +267,9 @@ class TestImpactedTestsCLI:
         assert result.exit_code == 0, result.output
         assert mock_get_impacted_tests.call_args.kwargs["use_merge_base"] is False
 
+    @pytest.mark.usefixtures("in_tmp_dir")
     def test_cli_missing_required_arg(self):
-        """Test CLI fails when required argument is missing."""
+        """Test CLI fails when required argument is missing (from a directory whose configuration sets none)."""
         result = self.runner.invoke(
             impacted_tests_cli,
             [

@@ -1,52 +1,15 @@
 # Runs only tests impacted by the PR's changes (dogfoods pytest-impacted).
+# Lint runs once per pull request, in ci.yml.
 
 name: CI (impacted)
 
 permissions:
   contents: read
-  pull-requests: write
 
 on:
   pull_request:
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v7
-    - name: Install uv and set the python version
-      id: setup-uv
-      # Downloading uv sometimes fails with a transient "fetch failed"; retried once below.
-      continue-on-error: true
-      uses: astral-sh/setup-uv@v10.4.0
-      with:
-        python-version: "3.13"
-        version: "latest"
-        enable-cache: true
-    - name: Wait before retrying the uv install
-      if: steps.setup-uv.outcome == 'failure'
-      run: sleep 20
-    - name: Install uv and set the python version (retry)
-      if: steps.setup-uv.outcome == 'failure'
-      uses: astral-sh/setup-uv@v10.4.0
-      with:
-        python-version: "3.13"
-        version: "latest"
-        enable-cache: true
-    - name: Install the project
-      run: uv sync --all-extras --dev
-    - name: Cache pre-commit hook environments
-      uses: actions/cache@v6
-      with:
-        path: ~/.cache/pre-commit
-        key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
-    # Same single source of truth as ci.yml — see the comment there.
-    - name: Run pre-commit hooks
-      run: uv run pre-commit run --all-files --show-diff-on-failure
-      env:
-        SKIP: pytest
-
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -98,11 +61,10 @@ jobs:
     # Also when the serial run failed, so a failure shows on both paths or on one.
     - name: Run impacted tests under pytest-xdist
       if: ${{ !cancelled() && (steps.impacted.outcome == 'success' || steps.impacted.outcome == 'failure') }}
+      # The module and tests dir come from pyproject.toml here, as the pre-commit hook takes them: the ini path.
       run: >
         uv run pytest
         --impacted
-        --impacted-module pytest_impacted
         --impacted-git-mode branch
         --impacted-base-branch origin/${{ github.base_ref }}
-        --impacted-tests-dir tests
         -n auto

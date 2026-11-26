@@ -546,9 +546,13 @@ real one. From a linked worktree that overwrote the index and set `core.bare=tru
 shared `.git`. It must stay `pytest_configure`, not an autouse fixture — session-scoped
 repo fixtures are set up before any function-scoped one.
 
-The pre-commit pytest hook filters with `-m 'not slow'`, but no test currently carries
-that marker and `slow` is registered nowhere (there is no `[tool.pytest.ini_options]`) —
-register it before using it, or the mark warns.
+**The suite dogfoods the plugin.** `[tool.pytest.ini_options]` sets `impacted_module` and
+`impacted_tests_dir`, so the pre-commit hook runs `pytest -n auto --impacted --impacted-git-mode=unstaged`:
+only what the staged change impacts, under xdist. CI still runs every test on every cell (`-n auto`),
+and its impacted job reruns the selection serially and under xdist. The config also sets
+`--strict-markers`, `--strict-config`, `xfail_strict` and `filterwarnings = error` (spelled out, not pytest
+9's `strict = true`, which the older-pytest step would refuse). A test must not read the repository's own
+configuration through the working directory: run it from `tmp_path`, as `in_tmp_dir` does.
 
 ## Documentation
 
@@ -565,8 +569,15 @@ Four surfaces, different audiences — keep them in sync in the same PR as the c
 ```bash
 uv sync --all-extras --dev
 
-# Matches what pre-commit runs (excludes slow tests)
-uv run python -m pytest --cov=pytest_impacted --cov-branch tests -m 'not slow'
+# Every test, on every core (what CI runs on each cell)
+uv run python -m pytest -n auto
+
+# Only the tests your uncommitted change impacts (what the pre-commit hook runs)
+uv run python -m pytest -n auto --impacted --impacted-git-mode=unstaged
+
+# Coverage: `coverage run`, not `--cov` — the plugin is imported before pytest-cov starts, which misses its
+# module-level lines; [tool.coverage.run] follows the xdist workers and subprocesses
+uv run coverage run -m pytest -n auto && uv run coverage combine && uv run coverage report
 
 # Everything CI enforces
 uv run pre-commit run --all-files
