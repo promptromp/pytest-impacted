@@ -1,14 +1,17 @@
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from pytest_impacted import _rust
+from pytest_impacted.extensions import discover_extension_metadata
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
+    _lazily,
     pytest_addoption,
     pytest_configure,
     pytest_report_header,
@@ -251,13 +254,10 @@ def testvalidate_module_src_layout_suggestion(tmp_path):
 
 
 def test_plugin_imports_without_git_executable(tmp_path):
-    """The pytest11 entry point loads on every pytest run, so a missing git binary must not break pytest.
-
-    GitPython raises ImportError when the git executable is absent (slim
-    containers), which is why ``pytest_impacted.git`` guards its import. The guard
-    must also stay silent, since it runs even without ``--impacted``.
-    """
-    script = "import pytest_impacted.plugin as p; print(p.GIT_AVAILABLE)"
+    """A missing git binary must not break pytest: GitPython raises ImportError when the git executable is absent
+    (slim containers), which is why ``pytest_impacted.git`` guards its import. The plugin loads it lazily now, but
+    any importer must still get a module, silently."""
+    script = "import pytest_impacted.plugin, pytest_impacted.git as g; print(g.GIT_AVAILABLE)"
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=tmp_path,
@@ -270,6 +270,45 @@ def test_plugin_imports_without_git_executable(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "False"
     assert "git" not in result.stderr.lower(), result.stderr
+
+
+def test_a_run_without_impacted_loads_none_of_the_analysis(tmp_path):
+    """A pytest11 entry point loads on every pytest run: networkx, astroid and GitPython (which runs ``git version``
+    as it loads) doubled the start-up of a run with one test, without --impacted. A whole session, not only the
+    import: pytest probes every attribute of a plugin module for fixtures, which once imported them all."""
+    (tmp_path / "test_one.py").write_text("def test_one():\n    pass\n")
+    script = (
+        "import subprocess, sys\n"
+        "spawned = []\n"
+        "real = subprocess.Popen.__init__\n"
+        "subprocess.Popen.__init__ = lambda self, *a, **k: spawned.append(a) or real(self, *a, **k)\n"
+        "import pytest\n"
+        "code = pytest.main(['-q', '-p', 'no:cacheprovider', 'test_one.py'])\n"
+        "heavy = ('git', 'networkx', 'astroid', 'pytest_impacted.graph', 'pytest_impacted.api')\n"
+        "print('loaded:', [name for name in heavy if name in sys.modules], 'spawned:', spawned, 'exit:', int(code))\n"
+    )
+    if discover_extension_metadata():
+        pytest.skip("a strategy extension is installed: loading it loads what it imports")
+    env = {name: value for name, value in os.environ.items() if name not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")}
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False, timeout=120
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "loaded: [] spawned: [] exit: 0", result.stdout
+
+
+def test_the_analysis_loads_quietly_whatever_the_warning_filters(tmp_path, monkeypatch):
+    """It loads inside a pytest hook, under the user's filters: a warning it gives must not fail the run."""
+    (tmp_path / "warns_on_import.py").write_text("import warnings\nwarnings.warn('old', DeprecationWarning)\nX = 1\n")
+    monkeypatch.syspath_prepend(tmp_path)
+    monkeypatch.delitem(sys.modules, "warns_on_import", raising=False)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        module = _lazily("warns_on_import")()
+
+    assert module.X == 1
 
 
 @pytest.mark.parametrize("ini_name", ["impacted", "no_impacted_dep_files", "impacted_no_merge_base"])
@@ -363,7 +402,7 @@ def test_fails_open_when_git_disappears_after_import(pytester, mode_args):
 
 def test_report_header_warns_when_git_is_unavailable(pytestconfig, monkeypatch):
     """The header is written by the controller, so the notice survives pytest-xdist."""
-    monkeypatch.setattr("pytest_impacted.plugin.GIT_AVAILABLE", False)
+    monkeypatch.setattr("pytest_impacted.git.GIT_AVAILABLE", False)
     monkeypatch.setattr(pytestconfig.option, "impacted", True)
 
     header = pytest_report_header(pytestconfig)
@@ -372,7 +411,7 @@ def test_report_header_warns_when_git_is_unavailable(pytestconfig, monkeypatch):
 
 
 def test_report_header_is_quiet_about_git_without_impacted(pytestconfig, monkeypatch):
-    monkeypatch.setattr("pytest_impacted.plugin.GIT_AVAILABLE", False)
+    monkeypatch.setattr("pytest_impacted.git.GIT_AVAILABLE", False)
     monkeypatch.setattr(pytestconfig.option, "impacted", False)
     monkeypatch.setitem(pytestconfig._inicache, "impacted", False)
 
@@ -385,7 +424,7 @@ def test_validate_base_branch_skips_when_git_cannot_launch(monkeypatch):
 
     repo = MagicMock()
     repo.git.rev_parse.side_effect = GitCommandNotFound("git", "not found")
-    monkeypatch.setattr("pytest_impacted.plugin.find_repo", lambda _: repo)
+    monkeypatch.setattr("pytest_impacted.git.find_repo", lambda _: repo)
 
     validate_base_branch("main", ".")  # Should not raise
 

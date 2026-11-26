@@ -7,6 +7,8 @@ matching CLAUDE.md / README / docs/usage.md entries in the same commit.
 
 from __future__ import annotations
 
+import pytest
+
 import pytest_impacted
 from pytest_impacted.parsing import parse_file_imports as _canonical_parse_file_imports
 from pytest_impacted.traversal import discover_submodules as _canonical_discover_submodules
@@ -42,3 +44,19 @@ def test_discover_submodules_is_the_canonical_traversal_helper():
 
 def test_parse_file_imports_is_the_canonical_parsing_helper():
     assert pytest_impacted.parse_file_imports is _canonical_parse_file_imports
+
+
+def test_the_lazy_exports_are_all_the_public_names():
+    """``__init__`` loads each name on first use from ``_EXPORTS``, which must cover ``__all__`` exactly."""
+    assert set(pytest_impacted._EXPORTS) == set(pytest_impacted.__all__)
+
+
+@pytest.mark.parametrize("submodule", ["strategies", "git", "graph", "api"])
+def test_a_submodule_is_reached_from_the_package_as_before(submodule):
+    """Eager imports in ``__init__`` once made ``pytest_impacted.strategies`` an attribute; it still is."""
+    assert getattr(pytest_impacted, submodule).__name__ == f"pytest_impacted.{submodule}"
+
+
+def test_an_unknown_name_is_an_attribute_error():
+    with pytest.raises(AttributeError, match="no attribute 'nosuch'"):
+        _ = pytest_impacted.nosuch

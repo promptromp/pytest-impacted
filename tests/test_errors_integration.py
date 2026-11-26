@@ -107,8 +107,7 @@ def test_an_extension_setting_that_will_not_convert_is_a_usage_error(make_git_pr
 
 @pytest.fixture
 def git_missing_at_import(monkeypatch):
-    """As when ``import git`` failed: the plugin knows it, and the analysis cannot run git."""
-    monkeypatch.setattr("pytest_impacted.plugin.GIT_AVAILABLE", False)
+    """As when ``import git`` failed: the plugin reads it from pytest_impacted.git when it needs git."""
     monkeypatch.setattr("pytest_impacted.git.GIT_AVAILABLE", False)
 
 

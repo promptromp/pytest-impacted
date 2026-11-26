@@ -240,16 +240,27 @@ option-like values with a clear error) *and* prefixes `--end-of-options` so git 
 parse an operand as an option even if the string check is ever bypassed. This is why the
 project requires git >= 2.24, and why tests assert on the `--end-of-options` token.
 
+**A run without `--impacted` loads none of the analysis.** `plugin.py` is a `pytest11` entry point, imported by
+every pytest run: it reaches `api`, `git`, `file_map`, `strategies` and `traversal` only through `plugin._lazily`
+(functions, never module-like objects: pytest probes every attribute of a plugin module for fixtures, which imported
+an object's module at start-up), and `pytest_impacted/__init__.py` exports its names lazily (PEP 562). Eager, they
+loaded networkx, astroid and GitPython, which runs `git version` as it loads: a one-test run took 249 ms against
+127 ms. `test_a_run_without_impacted_loads_none_of_the_analysis` pins a whole session, not only the import.
+The first load happens in a hook, under the user's warning filters, so `_lazily` silences warnings while loading.
+`GitMode` lives in `modes.py` for the options; patch `pytest_impacted.git.GIT_AVAILABLE`, not the plugin's. An
+installed strategy extension still loads what it imports (its class subclasses `ImpactStrategy`, in
+`strategies.py`), as `pytest_addoption` loads it for its options.
+
 **`GIT_AVAILABLE` is not defensive clutter.** `from git import Repo` raises
 `ImportError` when the *git executable* is missing, not just when GitPython is absent —
-and `plugin.py` is a `pytest11` entry point imported on every pytest run, so an
-unguarded import breaks pytest itself in containers without git. `from __future__ import
+an unguarded import would fail every `--impacted` run (and every API user) in containers without git; the plugin
+itself loads `git.py` lazily. `from __future__ import
 annotations` at the top of `git.py` is what lets the module import with `Repo` unbound.
 A subprocess test pins it. At run time a missing git raises `GitUnavailableError` rather
 than returning `None`, because `None` means "nothing changed" and skips every test: the
 plugin catches it and **fails open** (runs everything), the CLI exits non-zero. Never
 collapse "unknown" into "no changes". The notice is printed exactly once: by
-`pytest_report_header` when git was missing at import (the controller writes the header,
+`pytest_report_header` when git was missing at import (the plugin's first `_git()`) (the controller writes the header,
 so it survives pytest-xdist; under `-q` or `--no-header`, which leave the header out, by
 `pytest_terminal_summary` from the same `_header_warnings`), otherwise by the analysis. Never via `warnings.warn`,
 which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path. git that runs and refuses (no
