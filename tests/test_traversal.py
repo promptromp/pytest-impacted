@@ -684,29 +684,34 @@ def test_an_unsearchable_package_directory_has_no_modules(tmp_path):
 
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
 @pytest.mark.parametrize(
-    "probe",
+    ("probe", "expected"),
     [
-        pytest.param(lambda root: discover_submodules("pkg", root_dir=root), id="discovery_under_it"),
-        pytest.param(lambda root: find_non_package_prefix("ns/data", root), id="its_package_prefix"),
+        pytest.param(lambda root: sorted(discover_submodules("pkg", root_dir=root)), ["pkg"], id="discovery_under_it"),
+        pytest.param(lambda root: find_non_package_prefix("ns/data", root), ("", "ns/data"), id="its_package_prefix"),
         pytest.param(
-            lambda root: resolve_files_to_modules(["pkg/data/gone.py"], "pkg", root_dir=root), id="a_file_in_it"
+            lambda root: resolve_files_to_modules(["pkg/data/gone.py"], "pkg", root_dir=root), [], id="a_file_in_it"
         ),
         pytest.param(
-            lambda root: discover_project_modules("pkg", "pkg/data/suite", root_dir=root), id="a_tests_dir_in_it"
+            lambda root: sorted(discover_project_modules("pkg", "pkg/data/suite", root_dir=root).modules),
+            ["pkg"],
+            id="a_tests_dir_in_it",
         ),
     ],
 )
-def test_a_listable_but_unsearchable_directory_raises_nothing(tmp_path, probe):
-    """Mode 644, as a badly permissioned or bind-mounted data dir can be: listing works, stat raises on 3.11–3.13."""
+def test_a_listable_but_unsearchable_directory_raises_nothing(tmp_path, probe, expected):
+    """Mode 644, as a badly permissioned or bind-mounted data dir can be: listing works, stat raises on 3.11–3.13.
+    What lies inside is unreadable, so it holds no module, and nothing raises."""
     make_package(tmp_path, "", "pkg/data/__init__.py", "pkg/data/x.py", "ns/data/__init__.py")
     locked = [tmp_path / "pkg/data", tmp_path / "ns/data"]
     for directory in locked:
         directory.chmod(0o644)
     try:
-        probe(tmp_path)
+        found = probe(tmp_path)
     finally:
         for directory in locked:
             directory.chmod(0o755)
+
+    assert found == expected
 
 
 @pytest.mark.parametrize(

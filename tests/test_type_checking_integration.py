@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from pytest_impacted import _rust
 from pytest_impacted.cli import impacted_tests_cli
 
-from .git_helpers import INI, edit_file as edit, run
+from .git_helpers import INI, assert_selected, edit_file as edit, run
 
 
 FILES = {
@@ -74,9 +74,7 @@ def test_the_ini_setting_turns_it_on(make_git_project):
     project = make_git_project(FILES, INI + "impacted_ignore_type_checking_imports = true\n")
     edit(project, "app/b.py")
 
-    result = run(project)
-
-    result.assert_outcomes(passed=1, deselected=1)
+    assert_selected(run(project), passed=["test_b.py"], deselected=["test_a.py"])
 
 
 def test_ignored_a_type_only_import_no_longer_closes_a_cycle(make_git_project):
@@ -101,7 +99,7 @@ def test_ignored_a_type_only_import_no_longer_closes_a_cycle(make_git_project):
     edit(project, "app/a.py")
 
     run(project).assert_outcomes(passed=2)
-    run(project, FLAG).assert_outcomes(passed=1, deselected=1)
+    assert_selected(run(project, FLAG), passed=["test_a.py"], deselected=["test_b.py"])
 
     (project.path / "app/a.py").write_text(files["app/a.py"])  # unedited again
     edit(project, "app/b.py")
@@ -206,10 +204,12 @@ def test_a_lazily_loading_package_keeps_its_type_only_imports(make_git_project, 
     project = make_git_project(files, INI)
     edit(project, "app/models.py")
 
-    run(project, FLAG).assert_outcomes(passed=1, deselected=1)
+    assert_selected(run(project, FLAG), passed=["test_lazy.py"], deselected=["test_other.py"])
 
     (project.path / "app/models.py").write_text("raise RuntimeError('imported')\n")
-    run(project, FLAG).assert_outcomes(errors=1, deselected=1)
+    broken = run(project, FLAG)
+    broken.assert_outcomes(errors=1, deselected=1)
+    broken.stdout.fnmatch_lines(["*ERROR*test_lazy.py*"])
 
 
 def test_the_cli_warns_when_an_older_extension_leaves_the_parsing_to_python(project, monkeypatch):

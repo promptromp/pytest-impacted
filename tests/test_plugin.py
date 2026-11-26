@@ -7,7 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pytest_impacted import _rust
+from pytest_impacted import (
+    _rust,
+    validation,  # not its functions: pytest would collect tests_dir_problem
+)
 from pytest_impacted.extensions import discover_extension_metadata
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
@@ -134,7 +137,7 @@ def test_validate_config_valid(pytestconfig, monkeypatch):
     monkeypatch.setattr(pytestconfig.option, "impacted", True)
     monkeypatch.setattr(pytestconfig.option, "impacted_module", "pytest_impacted")
     monkeypatch.setattr(pytestconfig.option, "impacted_git_mode", GitMode.UNSTAGED)
-    validate_config(pytestconfig)  # Should not raise
+    assert validate_config(pytestconfig) is None  # the rejections are the tests below
 
 
 def test_validate_config_missing_module(pytestconfig, monkeypatch):
@@ -176,27 +179,43 @@ def project_dirs(tmp_path):
     return tmp_path
 
 
-def test_validate_module_hyphen_suggests_underscore(project_dirs):
+@pytest.mark.parametrize(
+    ("module", "problem"),
+    [
+        pytest.param("my_package", None, id="a package"),
+        pytest.param("./my_package/", None, id="spelled as a path"),
+        pytest.param("my-package", "Did you mean: --impacted-module=my_package", id="hyphens"),
+        pytest.param("doesnotexist", "Module 'doesnotexist' not found", id="no such directory"),
+    ],
+)
+def test_module_problem(project_dirs, module, problem):
+    found = validation.module_problem(module, project_dirs, "--impacted-module")
+
+    assert found is None if problem is None else problem in found
+
+
+@pytest.mark.parametrize(
+    ("tests_dir", "problem"),
+    [
+        pytest.param("tests", None, id="a directory"),
+        pytest.param("my_package", None, id="one without __init__.py"),
+        pytest.param("nonexistent_dir", "Tests directory 'nonexistent_dir' does not exist", id="no such directory"),
+    ],
+)
+def test_tests_dir_problem(project_dirs, tests_dir, problem):
+    found = validation.tests_dir_problem(tests_dir, project_dirs, "--impacted-tests-dir")
+
+    assert found is None if problem is None else problem in found
+
+
+def test_the_plugin_raises_each_problem_as_a_usage_error(project_dirs):
+    """And accepts what has none: the shared checks above are what the plugin applies."""
     with pytest.raises(pytest.UsageError, match="Did you mean: --impacted-module=my_package"):
         validate_module("my-package", project_dirs)
-
-
-def test_validate_module_nonexistent(project_dirs):
-    with pytest.raises(pytest.UsageError, match="Module 'doesnotexist' not found"):
-        validate_module("doesnotexist", project_dirs)
-
-
-def test_validate_module_valid(project_dirs):
-    validate_module("my_package", project_dirs)  # Should not raise
-
-
-def test_validate_tests_dir_nonexistent(project_dirs):
-    with pytest.raises(pytest.UsageError, match="Tests directory 'nonexistent_dir' does not exist"):
-        validate_tests_dir("nonexistent_dir", project_dirs)
-
-
-def test_validate_tests_dir_valid(project_dirs):
-    validate_tests_dir("tests", project_dirs)  # Should not raise
+    with pytest.raises(pytest.UsageError, match="Tests directory 'nope' does not exist"):
+        validate_tests_dir("nope", project_dirs)
+    assert validate_module("my_package", project_dirs) is None
+    assert validate_tests_dir("tests", project_dirs) is None
 
 
 @pytest.mark.parametrize("tests_dir", ["tests.unit", ".tests", "../tests", "{outside}"])
@@ -208,14 +227,6 @@ def test_validate_tests_dir_rejects_a_directory_the_analysis_cannot_name(tmp_pat
 
     with pytest.raises(pytest.UsageError, match="its path inside the rootdir"):
         validate_tests_dir(tests_dir, tmp_path / "project")
-
-
-def test_validate_tests_dir_without_init(tmp_path):
-    """Test that a tests directory without __init__.py passes validation."""
-    test_dir = tmp_path / "my_tests"
-    test_dir.mkdir()
-    (test_dir / "test_example.py").write_text("def test_it(): pass\n")
-    validate_tests_dir("my_tests", tmp_path)  # Should not raise
 
 
 def test_validate_base_branch_names_the_refs_there_are(real_repo):
@@ -233,7 +244,7 @@ def test_validate_base_branch_names_the_refs_there_are(real_repo):
 def test_validate_base_branch_accepts_a_ref_there_is(real_repo, where):
     _repo, root = real_repo
 
-    validate_base_branch("main", str(root / where))
+    assert validate_base_branch("main", str(root / where)) is None
 
 
 def test_validate_base_branch_refuses_an_option_like_ref(real_repo):
@@ -433,7 +444,8 @@ def test_validate_base_branch_skips_when_git_cannot_launch(monkeypatch):
     repo.git.rev_parse.side_effect = GitCommandNotFound("git", "not found")
     monkeypatch.setattr("pytest_impacted.git.find_repo", lambda _: repo)
 
-    validate_base_branch("main", ".")  # Should not raise
+    assert validate_base_branch("main", ".") is None  # validated nothing, and raised nothing
+    repo.git.rev_parse.assert_called_once()
 
 
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")

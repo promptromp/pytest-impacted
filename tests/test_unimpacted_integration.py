@@ -27,7 +27,7 @@ from pytest_impacted.plugin import (
     pytest_testnodedown,
 )
 
-from .git_helpers import INI, edit_file as edit, run
+from .git_helpers import INI, assert_selected, edit_file as edit, run
 
 
 FILES = {
@@ -75,14 +75,17 @@ def test_the_ini_setting_chooses_skip(make_git_project):
     project = make_git_project(FILES, INI + "impacted_unimpacted = skip\n")
     edit(project, "app/a.py")
 
-    run(project).assert_outcomes(passed=1, skipped=1)
+    result = run(project)
+
+    result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines_random(["*test_a.py::test_a PASSED*", "*test_b.py::test_b SKIPPED*"])
 
 
 def test_the_flag_overrides_the_ini_setting(make_git_project):
     project = make_git_project(FILES, INI + "impacted_unimpacted = skip\n")
     edit(project, "app/a.py")
 
-    run(project, "--impacted-unimpacted=deselect").assert_outcomes(passed=1, deselected=1)
+    assert_selected(run(project, "--impacted-unimpacted=deselect"), passed=["test_a.py"], deselected=["test_b.py"])
 
 
 @pytest.mark.parametrize("args", [[], ["--impacted-unimpacted=skip"]], ids=["deselect", "skip"])
@@ -445,7 +448,8 @@ def test_under_xdist_with_an_extension_the_workers_skip(make_git_project):
     project = make_git_project({**FILES, "conftest.py": plugin}, INI)
     edit(project, "app/a.py")
 
-    result = run_subprocess(project, "-n", "2")
+    result = run_subprocess(project, "-n", "2", "-v")
 
     assert result.ret == ExitCode.OK
     result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines_random(["*PASSED*test_a.py::test_a*", "*SKIPPED*test_b.py::test_b*"])

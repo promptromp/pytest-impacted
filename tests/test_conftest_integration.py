@@ -232,7 +232,7 @@ def test_src_layout_conftest_inside_the_package(make_project):
     )
     edit(project, "src/app/tests/conftest.py")
 
-    run(project).assert_outcomes(passed=1, deselected=1)
+    assert_selected(run(project), passed=["test_value.py"], deselected=["test_unrelated.py"])
 
 
 PLUGIN_FIXTURES = "import pytest\nfrom app.db import connect\n\n@pytest.fixture\ndef db():\n    return connect()\n"
@@ -285,7 +285,7 @@ def test_editing_a_test_module_that_loads_a_third_party_plugin_selects_only_it(m
     )
     edit(project, "suite/db/test_db.py")
 
-    run(project).assert_outcomes(passed=1, deselected=1)
+    assert_selected(run(project), passed=["test_db.py"], deselected=["test_other.py"])
 
 
 def test_plugins_loaded_with_dash_p_are_session_wide(make_project):
