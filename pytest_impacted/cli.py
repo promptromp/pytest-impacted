@@ -212,7 +212,7 @@ def _run(
         click.secho("  ignore-type-checking-imports: True", fg="blue", bold=True, err=True)
     if backend != "auto":
         click.secho(f"  backend: {backend}", fg="blue", bold=True, err=True)
-    if outdated := outdated_for(ignore_type_checking_imports):
+    if backend != "python" and (outdated := outdated_for(ignore_type_checking_imports)):
         click.secho(f"  warning: {outdated}", fg="yellow", bold=True, err=True)
     try:
         pythonpath = config.paths("pythonpath")

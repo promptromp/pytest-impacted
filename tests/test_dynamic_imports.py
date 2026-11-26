@@ -368,6 +368,7 @@ def test_a_table_the_extension_refuses_is_the_stdlib_pass_s(tmp_path, monkeypatc
     def refuse(modules, table):
         raise refusal
 
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)  # an extension finding imports by name is installed
     monkeypatch.setattr(_rust, "RUST_PARSES_DYNAMIC_IMPORTS", True)
     monkeypatch.setattr(_rust, "rust_parse_all_dynamic_imports", refuse)
     (tmp_path / "loader.py").write_text("import importlib\nimportlib.import_module('app.target')\n")

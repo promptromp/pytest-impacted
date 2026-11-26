@@ -171,3 +171,11 @@ def backend_for(ignore_type_checking_imports: bool = False, requested: str = "au
     if requested == "python" or not _rust.uses_rust(ignore_type_checking_imports):
         return PYTHON
     return WithFallback(RUST, PYTHON)
+
+
+def resolve_backend(backend: "str | Backend | None", ignore_type_checking_imports: bool = False) -> Backend:
+    """What a caller hands ``build_dep_tree`` as a run's backend: a name (``None`` for ``auto``) chosen by
+    :func:`backend_for`, or a backend of the caller's, with Python behind it, so a file it leaves out is still read."""
+    if backend is None or isinstance(backend, str):
+        return backend_for(ignore_type_checking_imports, backend or "auto")
+    return WithFallback(backend, PYTHON)

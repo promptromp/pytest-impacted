@@ -12,6 +12,7 @@ from typing import Any
 
 import networkx as nx
 
+from pytest_impacted.backends import resolve_backend
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.file_map import map_changed_files
@@ -175,7 +176,7 @@ def get_impacted_tests(
     file_map: Sequence[tuple[str, str]] = (),
     pythonpath: str | Path | Sequence[str | Path] = (),
     ignore_type_checking_imports: bool = False,
-    backend: str = "auto",
+    backend: str | None = "auto",
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
@@ -204,6 +205,7 @@ def get_impacted_tests(
     git_mode = impacted_git_mode
     base_branch = impacted_base_branch
     ns_module = normalized_module(ns_module)  # ``./app/`` names ``app``: the analysis reads dots as separators
+    resolve_backend(backend, ignore_type_checking_imports)  # an unknown name fails here, before git runs
 
     # Use default strategy if none provided
     if strategy is None:

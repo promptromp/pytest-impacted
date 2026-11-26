@@ -10,7 +10,7 @@ from typing import NamedTuple
 
 import networkx as nx
 
-from pytest_impacted.backends import Backend, Source, backend_for
+from pytest_impacted.backends import Backend, Source, resolve_backend
 from pytest_impacted.dynamic_imports import DynamicImports
 from pytest_impacted.parsing import (
     is_conftest_module,
@@ -978,7 +978,7 @@ def build_dep_tree(
 
     # Only application code loses its type-only imports, and not a package's __init__.py (see _narrowed_files).
     narrowed = _narrowed_files(package, tests_package, root) if ignore_type_checking_imports else frozenset()
-    parser = backend_for(ignore_type_checking_imports, backend) if isinstance(backend, str) else backend
+    parser = resolve_backend(backend, ignore_type_checking_imports)
     imports, plugin_edges = _parse_project(linker, parser, ignore_type_checking_imports, narrowed)
 
     digraph = nx.DiGraph()

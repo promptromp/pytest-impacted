@@ -471,3 +471,13 @@ def test_a_map_without_a_path_is_a_usage_error(tmp_path):
 
     assert result.exit_code == 2, result.output
     assert "--map" in result.output
+
+
+@pytest.mark.parametrize(("args", "warned"), [([], True), (["--backend", "python"], False)], ids=["auto", "python"])
+def test_the_cli_warns_of_an_outdated_extension_only_when_it_is_used(cli, monkeypatch, args, warned):
+    monkeypatch.setattr("pytest_impacted.cli.outdated_for", lambda ignore: "the installed pytest-impacted-rs is old")
+
+    result = cli.invoke(*args)
+
+    assert result.exit_code == 0, result.output
+    assert ("is old" in result.stderr) is warned

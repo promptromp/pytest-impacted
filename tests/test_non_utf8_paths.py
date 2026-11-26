@@ -92,6 +92,7 @@ def test_finding_imports_by_name_leaves_an_odd_file_to_python(monkeypatch, files
         return [tuple(parse_dynamic_imports(*module)) for module in modules]
 
     parse = pyo3_like(by_python)
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)  # an extension finding imports by name is installed
     monkeypatch.setattr(_rust, "RUST_PARSES_DYNAMIC_IMPORTS", True)
     monkeypatch.setattr(_rust, "rust_parse_all_dynamic_imports", parse)
 

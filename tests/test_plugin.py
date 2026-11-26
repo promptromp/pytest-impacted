@@ -9,12 +9,14 @@ import pytest
 
 from pytest_impacted import (
     _rust,
+    backends,
     validation,  # not its functions: pytest would collect tests_dir_problem
 )
 from pytest_impacted.extensions import discover_extension_metadata
 from pytest_impacted.git import GitMode
 from pytest_impacted.plugin import (
     _analysed_dirs,
+    _backend,
     _lazily,
     pytest_addoption,
     pytest_configure,
@@ -306,8 +308,10 @@ def test_a_run_without_impacted_loads_none_of_the_analysis(tmp_path):
         "real = subprocess.Popen.__init__\n"
         "subprocess.Popen.__init__ = lambda self, *a, **k: spawned.append(a) or real(self, *a, **k)\n"
         "import pytest\n"
-        "code = pytest.main(['-q', '-p', 'no:cacheprovider', 'test_one.py'])\n"
-        "heavy = ('git', 'networkx', 'pytest_impacted.graph', 'pytest_impacted.api')\n"
+        # Not -q: the report header, which pytest writes on every run, must load none of it either.
+        "code = pytest.main(['-p', 'no:cacheprovider', 'test_one.py'])\n"
+        "heavy = ('git', 'networkx', 'pytest_impacted.graph', 'pytest_impacted.api', 'pytest_impacted.backends',\n"
+        "         'pytest_impacted.parsing', 'pytest_impacted.dynamic_imports', 'pytest_impacted.type_only')\n"
         "print('loaded:', [name for name in heavy if name in sys.modules], 'spawned:', spawned, 'exit:', int(code))\n"
     )
     if discover_extension_metadata():
@@ -502,3 +506,16 @@ def test_the_analysed_tests_dir_is_spelled_as_a_test_path_is(pytester, tests_dir
 
     spelled = pytester.path / "suite" if expected == "ABSOLUTE" else Path(os.path.abspath(pytester.path / expected))
     assert analysed[1] == spelled
+
+
+@pytest.mark.parametrize("available", [True, False])
+@pytest.mark.parametrize("splits", [True, False])
+@pytest.mark.parametrize("ignore", [True, False])
+@pytest.mark.parametrize("requested", ["auto", "python"])
+def test_the_header_names_the_backend_the_analysis_chooses(monkeypatch, available, splits, ignore, requested):
+    """The header decides without loading the parsers (it is written on every run): it must still agree with
+    ``backends.backend_for``, which the analysis uses, in every install and option."""
+    monkeypatch.setattr(_rust, "RUST_AVAILABLE", available)
+    monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", splits)
+
+    assert _backend(ignore, requested) == backends.backend_for(ignore, requested).name

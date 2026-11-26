@@ -208,7 +208,7 @@ def cached_build_dep_tree(
     root_dir: str | Path | None = None,
     pythonpath: str | Path | Iterable[str | Path] = (),
     ignore_type_checking_imports: bool = False,
-    backend: str = "auto",
+    backend: str | None = "auto",
 ) -> nx.DiGraph:
     """Cached version of build_dep_tree to avoid redundant graph construction.
 
@@ -235,7 +235,9 @@ def cached_build_dep_tree(
     # Resolved before the lookup, as the root is, and only those the graph may read (inside the root or
     # above it, once each): two spellings of one entry, or one elsewhere, change nothing, so they share one.
     entries = tuple(str(entry) for entry in pythonpath_roots(pythonpath, root))
-    return _cached_build_dep_tree(ns_module, tests_package, root, entries, bool(ignore_type_checking_imports), backend)
+    return _cached_build_dep_tree(
+        ns_module, tests_package, root, entries, bool(ignore_type_checking_imports), backend or "auto"
+    )
 
 
 def run_copy(dep_tree: nx.DiGraph) -> nx.DiGraph:

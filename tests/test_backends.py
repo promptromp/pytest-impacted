@@ -161,3 +161,55 @@ def test_the_rust_backend_leaves_every_file_out_without_an_extension_that_can(mo
 
     assert RUST.imports(SOURCES, find_type_only=False) == [None, None, None]
     assert RUST.imports_by_name(SOURCES) == [None, None, None]
+
+
+def test_a_backend_of_the_caller_s_has_python_behind_it(tmp_path):
+    """A backend may leave a file out (``None``); handed to ``build_dep_tree``, the file is still read."""
+    write_files(
+        tmp_path,
+        {"app/__init__.py": "", "app/a.py": "import app.b\n", "app/b.py": "", "tests/test_a.py": "import app.a\n"},
+    )
+    leaves_all_out = Recording(reads=set())
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path, backend=leaves_all_out)
+
+    assert leaves_all_out.asked
+    assert dep_tree.has_edge("app.b", "app.a")
+    assert dep_tree.has_edge("app.a", "tests.test_a")
+
+
+def test_none_asks_for_the_default_and_an_unknown_name_fails_before_git(tmp_path, monkeypatch):
+    from pytest_impacted import api  # noqa: PLC0415
+
+    assert backends.resolve_backend(None).name == backend_for().name
+    asked_git = []
+    monkeypatch.setattr(api, "find_impacted_files_in_repo", lambda *a, **k: asked_git.append(a) or [])
+    with pytest.raises(ValueError, match="auto, python"):
+        api.get_impacted_tests(
+            impacted_git_mode="unstaged",
+            impacted_base_branch="main",
+            root_dir=tmp_path,
+            ns_module="app",
+            backend="ruff",
+        )
+    assert asked_git == []
+
+
+def test_an_empty_backend_setting_is_the_default(make_git_project):
+    """As the CLI reads it: ``impacted_backend =`` with no value is ``auto``, not a usage error."""
+    project = make_git_project(FILES, INI + "impacted_backend =\n")
+    edit_file(project, "app/a.py")
+
+    assert_selected(run(project), passed=["test_a.py"], deselected=["test_b.py"])
+
+
+def test_asking_for_python_says_nothing_of_an_outdated_extension(pytestconfig, monkeypatch):
+    """The extension is not used then: there is nothing to upgrade."""
+    from pytest_impacted.plugin import _header_warnings  # noqa: PLC0415
+
+    monkeypatch.setattr(_rust, "outdated_for", lambda ignore: "the installed pytest-impacted-rs is old")
+    monkeypatch.setattr(pytestconfig.option, "impacted", True)
+    monkeypatch.setattr(pytestconfig.option, "impacted_map", [])
+    for requested, warned in (("auto", True), ("python", False)):
+        monkeypatch.setattr(pytestconfig.option, "impacted_backend", requested)
+        assert any("is old" in line for line in _header_warnings(pytestconfig)) is warned
