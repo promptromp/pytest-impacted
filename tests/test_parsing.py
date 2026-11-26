@@ -450,3 +450,38 @@ def test_parse_pytest_plugins_survives_a_long_concatenation(tmp_path):
     path.write_text("pytest_plugins = " + " + ".join(['["a"]'] * 3000) + "\n")
 
     assert parsing.parse_pytest_plugins(str(path)) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "stars"),
+    [
+        ("from a import *\n", ["a"]),
+        ("from a import  *\n", ["a"]),
+        ("from a import \\\n    *\n", ["a"]),
+        ("from . import *\n", ["pkg"]),
+        ("from .sub import *\n", ["pkg.sub"]),
+        ("import os\nx = 2 * 3\n", []),
+        ("from a import b\ndef f(*args):\n    pass\n", []),
+        ("try:\n    from fast import *\nexcept ImportError:\n    from slow import *\n", ["fast", "slow"]),
+    ],
+    ids=["plain", "two spaces", "a line continuation", "relative", "relative module", "a product", "args", "both"],
+)
+def test_star_imports_are_read_whatever_their_spacing(source, stars):
+    assert parsing.star_imports_in(source, "pkg.mod") == stars
+
+
+@pytest.mark.parametrize(
+    ("source", "names"),
+    [
+        ("__all__ = ['a', 'b']\n", ["a", "b"]),
+        ("__all__ = ('a',)\n__all__ += ['b']\n__all__.append('c')\n__all__.extend(['d'])\n", ["a", "b", "c", "d"]),
+        ("__all__ = BASE + ['a']\n", ["a"]),
+        ("__all__ = [name for name in dir()]\n", []),  # computed: none
+        ("__all__ = 'a, b'\n", []),  # a string is no list of names
+    ],
+    ids=["a list", "extended", "concatenated", "computed", "a string"],
+)
+def test_all_names_are_the_literal_ones(tmp_path, source, names):
+    (tmp_path / "__init__.py").write_text(source)
+
+    assert parsing.parse_all_names(str(tmp_path / "__init__.py")) == names

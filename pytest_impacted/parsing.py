@@ -6,7 +6,7 @@ import logging
 import os
 import tokenize
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -233,7 +233,11 @@ def parse_pytest_plugins(file_path: str) -> list[str]:
     Parsed with the stdlib ``ast`` and independent of the parsing backend, so both
     backends see the same edges.
     """
-    source = read_source(file_path)
+    return pytest_plugins_in(read_source(file_path))
+
+
+def pytest_plugins_in(source: str | None) -> list[str]:
+    """:func:`parse_pytest_plugins` of a source already read (``None``: unreadable)."""
     if source is None or "pytest_plugins" not in source:  # cheap pre-filter
         return []
     try:
@@ -259,26 +263,100 @@ def _module_level_statements(body: list) -> Iterator[ast.stmt]:
 
 
 def _declared_plugins(stmt: ast.stmt) -> list[str]:
-    """Plugin names one statement adds to ``pytest_plugins`` (the single matcher for every form)."""
-    if isinstance(stmt, ast.Assign) and any(_is_plugins_name(t) for t in stmt.targets):
-        return _plugin_specs(stmt.value)
-    if isinstance(stmt, ast.AnnAssign | ast.AugAssign) and _is_plugins_name(stmt.target) and stmt.value:
-        return _plugin_specs(stmt.value)
+    """Plugin names one statement adds to ``pytest_plugins``."""
+    return _declared(stmt, "pytest_plugins", _plugin_specs)
+
+
+def _declared(stmt: ast.stmt, variable: str, specs: Callable[[ast.expr], list[str]]) -> list[str]:
+    """The strings one statement adds to the module-level list *variable*, its values read by *specs*: the single
+    matcher for every form — assigned, annotated, extended with ``+=``, ``.append`` or ``.extend``."""
+
+    def named(node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id == variable
+
+    if isinstance(stmt, ast.Assign) and any(named(target) for target in stmt.targets):
+        return specs(stmt.value)
+    if isinstance(stmt, ast.AnnAssign | ast.AugAssign) and named(stmt.target) and stmt.value:
+        return specs(stmt.value)
     if (
         isinstance(stmt, ast.Expr)
         and isinstance(call := stmt.value, ast.Call)
         and isinstance(call.func, ast.Attribute)
-        and _is_plugins_name(call.func.value)
+        and named(call.func.value)
         and call.func.attr in ("append", "extend")
         and call.args
     ):
         # append takes one name (never comma-split); extend takes a sequence.
-        return _plugin_specs(call.args[0]) if call.func.attr == "extend" else _string_items([call.args[0]])
+        return specs(call.args[0]) if call.func.attr == "extend" else _string_items([call.args[0]])
     return []
 
 
-def _is_plugins_name(node: ast.expr) -> bool:
-    return isinstance(node, ast.Name) and node.id == "pytest_plugins"
+def _may_star_import(source: str) -> bool:
+    """Whether ``import`` is followed by ``*`` somewhere (spaces, tabs or a line continuation between): a scan of
+    the few ``import`` words, cheaper than a regex over the whole source, which most files hold a ``*`` in."""
+    start = source.find("import")
+    while start != -1:
+        end = start + len("import")
+        while end < len(source) and source[end] in " \t\\\r\n":
+            end += 1
+        if end < len(source) and source[end] == "*":
+            return True
+        start = source.find("import", end)
+    return False
+
+
+def parse_star_imports(file_path: str, module_name: str, is_package: bool = False) -> list[str]:
+    """The modules a file star-imports anywhere (``from pkg import *``), relative ones resolved from *module_name*.
+
+    The import parsers skip a star (``pkg.*`` is no module); ``from pkg import *`` imports each submodule
+    ``pkg.__all__`` names, though, and the graph links those (see :func:`parse_all_names`). Parsed with the stdlib
+    ``ast`` outside the backends, as ``pytest_plugins`` declarations are, so both see the same edges.
+    """
+    return star_imports_in(read_source(file_path), module_name, is_package)
+
+
+def star_imports_in(source: str | None, module_name: str, is_package: bool = False) -> list[str]:
+    """:func:`parse_star_imports` of a source already read (``None``: unreadable)."""
+    if source is None or not _may_star_import(source):  # cheap pre-filter: few files star-import
+        return []
+    try:
+        with _quiet_parse():
+            tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return []
+    package = _package_of(module_name, is_package)
+    return sorted(
+        {
+            _resolve_relative_import(package, node.level, node.module) if node.level else (node.module or "")
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
+        }
+        - {""}
+    )
+
+
+def parse_all_names(file_path: str) -> list[str]:
+    """The names a module's literal ``__all__`` lists, as a star import of it reads them: a list or tuple of
+    strings, assigned, extended (``+=``, ``.extend``, ``.append``, ``A + B``) at module level. Computed ones
+    are none."""
+    source = read_source(file_path)
+    if source is None or "__all__" not in source:  # cheap pre-filter
+        return []
+    try:
+        with _quiet_parse():
+            tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return []
+    return [name for stmt in _module_level_statements(tree.body) for name in _declared(stmt, "__all__", _literals)]
+
+
+def _literals(value: ast.expr) -> list[str]:
+    """The strings of a literal sequence, or of a concatenation of them (``__all__`` never splits on commas)."""
+    if isinstance(value, ast.List | ast.Tuple):
+        return _string_items(value.elts)
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+        return _literals(value.left) + _literals(value.right)
+    return []
 
 
 def _plugin_specs(value: ast.expr) -> list[str]:

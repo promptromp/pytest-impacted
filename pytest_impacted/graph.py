@@ -16,9 +16,13 @@ from pytest_impacted.parsing import (
     is_conftest_module,
     is_package_file,
     is_test_module,
+    parse_all_names,
     parse_file_imports,
     parse_pytest_plugins,
+    pytest_plugins_in,
+    read_source,
     split_file_imports,
+    star_imports_in,
 )
 from pytest_impacted.traversal import (
     LAST_RESORT_PREFIX,
@@ -809,7 +813,10 @@ def _parse_project(
     *ignore_type_checking_imports*, the type-only imports of the files in *narrowed* are none
     (see :func:`_parse_by_role`).
     """
-    declarations = cache(parse_pytest_plugins)
+    # The stdlib passes read each file once, in the loop below, and keep only what they found: its declared plugins.
+    declared: dict[str, list[str]] = {}
+    declarations = cache(lambda path: declared[path] if path in declared else parse_pytest_plugins(path))
+    exported = cache(parse_all_names)
     parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, narrowed=narrowed)
     pending = dict(linker.modules)
     imports, type_only = parse(pending)
@@ -823,7 +830,12 @@ def _parse_project(
         by_name = _parse_all_dynamic_imports(pending)
         for name, path in pending.items():
             # Once each, as the roots are settled: where an object's module ends is found through them.
-            imports[name] = sorted({*imports[name], *_imports_by_name(linker, by_name[name])})
+            source = read_source(path)
+            declared[path] = pytest_plugins_in(source)
+            stars = star_imports_in(source, import_base(name), is_package_file(path))
+            imports[name] = sorted(
+                {*imports[name], *_imports_by_name(linker, by_name[name]), *_star_names(linker, path, stars, exported)}
+            )
             for candidate in imports[name]:
                 linker.targets(candidate)
                 # In the fixpoint: what it finds no walk named is parsed in turn.
@@ -833,6 +845,23 @@ def _parse_project(
         pending = {name: path for name, path in linker.modules.items() if name not in imports}
         if not pending:
             return imports, plugin_edges
+
+
+def _star_names(linker: _Linker, importer: str, packages: list[str], exported: Callable[[str], list[str]]) -> list[str]:
+    """The candidates ``from pkg import *`` in the file *importer* adds for each of *packages*: ``pkg.<name>`` for
+    each name its ``__init__.py``'s literal ``__all__`` lists, a submodule the star import loads even if the
+    ``__init__`` never imports it. The package is found as its import is: through the import roots, and through
+    pytest's basedirs (a ``helpers`` package in a tests dir without ``__init__.py``). Names that are no module link
+    nothing."""
+    names: dict[str, None] = {}
+    for package in packages:
+        targets = set(linker.targets(package))
+        if linker.looks_locally(importer, package):
+            targets.update(linker.local_targets(importer, package))
+        for target in targets:
+            if is_package_file(path := linker.modules.get(target, "")):
+                names.update(dict.fromkeys(f"{package}.{name}" for name in exported(path)))
+    return list(names)
 
 
 def _imports_by_name(linker: _Linker, found: DynamicImports) -> list[str]:
@@ -998,7 +1027,8 @@ def build_dep_tree(
     imports (see :func:`~pytest_impacted.parsing.parse_pytest_plugins`) and are
     flagged with the ``pytest_plugin`` attribute. A call that imports by name counts as the import
     statement that imports the same: ``importlib.import_module("pkg.mod")`` as ``import pkg.mod``,
-    ``mock.patch("pkg.mod.func")`` as ``from pkg.mod import func`` (see :func:`_imports_by_name`).
+    ``mock.patch("pkg.mod.func")`` as ``from pkg.mod import func`` (see :func:`_imports_by_name`). A star import,
+    ``from pkg import *``, also imports each submodule ``pkg.__all__`` lists (see :func:`_star_names`).
     Every import the walks do not
     define — found on disk or not — is kept in ``graph["unresolved"]`` with its
     importers, for :func:`link_changed_files`. An import found only under an assumed
