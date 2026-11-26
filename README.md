@@ -76,6 +76,8 @@ pytest --impacted \
        --impacted-base-branch=main
 ```
 
+Tests outside `my_package` run every time until step 3 points `--impacted-tests-dir` at them: no analysis judges them, and a line at the end of the run says so.
+
 **3. Include tests outside the package directory:**
 
 ```bash

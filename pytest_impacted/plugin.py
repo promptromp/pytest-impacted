@@ -43,14 +43,16 @@ class Unimpacted(StrEnum):
 
 
 NOT_IMPACTED = "not impacted by the changes"
-# Where a pytest-xdist worker reports its deselection to the controller.
+# Where a pytest-xdist worker reports its deselection to the controller, and the tests no analysis judged.
 _WORKER_OUTPUT_KEY = "pytest_impacted_deselected"
+_WORKER_UNJUDGED_KEY = "pytest_impacted_unjudged"
 # Where the controller hands each pytest-xdist worker its analysis.
 _WORKER_INPUT_KEY = "pytest_impacted_tests"
 
 
-# How many tests this plugin deselected.
+# How many tests this plugin deselected, and how many it ran unjudged: outside the analysed directories.
 _DESELECTION = StashKey[int]()
+_UNJUDGED = StashKey[int]()
 _SESSION = StashKey[pytest.Session]()
 
 
@@ -517,13 +519,16 @@ def pytest_collection_modifyitems(session, config, items):
     # Afresh: a second collection on one config must not count the first's deselection.
     config.stash[_UNIMPACTED_ITEMS] = set()
     _record(config, 0)
+    _report(config, _UNJUDGED, _WORKER_UNJUDGED_KEY, 0)
     workerinput = getattr(config, "workerinput", None)
     handed_on = workerinput is not None and _WORKER_INPUT_KEY in workerinput
     impacted_tests = workerinput[_WORKER_INPUT_KEY] if handed_on else _analyse(session, config)
     if impacted_tests is None:
         return
     root_dir = config.rootpath
-    impacted_items = _impacted_items(items, impacted_tests, root_dir)
+    unjudged = _unjudged_items(items, _analysed_dirs(config))
+    _report(config, _UNJUDGED, _WORKER_UNJUDGED_KEY, len(unjudged))
+    impacted_items = _impacted_items(items, impacted_tests, root_dir) | unjudged
     # A worker analysing for itself skips: another may judge differently, and xdist stops a
     # run whose workers collect different tests, not one whose skips differ.
     analysed_alone = workerinput is not None and not handed_on
@@ -560,14 +565,45 @@ def pytest_deselect_unimpacted(config: Config, items: list[pytest.Item]) -> None
 
 
 def _record(config: Config, count: int) -> None:
-    """Keep the *count* deselected for the exit status and the summary.
+    """Keep the *count* deselected for the exit status and the summary (see :func:`_report`)."""
+    _report(config, _DESELECTION, _WORKER_OUTPUT_KEY, count)
+
+
+def _report(config: Config, key: StashKey[int], worker_key: str, count: int) -> None:
+    """Keep *count* under *key* for the summary.
 
     A pytest-xdist worker reports it in its ``workeroutput`` too: the controller
     collects nothing itself, so it learns only what the workers report.
     """
-    config.stash[_DESELECTION] = count
+    config.stash[key] = count
     if hasattr(config, "workeroutput"):
-        config.workeroutput[_WORKER_OUTPUT_KEY] = count
+        config.workeroutput[worker_key] = count
+
+
+def _analysed_dirs(config: Config) -> list[Path]:
+    """The directories the analysis walks, resolved: ``--impacted-module``'s and ``--impacted-tests-dir``'s."""
+    get_option = partial(get_option_from_config, config)
+    module, tests_dir = get_option("impacted_module"), get_option("impacted_tests_dir")
+    named = [str(module).replace(".", os.sep), *([tests_dir] if tests_dir else [])]
+    return [real_path(config.rootpath / name) for name in named]
+
+
+def _unjudged_items(items: list[pytest.Item], analysed: list[Path]) -> set[pytest.Item]:
+    """The Python test items outside every analysed directory: no analysis judged them, so they run.
+
+    Their files are no graph node (nothing in the application imports a test), so a rule that impacts "every
+    test" never reached them either, and they were deselected on every run: a second tests directory, or the
+    tests themselves when only ``--impacted-module`` is set.
+    """
+    resolved: dict[Path, bool] = {}
+
+    def outside(path: Path) -> bool:
+        if path not in resolved:
+            real = real_path(path)
+            resolved[path] = not any(real.is_relative_to(directory) for directory in analysed)
+        return resolved[path]
+
+    return {item for item in items if item.path.suffix == ".py" and outside(item.path)}
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -578,10 +614,11 @@ def pytest_testnodedown(node, error) -> None:
     names when they do not: ``--dist each`` allows it, and a crashed worker's replacement
     may collect what appeared since.
     """
-    reported = getattr(node, "workeroutput", {}).get(_WORKER_OUTPUT_KEY)
-    if isinstance(reported, int):
-        config = node.config
-        config.stash[_DESELECTION] = max(reported, config.stash.get(_DESELECTION, 0))
+    for worker_key, key in ((_WORKER_OUTPUT_KEY, _DESELECTION), (_WORKER_UNJUDGED_KEY, _UNJUDGED)):
+        reported = getattr(node, "workeroutput", {}).get(worker_key)
+        if isinstance(reported, int):
+            config = node.config
+            config.stash[key] = max(reported, config.stash.get(key, 0))
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -609,6 +646,13 @@ def pytest_terminal_summary(terminalreporter, config: Config) -> None:
     if count and config.get_verbosity() > -2:
         tests = "test" if count == 1 else "tests"
         terminalreporter.write_line(f"pytest-impacted: {count} {tests} {NOT_IMPACTED}, deselected")
+    if unjudged := config.stash.get(_UNJUDGED, 0):
+        tests = "test" if unjudged == 1 else "tests"
+        terminalreporter.write_line(
+            f"pytest-impacted: {unjudged} {tests} outside --impacted-module and --impacted-tests-dir, which no "
+            "analysis judges, ran: point --impacted-tests-dir at them to select among them.",
+            yellow=True,
+        )
     # pytest leaves the report header out under -q and --no-header; a warning it carries is said here instead.
     if config.getoption("verbose") < 0 or config.getoption("no_header"):
         for line in _header_warnings(config):

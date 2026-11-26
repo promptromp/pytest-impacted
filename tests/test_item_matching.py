@@ -15,7 +15,7 @@ import pytest
 
 from pytest_impacted.plugin import _impacted_items
 
-from .git_helpers import edit_file
+from .git_helpers import assert_selected, edit_file
 
 
 # --- end to end ------------------------------------------------------------------
@@ -179,3 +179,47 @@ def test_doctests_in_a_changed_source_module_run(make_git_project):
     result = run(project, "--doctest-modules", "app", "suite")
 
     result.stdout.fnmatch_lines(["*app/calc.py::app.calc.add PASSED*"])
+
+
+# --- tests outside the analysed directories -----------------------------------------
+
+TWO_TEST_DIRS = {
+    "app/__init__.py": "",
+    "app/a.py": "def a():\n    return 1\n",
+    "app/b.py": "def b():\n    return 2\n",
+    "suite/test_a.py": "from app.a import a\n\ndef test_a():\n    assert a() == 1\n",
+    "suite/test_b.py": "from app.b import b\n\ndef test_b():\n    assert b() == 2\n",
+    "integration/test_flow.py": "from app.a import a\n\ndef test_flow():\n    assert a() == 1\n",
+}
+
+
+@pytest.mark.parametrize(
+    ("ini", "edited", "passed", "deselected"),
+    [
+        pytest.param(INI, "app/b.py", ["test_b.py", "test_flow.py"], ["test_a.py"], id="a second tests dir"),
+        pytest.param(INI, "uv.lock", ["test_a.py", "test_b.py", "test_flow.py"], [], id="every test, all of them"),
+        pytest.param(
+            "[pytest]\npythonpath = .\nimpacted_module = app\n",
+            "app/b.py",
+            ["test_a.py", "test_b.py", "test_flow.py"],
+            [],
+            id="no tests dir at all",
+        ),
+    ],
+)
+@pytest.mark.parametrize("xdist", [[], ["-n", "2"]], ids=["", "xdist"])
+def test_a_test_no_analysis_judges_runs_and_is_counted(make_git_project, ini, edited, passed, deselected, xdist):
+    """Outside --impacted-module and --impacted-tests-dir a test file is no graph node: deselected on every run
+    before, even when a change impacted "every test". It runs, as doctests do, and the summary says why."""
+    project = make_git_project({**TWO_TEST_DIRS, "uv.lock": ""}, ini)
+    edit_file(project, edited)
+
+    result = run(project, *xdist)
+
+    if xdist:  # whose summary leaves the deselected out
+        result.assert_outcomes(passed=len(passed))
+    else:
+        assert_selected(result, passed=passed, deselected=deselected)
+    unjudged = 1 if "impacted_tests_dir" in ini else 3
+    expected = "test" if unjudged == 1 else "tests"
+    result.stdout.fnmatch_lines([f"pytest-impacted: {unjudged} {expected} outside --impacted-module and *"])
