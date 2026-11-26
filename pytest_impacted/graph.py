@@ -74,16 +74,34 @@ def _parse_imports(
 
     Every candidate is a runtime one unless *ignore_type_checking_imports* asks for the type-only ones
     (see :func:`~pytest_impacted.parsing.split_file_imports`). Uses the Rust extension (parallel batch via
-    rayon) when available and new enough for the options (:func:`~pytest_impacted._rust.uses_rust`),
-    falling back to sequential astroid parsing.
+    rayon) when available and new enough for the options (:func:`~pytest_impacted._rust.uses_rust`), but for a
+    file it cannot be handed (:func:`~pytest_impacted._rust.takes`); sequential astroid parsing reads the rest.
     """
-    if _rust.uses_rust(ignore_type_checking_imports):
-        modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
-        if not ignore_type_checking_imports:
-            return _rust.rust_parse_all_imports(modules_info), {}
-        split = _rust.rust_parse_all_imports_split(modules_info)
-        return {name: found for name, (found, _) in split.items()}, {name: typed for name, (_, typed) in split.items()}
+    if not _rust.uses_rust(ignore_type_checking_imports):
+        return _parse_imports_in_python(submodules, ignore_type_checking_imports)
+    taken = {name: path for name, path in submodules.items() if _rust.takes(path, name)}
+    runtime, type_only = _parse_imports_in_rust(taken, ignore_type_checking_imports)
+    if len(taken) < len(submodules):
+        rest = {name: path for name, path in submodules.items() if name not in taken}
+        rest_runtime, rest_type_only = _parse_imports_in_python(rest, ignore_type_checking_imports)
+        runtime |= rest_runtime
+        type_only |= rest_type_only
+    return runtime, type_only
 
+
+def _parse_imports_in_rust(
+    submodules: dict[str, str], ignore_type_checking_imports: bool
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
+    if not ignore_type_checking_imports:
+        return _rust.rust_parse_all_imports(modules_info), {}
+    split = _rust.rust_parse_all_imports_split(modules_info)
+    return {name: found for name, (found, _) in split.items()}, {name: typed for name, (_, typed) in split.items()}
+
+
+def _parse_imports_in_python(
+    submodules: dict[str, str], ignore_type_checking_imports: bool
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     runtime: dict[str, list[str]] = {}
     type_only: dict[str, list[str]] = {}
     for name, file_path in submodules.items():
@@ -838,16 +856,24 @@ def _parse_all_dynamic_imports(submodules: dict[str, str]) -> dict[str, DynamicI
 
 
 def _rust_dynamic_imports(modules: list[tuple[str, str, bool]]) -> list[tuple[list[str], list[str], list[str]] | None]:
-    """What the extension finds in each of *modules*: all left to the stdlib pass if it cannot read the table.
+    """What the extension finds in each of *modules*: ``None`` for one it cannot be handed (see
+    :func:`~pytest_impacted._rust.takes`), and for all if it cannot read the table.
 
     The ``fast`` extra is unpinned, so an older extension may meet a table it predates: a kind of name it does not
     know is a ValueError, a row of another shape a TypeError. Those are its to refuse, never a failed run.
     """
+    taken = [_rust.takes(path, name) for path, name, _ in modules]  # a non-UTF-8 file name: the stdlib pass's
     try:
-        return _rust.rust_parse_all_dynamic_imports(modules, TABLE)
+        read = iter(
+            _rust.rust_parse_all_dynamic_imports([m for m, take in zip(modules, taken, strict=True) if take], TABLE)
+        )
+    except UnicodeEncodeError:  # a ValueError too: a string ``takes`` should have kept back
+        logger.debug("pytest-impacted-rs was handed a string that is not UTF-8; the stdlib pass finds imports by name")
+        return [None] * len(modules)
     except (TypeError, ValueError):
         logger.debug("pytest-impacted-rs cannot read the loader table; the stdlib pass finds the imports by name")
         return [None] * len(modules)
+    return [next(read) if take else None for take in taken]
 
 
 def _import_of(linker: _Linker, object_path: str, *, attribute: bool = False) -> list[str]:
