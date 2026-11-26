@@ -30,7 +30,7 @@ def _lazily(name: str) -> Callable[[], ModuleType]:
     """A module, imported at the first call, never at the import of this one — with every warning silenced.
 
     The first call comes inside a pytest hook, where the user's filters apply: under ``filterwarnings = error`` a
-    warning networkx, astroid or GitPython gave while loading would fail the run, which loading them with the
+    warning networkx or GitPython gave while loading would fail the run, which loading them with the
     entry point, before any filter applied, never did.
     """
 
@@ -44,7 +44,7 @@ def _lazily(name: str) -> Callable[[], ModuleType]:
     return module
 
 
-# The analysis and what it needs (networkx, astroid, GitPython, which runs ``git version`` as it loads) load only
+# The analysis and what it needs (networkx, GitPython, which runs ``git version`` as it loads) load only
 # once --impacted asks for them: this plugin is a pytest11 entry point, imported by every pytest run, with
 # --impacted or without, and loading them there doubled the start-up of a run with one test (127 ms -> 249 ms).
 # Functions, not module-like objects: pytest probes every attribute of a plugin module for fixtures, which would
@@ -236,7 +236,7 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
 
 def _backend(ignore_type_checking_imports: bool) -> str:
     """The parser the analysis uses, for the report header (see :func:`~pytest_impacted._rust.uses_rust`)."""
-    return "rust (ruff parser + rayon)" if _rust.uses_rust(ignore_type_checking_imports) else "python (astroid)"
+    return "rust (ruff parser + rayon)" if _rust.uses_rust(ignore_type_checking_imports) else "python (ast)"
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:

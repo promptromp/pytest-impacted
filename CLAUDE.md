@@ -53,8 +53,12 @@ monkey patching, DB connections, app factories. If you find yourself reaching fo
 in particular, which imports every parent package to answer. (`importlib.util.resolve_name`, which only
 manipulates strings, is the one exception: `dynamic_imports` resolves a relative `import_module` name with it.)
 
-**`parsing.py` imports node classes from `astroid.nodes`**, not `astroid` — required
-since astroid v4.
+**The pure-Python backend is the standard library's `ast`** (astroid until 0.42: 6–7x slower, and its pin
+blocked installing beside pylint < 4.1). Every walk over statements, and the type-only walk, is iterative,
+statements alone for imports (`parsing._import_statements`, as `collect_imports_from_stmts`): only the parse can give
+up, near 3,000 nested terms on 3.11 and 10,000 on 3.12–3.13, and then the file imports nothing, logged. Never a
+recursive visitor: astroid's recursion gave up near 500, and `ast` nests each `elif` in the `orelse` before it, so a
+generated 1,000-branch dispatch is 1,000 statements deep (ruff keeps the clauses flat).
 
 **`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an
 importable package — `pkgutil.iter_modules`, with a non-package prefix like `src/`
@@ -244,7 +248,7 @@ project requires git >= 2.24, and why tests assert on the `--end-of-options` tok
 every pytest run: it reaches `api`, `git`, `file_map`, `strategies` and `traversal` only through `plugin._lazily`
 (functions, never module-like objects: pytest probes every attribute of a plugin module for fixtures, which imported
 an object's module at start-up), and `pytest_impacted/__init__.py` exports its names lazily (PEP 562). Eager, they
-loaded networkx, astroid and GitPython, which runs `git version` as it loads: a one-test run took 249 ms against
+loaded networkx, astroid (the parser then) and GitPython, which runs `git version` as it loads: a one-test run took 249 ms against
 127 ms. `test_a_run_without_impacted_loads_none_of_the_analysis` pins a whole session, not only the import.
 The first load happens in a hook, under the user's warning filters, so `_lazily` silences warnings while loading.
 `GitMode` lives in `modes.py` for the options; patch `pytest_impacted.git.GIT_AVAILABLE`, not the plugin's. An
@@ -395,9 +399,7 @@ a test module using `pytest_plugins = "pytester"`, and still could not see a rem
 declaration. `parse_pytest_plugins` uses stdlib `ast`, outside the backend on purpose (it
 cannot break Rust/Python parity), behind a text pre-filter, with warnings silenced so
 `-W error` cannot turn a `SyntaxWarning` into a lost declaration — `_quiet_parse` does the
-same for the astroid import parser. astroid gives up near 500 nested terms where CPython and ruff go on, so its
-`RecursionError` falls back to stdlib `ast` (`_imports_by_ast`, every candidate a runtime one) — never a silent
-`[]`, which would break backend parity.
+same for the import parser.
 `read_source` and `is_conftest_module` are the shared reader and conftest-name check —
 don't re-implement either.
 
@@ -454,16 +456,18 @@ plugin reads it through `plugin._pythonpath`.) An option takes its setting only 
 The root stays `--root-dir` (default `.`), as for `pytest --rootdir`, never the file's directory:
 moving it reinterprets an explicit `--module` (two review rounds oscillated on this).
 
-**The Python and Rust backends must agree exactly.** `parsing.py` (astroid) and
+**The Python and Rust backends must agree exactly.** `parsing.py` (stdlib `ast`) and
 `rust/src/lib.rs` (ruff parser) both feed `build_dep_tree`, so any divergence silently
 changes which tests run under the `fast` extra. Known parity points: read with `utf-8-sig`
 so a BOM is not a syntax error, and scan `match`/`case` bodies.
 `test_parse_file_imports_matches_rust_backend` pins it and CI runs both backends across
 3.11–3.14 — change one backend, change the other. So is the type-only split (`tests/test_type_only.py`
-runs every case through both): an `elif TYPE_CHECKING:` is a nested `If` in astroid's `orelse`, a
-clause with its own test in ruff's `elif_else_clauses`; astroid keeps docstrings out of its tree, ruff
-has them as bare string statements, so no bare string counts; an f-string's text is a string to
-neither; type comments are nodes to neither. So are the imports by name (`tests/test_dynamic_imports.py`
+runs every case through both; `type_only.py` ports `type_only.rs` walk for walk): an `elif TYPE_CHECKING:` is a
+nested `If` in `ast`'s `orelse`, a clause with its own test in ruff's `elif_else_clauses`; both have docstrings as
+bare string statements, and no bare string counts; an f-string's text is a string to neither, and its placeholder
+(`FormattedValue`, `Interpolation`) no expression to ruff, so no nesting level; annotations are a parameter's, a
+return's and `AnnAssign`'s alone (a type parameter's bound and a `type` alias's value run); type comments are nodes
+to neither. So are the imports by name (`tests/test_dynamic_imports.py`
 runs every case through the stdlib pass and `rust/src/dynamic_imports.rs`): an identifier counts any
 non-ASCII character as an identifier's in both (but lone surrogates and the U+FFFD ruff makes of them), so no
 Unicode version decides, and the Rust port of `importlib.util.resolve_name` must keep its `rsplit` arithmetic.
@@ -475,9 +479,8 @@ since an older pytest-impacted cannot read one handed back. Every batch runs in 
 (`in_pool`, reserved, not committed): freeing a parsed tree recurses down a left-deep `a + b + ...` that ruff builds
 in a loop, about 64 bytes a term, which overflowed rayon's 2 MiB threads and killed the host process; the 4 MiB
 cap keeps the need at half the stack. The type-only visitor stops at `DEEPEST` too, every import then a runtime
-one. One accepted exception: astroid gives up near 500 nested terms and its `ast` fallback keeps every import a
-runtime one, so under `--impacted-ignore-type-checking-imports` a file nested 500 to 2,000 deep keeps type-only
-edges in Python that Rust drops (the safe side; pinned in `tests/test_deep_sources.py`). Deep-source tests run a
+one, and so does Python's (`type_only.DEEPEST`, counting nesting as ruff does; the boundary is pinned at 2,000 and
+2,001 terms in `tests/test_deep_sources.py`). Deep-source tests run a
 batch of several files in a subprocess: a crash kills the process, and before the owned pool a one-file batch ran
 on the caller's larger stack (it still does when the pool cannot be built), which hid the crash. The older dict
 functions read up to 6 MiB (`OLDER_LARGEST_SOURCE`), a larger file importing nothing there. More, only where the running Python cannot parse the file (newer syntax). A table
@@ -489,7 +492,7 @@ The extension is a separate distribution and the `fast` extra is unpinned (a dev
 `0.1.0`, which a pin would refuse), so an install may hold an older one: never change an existing
 function's signature — add a function (`parse_all_imports_split`), import it in `_rust.py` behind
 `ImportError` like the extension itself (`RUST_SPLITS_TYPE_ONLY`), and let `uses_rust` leave the
-parsing to astroid when the extension cannot honour the options; the header and the CLI warn
+parsing to Python when the extension cannot honour the options; the header and the CLI warn
 (`outdated_for`) — never a TypeError, never an option dropped unseen.
 
 **Logging: every module that logs declares `logger = logging.getLogger(__name__)`.**

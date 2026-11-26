@@ -335,7 +335,7 @@ fn parse_all(modules: &[(String, String, bool)], find_type_only: bool) -> Vec<(S
 
 /// Each `(file_path, module_name, is_package)`'s runtime and type-only import candidates, in the order given
 /// and in parallel; `None` for a file the Python backend must read: one ruff rejects, one not UTF-8, one over
-/// `LARGEST_SOURCE`, one that cannot be read. So the extension never finds fewer imports than astroid would.
+/// `LARGEST_SOURCE`, one that cannot be read. So the extension never finds fewer imports than the Python backend would.
 /// Without `find_type_only` every candidate is a runtime one.
 #[pyfunction]
 fn parse_imports_each(

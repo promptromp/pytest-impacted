@@ -31,7 +31,6 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "astroid>=4.1.2",
     "click>=8.2.0",
     # >=3.1.58 excludes the option-injection / arbitrary-file advisories affecting
     # GitPython <= 3.1.57: GHSA-hmq2-w58f-27jc, GHSA-jm78-9fvv-mhgr,

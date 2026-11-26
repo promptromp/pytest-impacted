@@ -272,7 +272,7 @@ def test_parse_file_imports_never_executes_package_code(tmp_path, monkeypatch):
 
 
 def test_parse_file_imports_strips_utf8_bom(tmp_path):
-    """Editors on Windows often save a BOM; ruff ignores it, astroid must not choke on it."""
+    """Editors on Windows often save a BOM; ruff ignores it, and the Python side must not choke on it."""
     path = tmp_path / "mod.py"
     path.write_bytes(b"\xef\xbb\xbfimport foo\nfrom bar import baz\n")
 
@@ -485,3 +485,14 @@ def test_all_names_are_the_literal_ones(tmp_path, source, names):
     (tmp_path / "__init__.py").write_text(source)
 
     assert parsing.parse_all_names(str(tmp_path / "__init__.py")) == names
+
+
+def test_a_declaration_before_a_long_elif_chain_is_read(tmp_path):
+    """A module-level walk that recursed once per ``elif`` gave up on a 1,500-branch dispatch, losing the module's
+    ``pytest_plugins`` and ``__all__``."""
+    dispatch = "if a == 0:\n    pass\n" + "".join(f"elif a == {i}:\n    pass\n" for i in range(1, 1_500))
+    path = tmp_path / "plugins.py"
+    path.write_text("pytest_plugins = ['pkg.fixtures']\n__all__ = ['Thing']\n" + dispatch)
+
+    assert parsing.parse_pytest_plugins(str(path)) == ["pkg.fixtures"]
+    assert parsing.parse_all_names(str(path)) == ["Thing"]

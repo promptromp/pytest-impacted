@@ -112,7 +112,7 @@ def make_git_project(pytester, monkeypatch):
 
 @pytest.fixture(params=["rust", "python"])
 def import_backend(request, monkeypatch):
-    """Run the test with each backend parsing the import statements: the Rust extension, then astroid."""
+    """Run the test with each backend parsing the import statements: the Rust extension, then Python's ``ast``."""
     if request.param == "python":
         monkeypatch.setattr(_rust, "RUST_AVAILABLE", False)
     elif not _rust.RUST_AVAILABLE:

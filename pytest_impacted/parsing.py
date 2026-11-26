@@ -1,4 +1,4 @@
-"""Python code parsing (AST) utilities."""
+"""Python code parsing utilities: the standard library's ``ast``, never an import of the code it reads."""
 
 import ast
 import io
@@ -10,10 +10,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-import astroid
-from astroid.nodes import Import, ImportFrom
-
-from pytest_impacted.type_only import BLOCK_FIELDS, type_only_imports
+from pytest_impacted.type_only import BLOCK_FIELDS, module_level, type_only_imports
 
 
 logger = logging.getLogger(__name__)
@@ -97,39 +94,34 @@ def _resolve_relative_import(package: str, level: int, modname: str | None) -> s
     return base_package
 
 
-def _extract_imports_from_node(node: Import | ImportFrom, package: str) -> set[str]:
-    """Extract candidate module names from an import node.
+def _candidates(node: ast.Import | ast.ImportFrom, package: str) -> set[str]:
+    """Candidate module names of one import statement, relative ones resolved against *package*.
 
-    Args:
-        node: The import AST node
-        package: The package relative imports resolve against (see :func:`_package_of`)
-
-    Returns:
-        Candidate module names. For ``from pkg import name`` both ``pkg`` and
-        ``pkg.name`` are returned: ``pkg`` is always a real dependency (its
-        ``__init__`` runs on import), while ``pkg.name`` is a submodule only if
-        the graph builder finds a module of that name — deciding here would
-        mean importing ``pkg``, which must never happen at analysis time.
-        Mirrors the Rust backend.
+    For ``from pkg import name`` both ``pkg`` and ``pkg.name``: ``pkg`` is always a real dependency (its
+    ``__init__`` runs on import), while ``pkg.name`` is a submodule only if the graph builder finds a module of
+    that name — deciding here would mean importing ``pkg``, which must never happen at analysis time. Mirrors the
+    Rust backend.
     """
-    imports = set()
+    if isinstance(node, ast.Import):
+        return {alias.name for alias in node.names}
+    base = _resolve_relative_import(package, node.level, node.module) if node.level else (node.module or "")
+    found = {base} if base else set()
+    found.update(f"{base}.{alias.name}" if base else alias.name for alias in node.names if alias.name != "*")
+    return found  # ``pkg.*`` is no module name
 
-    if isinstance(node, Import):
-        for name in node.names:
-            imports.add(name[0])
 
-    elif isinstance(node, ImportFrom):
-        resolved_modname = (
-            _resolve_relative_import(package, node.level, node.modname) if node.level else (node.modname or "")
-        )
-        if resolved_modname:
-            imports.add(resolved_modname)
-        for name, *_ in node.names:
-            if name == "*":
-                continue  # ``pkg.*`` is not a module name
-            imports.add(f"{resolved_modname}.{name}" if resolved_modname else name)
-
-    return imports
+def _import_statements(tree: ast.Module) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Every import statement in *tree*, at any depth: statements alone hold them, so no expression is walked.
+    Mirrors ``collect_imports_from_stmts`` in the Rust backend. Without recursion: the nesting of blocks is the
+    parser's to limit."""
+    stack: list[ast.AST] = list(reversed(tree.body))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            yield node
+            continue
+        for field in reversed(BLOCK_FIELDS):
+            stack.extend(reversed(getattr(node, field, None) or []))
 
 
 def parse_file_imports(
@@ -175,49 +167,23 @@ def split_file_imports(
     if not source.strip():
         return [], []
 
-    package = _package_of(module_name, is_package)
-
     try:
         with _quiet_parse():
-            tree = astroid.parse(source)
-    except astroid.exceptions.AstroidSyntaxError:
+            tree = ast.parse(source)
+    except (SyntaxError, ValueError):  # ValueError: a null byte, before Python 3.12
         logger.warning("Syntax error while parsing %s", file_path)
         return [], []
-    except RecursionError:
-        # astroid's tree builder recurses in Python, giving up near 500 nested terms (a long ``a + b + ...`` in
-        # generated code) where CPython's parser, and ruff, go on: read the imports as they do, every one at
-        # runtime (no type-only split without astroid's tree; keeping an edge only selects more).
-        return _imports_by_ast(source, file_path, package), []
+    except (RecursionError, MemoryError) as err:  # nested past the parser's limit (near 3,000 terms on 3.11)
+        logger.warning("Could not parse %s: %s", file_path, type(err).__name__)
+        return [], []
 
+    package = _package_of(module_name, is_package)
     type_only = {id(node) for node in type_only_imports(tree)} if find_type_only else set()
     runtime: set[str] = set()
     typed: set[str] = set()
-    for node in tree.nodes_of_class((Import, ImportFrom)):
-        (typed if id(node) in type_only else runtime).update(_extract_imports_from_node(node, package))
+    for node in _import_statements(tree):
+        (typed if id(node) in type_only else runtime).update(_candidates(node, package))
     return sorted(runtime), sorted(typed - runtime)
-
-
-def _imports_by_ast(source: str, file_path: str, package: str) -> list[str]:
-    """The import candidates of *source* by the stdlib parser, as :func:`_extract_imports_from_node` reads them.
-
-    ``ast.walk`` is iterative, so only the parse itself can give up; then the file imports nothing, logged.
-    """
-    try:
-        with _quiet_parse():
-            module = ast.parse(source)
-    except (SyntaxError, ValueError, RecursionError, MemoryError) as err:
-        logger.warning("Could not parse %s: %s", file_path, type(err).__name__)
-        return []
-    found: set[str] = set()
-    for node in ast.walk(module):
-        if isinstance(node, ast.Import):
-            found.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            base = _resolve_relative_import(package, node.level, node.module) if node.level else (node.module or "")
-            if base:
-                found.add(base)
-            found.update(f"{base}.{alias.name}" if base else alias.name for alias in node.names if alias.name != "*")
-    return sorted(found)
 
 
 def parse_pytest_plugins(file_path: str) -> list[str]:
@@ -243,23 +209,10 @@ def pytest_plugins_in(source: str | None) -> list[str]:
     try:
         with _quiet_parse():
             tree = ast.parse(source)
-        return [name for stmt in _module_level_statements(tree.body) for name in _declared_plugins(stmt)]
+        return [name for stmt in module_level(tree.body) for name in _declared_plugins(stmt)]
     # A 3000-term chain: RecursionError (``+``), or MemoryError ("parser stack overflowed", ``**``).
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return []
-
-
-_BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.ExceptHandler, ast.Match, ast.match_case, ast.For, ast.While)
-
-
-def _module_level_statements(body: list) -> Iterator[ast.stmt]:
-    """Statements that run at import, including nested blocks — but not functions or classes."""
-    for stmt in body:
-        if isinstance(stmt, ast.stmt):
-            yield stmt
-        if isinstance(stmt, _BLOCKS):
-            for field in BLOCK_FIELDS:
-                yield from _module_level_statements(getattr(stmt, field, []))
 
 
 def _declared_plugins(stmt: ast.stmt) -> list[str]:
@@ -347,7 +300,7 @@ def parse_all_names(file_path: str) -> list[str]:
             tree = ast.parse(source)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return []
-    return [name for stmt in _module_level_statements(tree.body) for name in _declared(stmt, "__all__", _literals)]
+    return [name for stmt in module_level(tree.body) for name in _declared(stmt, "__all__", _literals)]
 
 
 def _literals(value: ast.expr) -> list[str]:
