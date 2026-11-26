@@ -19,9 +19,10 @@ def module_problem(module: str, root: Path, flag: str) -> str | None:
     """Why *module* (given with *flag*) names no package directory under *root*, with a likely fix; ``None`` if it
     does. A path (``src/app``, ``./app``) or a dotted name (``src.app``)."""
     normalized = normalized_module(module)
-    if normalized in ("", ".") or normalized.split("/")[0] == "..":
-        return f"Module '{module}' names no package inside '{root}': give its path inside the rootdir ({flag}=app)."
     module_dir = package_name_to_path(normalized)
+    # ``.``, ``.app``, ``../app`` (their dots turn into separators) and an absolute path all name a directory outside.
+    if not normalized or os.path.isabs(module_dir):
+        return f"Module '{module}' names no package inside '{root}': give its path inside the rootdir ({flag}=app)."
     # os.path, not Path.is_dir(): inside an unsearchable directory it is missing, rather than raising.
     if os.path.isdir(root / module_dir):
         return None

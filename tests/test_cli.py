@@ -546,3 +546,21 @@ def test_the_cli_and_the_plugin_read_a_module_path_alike(tmp_path, module):
 
     assert result.exit_code == 0, result.output
     assert run.call_args.kwargs["ns_module"] == module  # normalized inside get_impacted_tests, for every caller
+
+
+@pytest.mark.parametrize(
+    ("args", "ini", "suggested"),
+    [
+        (["--module", "my-pkg"], "", "--module=my_pkg"),
+        ([], "impacted_module = my-pkg\n", "impacted_module=my_pkg"),
+    ],
+    ids=["on the command line", "in the configuration"],
+)
+def test_a_suggested_fix_is_spelled_as_the_value_was_given(tmp_path, args, ini, suggested):
+    (tmp_path / "my_pkg").mkdir()
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{ini}")
+
+    result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(tmp_path), *args])
+
+    assert result.exit_code == 2, result.output
+    assert f"Did you mean: {suggested}" in " ".join(result.output.split())

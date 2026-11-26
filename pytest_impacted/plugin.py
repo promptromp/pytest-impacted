@@ -92,8 +92,8 @@ def pytest_addoption(parser: Parser):
     group = parser.getgroup("impacted")
     for option in OPTIONS:
         group.addoption(option.flag, dest=option.setting, help=option.help, **_option_kwargs(option))
-        listed = f" (list of {option.metavar})" if option.kind is Kind.LIST and option.metavar else ""
-        parser.addini(option.setting, help=f"default value for {option.flag}{listed}", **_ini_kwargs(option))
+        ini_help = option.ini_help or f"default value for {option.flag}"
+        parser.addini(option.setting, help=ini_help, **_ini_kwargs(option))
 
     # Register config options from discovered extensions
     for ext in discover_extension_metadata():
@@ -413,11 +413,11 @@ def _analysed_dirs(config: Config) -> list[Path]:
     get_option = partial(get_option_from_config, config)
     module, tests_dir = get_option("impacted_module"), get_option("impacted_tests_dir")
     traversal = _traversal()
-    # As the analysis reads them: ``./app`` is ``app``, a dotted tests dir ``suite.unit`` walks ``suite/unit``.
-    named = [
-        traversal.package_name_to_path(_validation().normalized_module(str(module))),
-        *([traversal.walked_directory(tests_dir)] if tests_dir else []),
-    ]
+    # As the analysis reads them: ``./app`` is ``app``, a dotted tests dir ``suite.unit`` walks ``suite/unit``. A tests
+    # dir that is a directory as given is the one walked (validation checks so), its spelling kept (an absolute one).
+    named = [traversal.package_name_to_path(_validation().normalized_module(str(module)))]
+    if tests_dir:
+        named.append(tests_dir if os.path.isdir(config.rootpath / tests_dir) else traversal.walked_directory(tests_dir))
     given = [Path(os.path.abspath(config.rootpath / name)) for name in named]
     return [*given, *(_traversal().real_path(directory) for directory in given)]
 

@@ -55,6 +55,8 @@ class Option:
     optional_value: bool = False
     #: Shown in the report header, which names the settings a run used.
     in_header: bool = True
+    #: The ini key's help, when not "default value for <flag>".
+    ini_help: str | None = None
     cli: Cli | None = field(default=None)
 
 
@@ -143,6 +145,7 @@ OPTIONS: tuple[Option, ...] = (
         "(e.g. '*.json', 'config/*.yaml'). Repeatable.",
         default=[],
         metavar="PATTERN",
+        ini_help="default value for --impacted-invalidate-all (list of glob patterns)",
         cli=Cli(
             "invalidate-all",
             "invalidate_all",
@@ -159,6 +162,7 @@ OPTIONS: tuple[Option, ...] = (
         "rootdir), e.g. 'reports/*.json=tests/test_bench.py'. Repeatable.",
         default=[],
         metavar="GLOB=PATH",
+        ini_help="default value for --impacted-map (list of GLOB=PATH)",
         cli=Cli(
             "map",
             "file_map",
@@ -217,6 +221,7 @@ OPTIONS: tuple[Option, ...] = (
         "Disable a strategy extension by name (repeatable).",
         default=[],
         in_header=False,
+        ini_help="Strategy extensions to disable",
         cli=Cli("disable-ext", "disable_ext", "Disable a strategy extension by name (repeatable).", default=()),
     ),
 )

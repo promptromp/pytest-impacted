@@ -93,8 +93,8 @@ def configure_logging(verbose: bool) -> None:
         + "for a run from --root-dir (pytest.ini, pyproject.toml, tox.ini, ...)."
     ),
 )
-@click.option("--verbose", is_flag=True, help="Verbose output.")
 @_with_setting_options
+@click.option("--verbose", is_flag=True, help="Verbose output.")
 @click.pass_context
 def impacted_tests_cli(ctx, **options):
     """CLI entrypoint for impacted-tests console script.
@@ -222,10 +222,14 @@ def _run(
 
     configure_logging(verbose=verbose)
 
-    # Paths are relative to --root-dir, which need not be the working directory; the plugin checks the same.
-    if problem := module_problem(module, Path(root_dir), "--module"):
+    # Paths are relative to --root-dir, which need not be the working directory; the plugin checks the same. A fix is
+    # spelled as the value was given: the option, or the setting in the configuration file.
+    def spelled(name: str) -> str:
+        return CLI_SETTINGS[name] if name in sources else f"--{name.replace('_', '-')}"
+
+    if problem := module_problem(module, Path(root_dir), spelled("module")):
         raise click.BadParameter(problem, param_hint=sources.get("module", "--module"))
-    if tests_dir and (problem := tests_dir_problem(tests_dir, Path(root_dir), "--tests-dir")):
+    if tests_dir and (problem := tests_dir_problem(tests_dir, Path(root_dir), spelled("tests_dir"))):
         raise click.BadParameter(problem, param_hint=sources.get("tests_dir", "--tests-dir"))
 
     try:
