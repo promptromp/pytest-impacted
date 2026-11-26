@@ -184,6 +184,9 @@ def get_impacted_tests(
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
+    Each call analyses the project afresh, as it is then: the dependency graph and discovery cached by an earlier
+    call in the process are dropped first (files may have changed since), so a caller in a loop pays a build a call.
+
     ``watch_dep_files``, ``invalidate_all_patterns`` and ``conftest_imports`` configure
     the default pipeline and are ignored when an explicit ``strategy`` is supplied.
     ``use_merge_base`` makes branch mode diff from the fork point (the default)

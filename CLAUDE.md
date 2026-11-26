@@ -166,8 +166,8 @@ discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment** (`cached_build_dep_tree → run_copy →
 link_changed_files → resolve_files_to_nodes → enrich_dep_tree → package_members → setup → find_impacted_tests →
-teardown`): otherwise extension enrichment pollutes the LRU-cached base graph for the next run in the
-process. `run_copy`, not `DiGraph.copy()`, which shares graph-level values such as `graph["aliases"]`; `teardown`
+teardown`): otherwise enrichment leaks into the cached graph every other `cached_build_dep_tree` caller of the
+run reads. `run_copy`, not `DiGraph.copy()`, which shares graph-level values such as `graph["aliases"]`; `teardown`
 runs in a `finally`. Changed files and impacted test modules resolve through the graph's node `path`s, not a second
 discovery: a changed module the cached graph lacks would read as production code outside it, and
 `resolve_impacted_tests` would select every test.
