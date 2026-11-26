@@ -62,6 +62,7 @@ DEFAULT_CALL = {
     "file_map": [],
     "pythonpath": [],
     "ignore_type_checking_imports": False,
+    "backend": "auto",
 }
 
 #: What it hands ``build_strategy_with_extensions`` then.
@@ -132,6 +133,7 @@ def cli(tmp_path, monkeypatch, entry_points):
             ["ignore-type-checking-imports: True"],
             id="type-only",
         ),
+        pytest.param(["--backend", "python"], {"backend": "python"}, ["backend: python"], id="the python backend"),
     ],
 )
 def test_the_cli_hands_the_analysis_its_options_and_says_so(cli, args, call, echoed):

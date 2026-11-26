@@ -12,6 +12,11 @@ from typing import Any
 from pytest_impacted.modes import GitMode
 
 
+#: What ``--impacted-backend`` may ask for (see :mod:`pytest_impacted.backends`): the fastest parser that can honour the
+#: options, or the standard library's whatever is installed.
+BACKENDS = ("auto", "python")
+
+
 class Kind(StrEnum):
     """How an option takes its value, on the command line and in the pytest configuration."""
 
@@ -213,6 +218,19 @@ OPTIONS: tuple[Option, ...] = (
         "them 'skip'ped, as releases up to 0.35 did.",
         default=Unimpacted.DESELECT.value,
         choices=tuple(action.value for action in Unimpacted),
+    ),
+    Option(
+        "impacted_backend",
+        "--impacted-backend",
+        Kind.CHOICE,
+        "Which parser reads the imports: 'auto' (pytest-impacted-rs when it is installed and new enough for the "
+        "options, the standard library's ast otherwise) or 'python' (ast, whatever is installed). Both find the "
+        "same imports: the choice changes how fast tests are selected, not which.",
+        default="auto",
+        choices=BACKENDS,
+        cli=Cli(
+            "backend", "backend", "Which parser reads the imports: auto or python (the same imports).", default="auto"
+        ),
     ),
     Option(
         "impacted_disable_ext",

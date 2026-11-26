@@ -45,11 +45,15 @@ def assert_usage_error(result, *messages):
         assert message in output, output
 
 
-def test_a_git_mode_setting_that_is_no_mode_is_a_usage_error(make_git_project):
-    """``choices`` guards the flag alone; the setting reached ``match`` and raised."""
-    project = make_git_project(FILES, INI + "impacted_git_mode = Branch\nimpacted_base_branch = main\n")
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [("impacted_git_mode", "Branch"), ("impacted_unimpacted", "drop"), ("impacted_backend", "rust")],
+)
+def test_a_choice_setting_that_is_no_choice_is_a_usage_error(make_git_project, setting, value):
+    """``choices`` guards the flag alone; a setting reached the analysis (``match``, ``backend_for``) and raised."""
+    project = make_git_project(FILES, INI + f"{setting} = {value}\nimpacted_base_branch = main\n")
 
-    assert_usage_error(project.runpytest("--impacted"), "Invalid impacted_git_mode value 'Branch'")
+    assert_usage_error(project.runpytest("--impacted"), f"Invalid {setting} value '{value}'")
 
 
 @pytest.mark.parametrize("mode", ["unstaged", "branch"])

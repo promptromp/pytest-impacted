@@ -26,6 +26,7 @@ class TestCaching:
             root_dir=canonical_root(None),
             pythonpath=(),
             ignore_type_checking_imports=False,
+            backend="auto",
         )
 
         # Both results should be the same
@@ -51,6 +52,7 @@ class TestCaching:
             root_dir=canonical_root(None),
             pythonpath=(),
             ignore_type_checking_imports=False,
+            backend="auto",
         )
         mock_build_tree.assert_any_call(
             "mypackage",
@@ -58,6 +60,7 @@ class TestCaching:
             root_dir=canonical_root(None),
             pythonpath=(),
             ignore_type_checking_imports=False,
+            backend="auto",
         )
 
         # Results should be different
@@ -101,6 +104,7 @@ class TestCaching:
             root_dir=canonical_root(None),
             pythonpath=(),
             ignore_type_checking_imports=False,
+            backend="auto",
         )
         assert result1 is result2
 
@@ -160,4 +164,17 @@ class TestCaching:
             root_dir=canonical_root(None),
             pythonpath=(),
             ignore_type_checking_imports=True,
+            backend="auto",
         )
+
+
+@patch("pytest_impacted.strategies.build_dep_tree")
+def test_the_backend_is_part_of_the_key(mock_build_tree):
+    """Both backends find the same imports, but a run asking for one must not be answered by the other's graph."""
+    mock_build_tree.side_effect = [MagicMock(), MagicMock()]
+
+    auto = cached_build_dep_tree("mypackage", "tests")
+    python = cached_build_dep_tree("mypackage", "tests", backend="python")
+
+    assert auto is not python
+    assert mock_build_tree.call_args.kwargs["backend"] == "python"

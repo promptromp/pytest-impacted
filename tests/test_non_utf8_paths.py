@@ -10,8 +10,8 @@ import os
 
 import pytest
 
-from pytest_impacted import _rust, graph
-from pytest_impacted.dynamic_imports import DynamicImports
+from pytest_impacted import _rust, backends, graph
+from pytest_impacted.dynamic_imports import DynamicImports, parse_dynamic_imports
 
 from .git_helpers import INI, assert_selected, edit_file
 
@@ -65,8 +65,8 @@ def files(tmp_path, caplog):
 @pytest.mark.parametrize("ignore_type_checking_imports", [False, True])
 def test_import_parsing_leaves_an_odd_file_to_python(monkeypatch, files, ignore_type_checking_imports, each):
     def by_python(modules):
-        runtime, type_only = graph._parse_imports_in_python({name: path for path, name, _ in modules}, True)
-        return {name: (runtime[name], type_only[name]) for name in runtime}
+        found = backends.PYTHON.imports([backends.Source(*module) for module in modules], find_type_only=True)
+        return {name: tuple(split) for (_, name, _), split in zip(modules, found, strict=True)}
 
     plain = pyo3_like(lambda modules: {name: found for name, (found, _) in by_python(modules).items()})
     split = pyo3_like(by_python)
@@ -78,7 +78,9 @@ def test_import_parsing_leaves_an_odd_file_to_python(monkeypatch, files, ignore_
     monkeypatch.setattr(_rust, "rust_parse_all_imports_split", split)
     monkeypatch.setattr(_rust, "rust_parse_imports_each", in_order)
 
-    runtime, _ = graph._parse_all_module_imports(files, ignore_type_checking_imports)
+    runtime, _ = graph._parse_all_module_imports(
+        files, backends.backend_for(ignore_type_checking_imports), ignore_type_checking_imports
+    )
 
     assert runtime == {"app.models": ["os"], f"app.{ODD}": []}
     called = in_order if each else split if ignore_type_checking_imports else plain
@@ -87,13 +89,13 @@ def test_import_parsing_leaves_an_odd_file_to_python(monkeypatch, files, ignore_
 
 def test_finding_imports_by_name_leaves_an_odd_file_to_python(monkeypatch, files):
     def by_python(modules, table):
-        return [tuple(graph.parse_dynamic_imports(*module)) for module in modules]
+        return [tuple(parse_dynamic_imports(*module)) for module in modules]
 
     parse = pyo3_like(by_python)
     monkeypatch.setattr(_rust, "RUST_PARSES_DYNAMIC_IMPORTS", True)
     monkeypatch.setattr(_rust, "rust_parse_all_dynamic_imports", parse)
 
-    found = graph._parse_all_dynamic_imports(files)
+    found = graph._parse_all_dynamic_imports(files, backends.backend_for())
 
     assert found == {"app.models": DynamicImports([], [], []), f"app.{ODD}": DynamicImports([], [], [])}
     assert parse.handed == ["app.models"]
@@ -122,8 +124,8 @@ def test_the_real_extension_is_never_handed_an_odd_file(monkeypatch, files):
         monkeypatch.setattr(_rust, function, recording(function))
 
     for ignore in (False, True):
-        assert graph._parse_all_module_imports(files, ignore)[0]["app.models"] == ["os"]
-    assert set(graph._parse_all_dynamic_imports(files)) == set(files)
+        assert graph._parse_all_module_imports(files, backends.backend_for(ignore), ignore)[0]["app.models"] == ["os"]
+    assert set(graph._parse_all_dynamic_imports(files, backends.backend_for())) == set(files)
 
     # The import pass goes through parse_imports_each when the extension has it, once per option.
     imports = (

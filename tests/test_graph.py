@@ -9,7 +9,7 @@ from unittest.mock import patch
 import networkx as nx
 import pytest
 
-from pytest_impacted import _rust, graph
+from pytest_impacted import _rust, graph, parsing
 from pytest_impacted.strategies import cached_build_dep_tree, clear_dep_tree_cache, run_copy
 from pytest_impacted.traversal import _Discovered, path_to_package_name, pythonpath_roots, resolve_files_to_modules
 
@@ -93,7 +93,7 @@ def test_build_dep_tree():
     with (
         patch("pytest_impacted._rust.RUST_AVAILABLE", False),
         patch("pytest_impacted.graph._discover_project", return_value=_Discovered(mock_submodules, {}, {})),
-        patch("pytest_impacted.graph.parse_file_imports") as mock_parse_imports,
+        patch("pytest_impacted.backends.parse_file_imports") as mock_parse_imports,
     ):
         # Set up mock imports for each module
         mock_parse_imports.side_effect = [
@@ -2547,7 +2547,7 @@ def test_an_extension_predating_the_option_leaves_the_parsing_to_python(tmp_path
 
     def parse_all_imports(modules):  # the extension's signature before the option
         calls.append(modules)
-        return {name: graph.parse_file_imports(path, name, is_package) for path, name, is_package in modules}
+        return {name: parsing.parse_file_imports(path, name, is_package) for path, name, is_package in modules}
 
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", True)
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", False)

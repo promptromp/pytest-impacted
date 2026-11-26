@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_impacted import _rust, api, graph
+from pytest_impacted import _rust, api, backends, graph
 
 from .git_helpers import INI, assert_selected, edit_file, run, write_files
 
@@ -33,7 +33,9 @@ TARGET = "VALUE = 1\nTABLE = {}\n\nclass Model:\n    def save(self):\n        pa
 
 def test_the_backend_finds_the_imports_by_name(tmp_path, monkeypatch, by_name_backend):
     """Not vacuous: the backend each test here is parametrized with is the one that reads the files."""
-    where = (_rust, "rust_parse_all_dynamic_imports") if by_name_backend == "rust" else (graph, "parse_dynamic_imports")
+    where = (
+        (_rust, "rust_parse_all_dynamic_imports") if by_name_backend == "rust" else (backends, "parse_dynamic_imports")
+    )
     real, calls = getattr(*where), []
     monkeypatch.setattr(*where, lambda *args: calls.append(args) or real(*args))
 

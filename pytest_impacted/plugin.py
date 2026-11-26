@@ -23,7 +23,7 @@ from pytest_impacted.extensions import (
     get_ext_ini_name,
 )
 from pytest_impacted.modes import GitMode
-from pytest_impacted.options import OPTIONS, Kind, Option, Unimpacted
+from pytest_impacted.options import BACKENDS as OPTIONS_BACKENDS, OPTIONS, Kind, Option, Unimpacted
 
 
 def _lazily(name: str) -> Callable[[], ModuleType]:
@@ -50,6 +50,7 @@ def _lazily(name: str) -> Callable[[], ModuleType]:
 # Functions, not module-like objects: pytest probes every attribute of a plugin module for fixtures, which would
 # import such an object's module at start-up.
 _api = _lazily("pytest_impacted.api")
+_backends = _lazily("pytest_impacted.backends")
 _file_map = _lazily("pytest_impacted.file_map")
 _git = _lazily("pytest_impacted.git")
 _strategies = _lazily("pytest_impacted.strategies")
@@ -155,7 +156,7 @@ def pytest_report_header(config: Config) -> list[str]:
     ext_names = [e.name for e in discover_extension_metadata()]
     header = [
         *(f"{option.setting}={get_option(option.setting)}" for option in OPTIONS if option.in_header),
-        f"backend={_backend(bool(ignore_type_checking_imports))}",
+        f"backend={_backend(bool(ignore_type_checking_imports), get_option('impacted_backend') or 'auto')}",
     ]
     if ext_names:
         header.append(f"extensions={','.join(ext_names)}")
@@ -234,9 +235,13 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
         return None
 
 
-def _backend(ignore_type_checking_imports: bool) -> str:
-    """The parser the analysis uses, for the report header (see :func:`~pytest_impacted._rust.uses_rust`)."""
-    return "rust (ruff parser + rayon)" if _rust.uses_rust(ignore_type_checking_imports) else "python (ast)"
+def _backend(ignore_type_checking_imports: bool, requested: str) -> str:
+    """The parser the analysis uses, for the report header; an invalid *requested* is validate_config's to refuse."""
+    return (
+        _backends().backend_for(ignore_type_checking_imports, requested).name
+        if requested in OPTIONS_BACKENDS
+        else requested
+    )
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
@@ -268,6 +273,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
             file_map=_file_map().parse_file_map(get_option("impacted_map") or []),
             pythonpath=_pythonpath(config),
             ignore_type_checking_imports=bool(get_option("impacted_ignore_type_checking_imports")),
+            backend=get_option("impacted_backend"),
         )
     except _git().GitError as err:  # validate_config asked first; git may still refuse later (a ref deleted since)
         # Under pytest-xdist the controller's _handoff warns of it and each worker raises it again: rare enough,
@@ -549,14 +555,10 @@ def validate_config(config: Config):
         raise UsageError("No module specified. Please specify a module using --impacted-module.")
     if not get_option("impacted_git_mode"):
         raise UsageError("No git mode specified. Please specify a git mode using --impacted-git-mode.")
-    if (git_mode := get_option("impacted_git_mode")) not in list(GitMode):
-        # ``choices`` guards the command line only; the setting would reach the analysis and crash it.
-        choices = ", ".join(f"'{mode}'" for mode in GitMode)
-        raise UsageError(f"Invalid impacted_git_mode value {git_mode!r}: expected one of {choices}.")
-    unimpacted = get_option("impacted_unimpacted")
-    if unimpacted not in list(Unimpacted):
-        choices = ", ".join(f"'{action}'" for action in Unimpacted)
-        raise UsageError(f"Invalid impacted_unimpacted value {unimpacted!r}: expected one of {choices}.")
+    for option in OPTIONS:  # ``choices`` guards the command line only; a setting would reach the analysis and crash it
+        if option.kind is Kind.CHOICE and (value := get_option(option.setting)) not in option.choices:
+            choices = ", ".join(f"'{choice}'" for choice in option.choices)
+            raise UsageError(f"Invalid {option.setting} value {value!r}: expected one of {choices}.")
 
     try:
         _file_map().parse_file_map(get_option("impacted_map") or [])

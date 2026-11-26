@@ -10,7 +10,7 @@ import textwrap
 
 import pytest
 
-from pytest_impacted import _rust, graph
+from pytest_impacted import _rust, graph, parsing
 
 from .git_helpers import write_files
 
@@ -208,4 +208,4 @@ def test_a_source_declaring_a_codec_it_cannot_be_read_with_imports_nothing(tmp_p
     """A cookie naming a codec that fails, or none Python knows: unreadable, logged — never a failed run."""
     (tmp_path / "odd.py").write_bytes(f"# -*- coding: {codec} -*-\nimport os  # \xe9\n".encode("latin-1"))
 
-    assert graph.parse_file_imports(str(tmp_path / "odd.py"), "app.odd") == []
+    assert parsing.parse_file_imports(str(tmp_path / "odd.py"), "app.odd") == []

@@ -189,6 +189,7 @@ def _run(
     conftest_imports,
     ignore_type_checking_imports,
     disable_ext,
+    backend,
     **ext_kwargs,
 ) -> None:
     click.echo("impacted-tests", err=True)
@@ -209,6 +210,8 @@ def _run(
         click.secho("  conftest-imports: True", fg="blue", bold=True, err=True)
     if ignore_type_checking_imports:
         click.secho("  ignore-type-checking-imports: True", fg="blue", bold=True, err=True)
+    if backend != "auto":
+        click.secho(f"  backend: {backend}", fg="blue", bold=True, err=True)
     if outdated := outdated_for(ignore_type_checking_imports):
         click.secho(f"  warning: {outdated}", fg="yellow", bold=True, err=True)
     try:
@@ -265,6 +268,7 @@ def _run(
             file_map=mappings,
             pythonpath=pythonpath,
             ignore_type_checking_imports=ignore_type_checking_imports,
+            backend=backend,
         )
     except GitUnavailableError as err:
         # Printing nothing would read as "no tests impacted" to a script piping

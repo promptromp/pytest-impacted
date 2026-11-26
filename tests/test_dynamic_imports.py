@@ -7,7 +7,7 @@ import warnings
 
 import pytest
 
-from pytest_impacted import _rust, graph
+from pytest_impacted import _rust, backends, graph
 from pytest_impacted.dynamic_imports import LOADERS, TABLE, DynamicImports, Names, parse_dynamic_imports
 
 
@@ -17,7 +17,7 @@ def engine(by_name_backend):
     DynamicImports``. The Rust one leaves to the stdlib pass what it cannot read, as in the graph."""
 
     def parse(file_path, module_name):
-        return graph._parse_all_dynamic_imports({module_name: file_path})[module_name]
+        return graph._parse_all_dynamic_imports({module_name: file_path}, backends.backend_for())[module_name]
 
     return parse
 
@@ -372,7 +372,7 @@ def test_a_table_the_extension_refuses_is_the_stdlib_pass_s(tmp_path, monkeypatc
     monkeypatch.setattr(_rust, "rust_parse_all_dynamic_imports", refuse)
     (tmp_path / "loader.py").write_text("import importlib\nimportlib.import_module('app.target')\n")
 
-    found_ = graph._parse_all_dynamic_imports({"app.loader": str(tmp_path / "loader.py")})
+    found_ = graph._parse_all_dynamic_imports({"app.loader": str(tmp_path / "loader.py")}, backends.backend_for())
 
     assert found_ == {"app.loader": found(modules=["app.target"])}
 
@@ -413,7 +413,7 @@ def test_the_extension_leaves_to_the_stdlib_pass_what_it_cannot_read(tmp_path, s
     stdlib = parse_dynamic_imports(path, "app.loader")
 
     assert rust_reads(path) is None
-    assert graph._parse_all_dynamic_imports({"app.loader": path})["app.loader"] == stdlib
+    assert graph._parse_all_dynamic_imports({"app.loader": path}, backends.backend_for())["app.loader"] == stdlib
     assert by_the_stdlib is None or stdlib == by_the_stdlib
 
 

@@ -41,6 +41,7 @@ CLI_OPTION_DESTS = {
     "impacted_conftest_imports",
     "impacted_ignore_type_checking_imports",
     "impacted_unimpacted",
+    "impacted_backend",
     "impacted_disable_ext",
 }
 
@@ -108,16 +109,17 @@ OUTDATED = (
 
 
 @pytest.mark.parametrize(
-    ("available", "accepts", "ignore", "backend", "warning"),
+    ("available", "accepts", "ignore", "asked", "backend", "warning"),
     [
-        pytest.param(True, True, True, "rust (ruff parser + rayon)", False, id="rust"),
-        pytest.param(True, False, False, "rust (ruff parser + rayon)", False, id="older_rust_option_off"),
-        pytest.param(True, False, True, "python (ast)", True, id="older_rust_option_on"),
-        pytest.param(False, False, True, "python (ast)", False, id="no_rust"),
+        pytest.param(True, True, True, "auto", "rust (ruff parser + rayon)", False, id="rust"),
+        pytest.param(True, False, False, "auto", "rust (ruff parser + rayon)", False, id="older_rust_option_off"),
+        pytest.param(True, False, True, "auto", "python (ast)", True, id="older_rust_option_on"),
+        pytest.param(False, False, True, "auto", "python (ast)", False, id="no_rust"),
+        pytest.param(True, True, True, "python", "python (ast)", False, id="python_asked_for"),
     ],
 )
 def test_the_header_names_the_parser_the_options_leave(
-    pytestconfig, monkeypatch, available, accepts, ignore, backend, warning
+    pytestconfig, monkeypatch, available, accepts, ignore, asked, backend, warning
 ):
     """An installed pytest-impacted-rs older than the option leaves the parsing to Python, several times slower
     on a large project: the header warns, as it does when git is missing (the controller writes it)."""
@@ -125,6 +127,7 @@ def test_the_header_names_the_parser_the_options_leave(
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", accepts)
     monkeypatch.setattr(pytestconfig.option, "impacted", True)
     monkeypatch.setattr(pytestconfig.option, "impacted_ignore_type_checking_imports", ignore)
+    monkeypatch.setattr(pytestconfig.option, "impacted_backend", asked)
 
     header = pytest_report_header(pytestconfig)
 

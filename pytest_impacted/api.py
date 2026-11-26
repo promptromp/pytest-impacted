@@ -175,6 +175,7 @@ def get_impacted_tests(
     file_map: Sequence[tuple[str, str]] = (),
     pythonpath: str | Path | Sequence[str | Path] = (),
     ignore_type_checking_imports: bool = False,
+    backend: str = "auto",
 ) -> list[str] | None:
     """Get the list of impacted tests based on the git state and static analysis.
 
@@ -189,7 +190,8 @@ def get_impacted_tests(
     the pytest configuration here: pass ``config.getini("pythonpath")`` (before pytest 8.4 it raises
     ``ValueError`` under ``-p no:python_path``: no entries then), or
     ``find_pytest_config(root).paths("pythonpath")`` from :mod:`pytest_impacted.ini`, or bare
-    imports of the modules in those directories match nothing. ``ignore_type_checking_imports``
+    imports of the modules in those directories match nothing. ``backend`` picks the parser (``auto`` or ``python``,
+    see :mod:`~pytest_impacted.backends`): the same imports either way. ``ignore_type_checking_imports``
     leaves application code's type-only imports out of the graph: those under ``if TYPE_CHECKING:`` whose
     names only annotations use (see :mod:`pytest_impacted.type_only`); test code and package ``__init__.py``
     files keep theirs. It shapes the graph, not the pipeline, so it holds with an explicit ``strategy`` too.
@@ -253,6 +255,7 @@ def get_impacted_tests(
         root_dir=canonical_root(root_dir),
         pythonpath=pythonpath,
         ignore_type_checking_imports=ignore_type_checking_imports,
+        backend=backend,
     )
     dep_tree = run_copy(cached)
 

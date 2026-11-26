@@ -10,18 +10,16 @@ from typing import NamedTuple
 
 import networkx as nx
 
-from pytest_impacted import _rust
-from pytest_impacted.dynamic_imports import TABLE, DynamicImports, parse_dynamic_imports
+from pytest_impacted.backends import Backend, Source, backend_for
+from pytest_impacted.dynamic_imports import DynamicImports
 from pytest_impacted.parsing import (
     is_conftest_module,
     is_package_file,
     is_test_module,
     parse_all_names,
-    parse_file_imports,
     parse_pytest_plugins,
     pytest_plugins_in,
     read_source,
-    split_file_imports,
     star_imports_in,
 )
 from pytest_impacted.traversal import (
@@ -49,82 +47,23 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_all_module_imports(
-    submodules: dict[str, str], ignore_type_checking_imports: bool = False
+    submodules: dict[str, str], backend: Backend, ignore_type_checking_imports: bool = False
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Parse imports for all discovered submodules (see :func:`_parse_imports`).
+    """The runtime and the type-only import candidates of each ``{name: path}``, read by *backend*.
 
-    A conftest with no free name is keyed by its last resort (see
-    :func:`~pytest_impacted.traversal.discover_ancestor_conftests`), which is no base
-    for its relative imports, so it is parsed under its
-    :func:`~pytest_impacted.traversal.import_base`. That name may belong to another
-    module, so it is parsed apart.
+    Every candidate is a runtime one unless *ignore_type_checking_imports* asks for the type-only ones (see
+    :mod:`~pytest_impacted.type_only`). A conftest with no free name (``.mysite.conftest``) is read under its
+    :func:`~pytest_impacted.traversal.import_base`, so its relative imports resolve as the file's name implies.
     """
-    parse = partial(_parse_imports, ignore_type_checking_imports=ignore_type_checking_imports)
-    bases = {import_base(name): name for name in submodules if name.startswith(LAST_RESORT_PREFIX)}
-    if not bases:
-        return parse(submodules)
-    runtime, type_only = parse(
-        {name: path for name, path in submodules.items() if not name.startswith(LAST_RESORT_PREFIX)}
-    )
-    based_runtime, based_type_only = parse({base: submodules[name] for base, name in bases.items()})
-    return (
-        runtime | {bases[base]: imports for base, imports in based_runtime.items()},
-        type_only | {bases[base]: imports for base, imports in based_type_only.items()},
-    )
+    found = backend.imports(_sources(submodules), find_type_only=ignore_type_checking_imports)
+    runtime = {name: split[0] for name, split in zip(submodules, found, strict=True) if split is not None}
+    typed = {name: split[1] for name, split in zip(submodules, found, strict=True) if split is not None}
+    return runtime, typed if ignore_type_checking_imports else {}
 
 
-def _parse_imports(
-    submodules: dict[str, str], ignore_type_checking_imports: bool = False
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """The runtime and the type-only import candidates of each ``{name: path}``, relative imports resolved from *name*.
-
-    Every candidate is a runtime one unless *ignore_type_checking_imports* asks for the type-only ones
-    (see :func:`~pytest_impacted.parsing.split_file_imports`). Uses the Rust extension (parallel batch via
-    rayon) when available and new enough for the options (:func:`~pytest_impacted._rust.uses_rust`), but for a
-    file it cannot be handed (:func:`~pytest_impacted._rust.takes`); sequential Python parsing reads the rest.
-    """
-    if not _rust.uses_rust(ignore_type_checking_imports):
-        return _parse_imports_in_python(submodules, ignore_type_checking_imports)
-    taken = {name: path for name, path in submodules.items() if _rust.takes(path, name)}
-    runtime, type_only = _parse_imports_in_rust(taken, ignore_type_checking_imports)
-    # What the extension could not be handed, or handed back (a file ruff rejects: never fewer imports than Python).
-    if rest := {name: path for name, path in submodules.items() if name not in runtime}:
-        rest_runtime, rest_type_only = _parse_imports_in_python(rest, ignore_type_checking_imports)
-        runtime |= rest_runtime
-        type_only |= rest_type_only
-    return runtime, type_only
-
-
-def _parse_imports_in_rust(
-    submodules: dict[str, str], ignore_type_checking_imports: bool
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """What the extension parses of *submodules*; a module it hands back (``None``, see
-    :data:`~pytest_impacted._rust.RUST_PARSES_EACH`) is in neither dict, for Python to read."""
-    modules_info = [(path, name, is_package_file(path)) for name, path in submodules.items()]
-    if _rust.RUST_PARSES_EACH:
-        each = _rust.rust_parse_imports_each(modules_info, ignore_type_checking_imports)
-        parsed = {name: split for (_, name, _), split in zip(modules_info, each, strict=True) if split is not None}
-        typed = {name: split[1] for name, split in parsed.items()} if ignore_type_checking_imports else {}
-        return {name: split[0] for name, split in parsed.items()}, typed
-    if not ignore_type_checking_imports:
-        return _rust.rust_parse_all_imports(modules_info), {}
-    split = _rust.rust_parse_all_imports_split(modules_info)
-    return {name: found for name, (found, _) in split.items()}, {name: typed for name, (_, typed) in split.items()}
-
-
-def _parse_imports_in_python(
-    submodules: dict[str, str], ignore_type_checking_imports: bool
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    runtime: dict[str, list[str]] = {}
-    type_only: dict[str, list[str]] = {}
-    for name, file_path in submodules.items():
-        logger.debug("Processing submodule: %s", name)
-        is_pkg = is_package_file(file_path)
-        if ignore_type_checking_imports:
-            runtime[name], type_only[name] = split_file_imports(file_path, name, is_package=is_pkg)
-        else:
-            runtime[name] = parse_file_imports(file_path, name, is_package=is_pkg)
-    return runtime, type_only
+def _sources(submodules: dict[str, str]) -> list[Source]:
+    """What a backend reads of each ``{name: path}``: the file, the name its relative imports resolve from."""
+    return [Source(path, import_base(name), is_package_file(path)) for name, path in submodules.items()]
 
 
 def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
@@ -803,7 +742,10 @@ def _pytest_plugin_edges(linker: _Linker, declarations) -> dict[str, list[str]]:
 
 
 def _parse_project(
-    linker: _Linker, ignore_type_checking_imports: bool = False, narrowed: frozenset[str] = frozenset()
+    linker: _Linker,
+    backend: Backend,
+    ignore_type_checking_imports: bool = False,
+    narrowed: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """The import candidates of every module, and the ``pytest_plugins`` edges.
 
@@ -817,7 +759,9 @@ def _parse_project(
     declared: dict[str, list[str]] = {}
     declarations = cache(lambda path: declared[path] if path in declared else parse_pytest_plugins(path))
     exported = cache(parse_all_names)
-    parse = partial(_parse_by_role, ignore_type_checking_imports=ignore_type_checking_imports, narrowed=narrowed)
+    parse = partial(
+        _parse_by_role, backend=backend, ignore_type_checking_imports=ignore_type_checking_imports, narrowed=narrowed
+    )
     pending = dict(linker.modules)
     imports, type_only = parse(pending)
     # What the walked modules import is the evidence for which assumed roots are on sys.path — a type-only
@@ -827,7 +771,7 @@ def _parse_project(
     )
     while True:
         imports |= parse({name: path for name, path in pending.items() if name not in imports})[0]
-        by_name = _parse_all_dynamic_imports(pending)
+        by_name = _parse_all_dynamic_imports(pending, backend)
         for name, path in pending.items():
             # Once each, as the roots are settled: where an object's module ends is found through them.
             source = read_source(path)
@@ -880,44 +824,11 @@ def _imports_by_name(linker: _Linker, found: DynamicImports) -> list[str]:
     ]
 
 
-def _parse_all_dynamic_imports(submodules: dict[str, str]) -> dict[str, DynamicImports]:
-    """What each module of ``{name: path}`` imports by name (see :mod:`~pytest_impacted.dynamic_imports`).
-
-    The Rust extension finds it in parallel when it can (``_rust.RUST_PARSES_DYNAMIC_IMPORTS``), from the same
-    table, else the stdlib ``ast`` pass does, file by file. The pass also reads each file the extension leaves to
-    it, so the extension never finds less. A conftest with no free name is parsed under its
-    :func:`~pytest_impacted.traversal.import_base`, as for its import statements.
-    """
-    modules = [(path, import_base(name), is_package_file(path)) for name, path in submodules.items()]
-    by_rust = _rust_dynamic_imports(modules) if _rust.RUST_PARSES_DYNAMIC_IMPORTS else [None] * len(modules)
-    # A file the extension leaves (None: ruff rejects it, or it nests too deep) is the stdlib pass's.
-    found = [
-        parse_dynamic_imports(*module) if lists is None else DynamicImports(*lists)
-        for module, lists in zip(modules, by_rust, strict=True)
-    ]
-    return dict(zip(submodules, found, strict=True))
-
-
-def _rust_dynamic_imports(modules: list[tuple[str, str, bool]]) -> list[tuple[list[str], list[str], list[str]] | None]:
-    """What the extension finds in each of *modules*: ``None`` for one it cannot be handed (see
-    :func:`~pytest_impacted._rust.takes`), and for all if it cannot read the table.
-
-    The ``fast`` extra is unpinned, so an older extension may meet a table it predates: a kind of name it does not
-    know is a ValueError, a row of another shape a TypeError, a number out of its range an OverflowError. Those are
-    its to refuse, never a failed run.
-    """
-    taken = [_rust.takes(path, name) for path, name, _ in modules]  # a non-UTF-8 file name: the stdlib pass's
-    try:
-        read = iter(
-            _rust.rust_parse_all_dynamic_imports([m for m, take in zip(modules, taken, strict=True) if take], TABLE)
-        )
-    except UnicodeEncodeError:  # a ValueError too: a string ``takes`` should have kept back
-        logger.debug("pytest-impacted-rs was handed a string that is not UTF-8; the stdlib pass finds imports by name")
-        return [None] * len(modules)
-    except (TypeError, ValueError, OverflowError):
-        logger.debug("pytest-impacted-rs cannot read the loader table; the stdlib pass finds the imports by name")
-        return [None] * len(modules)
-    return [next(read) if take else None for take in taken]
+def _parse_all_dynamic_imports(submodules: dict[str, str], backend: Backend) -> dict[str, DynamicImports]:
+    """What each module of ``{name: path}`` imports by name (see :mod:`~pytest_impacted.dynamic_imports`), read
+    by *backend*; a file every backend leaves out (none does: the Python one reads all) imports nothing."""
+    found = backend.imports_by_name(_sources(submodules))
+    return {name: lists or DynamicImports([], [], []) for name, lists in zip(submodules, found, strict=True)}
 
 
 def _import_of(linker: _Linker, object_path: str, *, attribute: bool = False) -> list[str]:
@@ -939,12 +850,12 @@ def _import_of(linker: _Linker, object_path: str, *, attribute: bool = False) ->
 
 
 def _parse_by_role(
-    submodules: dict[str, str], ignore_type_checking_imports: bool, narrowed: frozenset[str]
+    submodules: dict[str, str], backend: Backend, ignore_type_checking_imports: bool, narrowed: frozenset[str]
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """:func:`_parse_all_module_imports`, each module's type-only candidates folded back into its runtime ones
     unless its file is one the option narrows (one of *narrowed*, see :func:`_narrowed_files`).
     """
-    runtime, type_only = _parse_all_module_imports(submodules, ignore_type_checking_imports)
+    runtime, type_only = _parse_all_module_imports(submodules, backend, ignore_type_checking_imports)
     for name, typed in type_only.items():
         if typed and submodules[name] not in narrowed:
             runtime[name] = sorted({*runtime[name], *typed})
@@ -1012,6 +923,7 @@ def build_dep_tree(
     root_dir: str | Path | None = None,
     pythonpath: str | Path | Iterable[str | Path] = (),
     ignore_type_checking_imports: bool = False,
+    backend: str | Backend = "auto",
 ) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
@@ -1066,7 +978,8 @@ def build_dep_tree(
 
     # Only application code loses its type-only imports, and not a package's __init__.py (see _narrowed_files).
     narrowed = _narrowed_files(package, tests_package, root) if ignore_type_checking_imports else frozenset()
-    imports, plugin_edges = _parse_project(linker, ignore_type_checking_imports, narrowed)
+    parser = backend_for(ignore_type_checking_imports, backend) if isinstance(backend, str) else backend
+    imports, plugin_edges = _parse_project(linker, parser, ignore_type_checking_imports, narrowed)
 
     digraph = nx.DiGraph()
     unresolved: dict[str, set[str]] = {}
