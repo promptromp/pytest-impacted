@@ -14,9 +14,9 @@ from pytest_impacted.modes import GitMode  # re-exported: pytest_impacted.git.Gi
 logger = logging.getLogger(__name__)
 
 # GitPython raises ImportError when the **git executable** is missing, not just
-# when the package is absent — a real situation in slim containers. This module
-# is reached from the pytest11 entry point on every pytest run, so an unguarded
-# import would break pytest itself for those users. Postponed annotations above
+# when the package is absent — a real situation in slim containers. The plugin
+# loads this module lazily (with --impacted), but an unguarded import would still
+# fail every run that asks, and every API user's import. Postponed annotations above
 # are what let the module finish importing with ``Repo`` unbound. Only a debug
 # log here: this runs even without --impacted, and a run that needs git reports
 # the problem itself (see GitUnavailableError).

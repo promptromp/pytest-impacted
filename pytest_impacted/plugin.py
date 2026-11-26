@@ -1,6 +1,8 @@
 import importlib
 import os
 import re
+import sys
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -25,8 +27,21 @@ from pytest_impacted.modes import GitMode
 
 
 def _lazily(name: str) -> Callable[[], ModuleType]:
-    """A module, imported at the first call, never at the import of this one."""
-    return lambda: importlib.import_module(name)
+    """A module, imported at the first call, never at the import of this one — with every warning silenced.
+
+    The first call comes inside a pytest hook, where the user's filters apply: under ``filterwarnings = error`` a
+    warning networkx, astroid or GitPython gave while loading would fail the run, which loading them with the
+    entry point, before any filter applied, never did.
+    """
+
+    def module() -> ModuleType:
+        if name not in sys.modules:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                importlib.import_module(name)
+        return sys.modules[name]
+
+    return module
 
 
 # The analysis and what it needs (networkx, astroid, GitPython, which runs ``git version`` as it loads) load only
@@ -611,10 +626,11 @@ def _unjudged_items(items: list[pytest.Item], analysed: list[Path], root: Path) 
     resolved, or through a symlink under one that stays inside the project (*root*), as the walks follow links.
     """
     resolved: dict[Path, bool] = {}
+    real_path = _traversal().real_path
 
     def outside(path: Path) -> bool:
         if path not in resolved:
-            real, spelled = _traversal().real_path(path), Path(os.path.abspath(path))
+            real, spelled = real_path(path), Path(os.path.abspath(path))
             judged = any(real.is_relative_to(d) for d in analysed) or (
                 real.is_relative_to(root) and any(spelled.is_relative_to(d) for d in analysed)
             )
@@ -692,12 +708,13 @@ def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_di
     items from non-Python files (a ``--doctest-glob`` text file, a YAML collector)
     and doctests (``--doctest-modules`` collects them from source modules too).
     """
-    impacted = {_traversal().real_path(root_dir / test) for test in impacted_tests}
+    traversal, api = _traversal(), _api()
+    impacted = {traversal.real_path(root_dir / test) for test in impacted_tests}
     resolved: dict[Path, Path] = {}
 
     def is_impacted(path: Path) -> bool:
         if path not in resolved:
-            resolved[path] = _traversal().real_path(path)
+            resolved[path] = traversal.real_path(path)
         return resolved[path] in impacted
 
     return {
@@ -707,7 +724,7 @@ def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_di
         or isinstance(item, DoctestItem)
         or is_impacted(item.path)
         or is_impacted(root_dir / item.location[0])
-        or _api().matches_impacted_tests(item.location[0], impacted_tests=impacted_tests)
+        or api.matches_impacted_tests(item.location[0], impacted_tests=impacted_tests)
     }
 
 
