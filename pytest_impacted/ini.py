@@ -71,7 +71,10 @@ class PytestConfig:
             if not all(isinstance(item, str) for item in value):
                 raise ValueError(f"{name} in {self.path}: expected a list of strings, got {value!r}")
             return value
-        return shlex.split(str(value))
+        try:
+            return shlex.split(str(value))
+        except ValueError as err:  # an unbalanced quote; pytest refuses it too
+            raise ValueError(f"{name} in {self.path}: {err}") from err
 
     def paths(self, name: str) -> list[Path]:
         """A ``paths`` setting, such as ``pythonpath``: read as ``args``, relative to the file's directory.
@@ -96,10 +99,14 @@ def dash_p_plugins(config: PytestConfig, environ: Mapping[str, str] = os.environ
     """The ``-p`` arguments pytest reads before a command line: ``addopts``, then ``PYTEST_ADDOPTS``.
 
     Spelled ``-p name`` or ``-pname``, as pytest's ``consider_preparse`` reads them when it loads plugins; a
-    ``no:name`` entry is kept (it disables a plugin, for the caller to leave out). Raises ValueError for an
-    ``addopts`` of the wrong type, naming it and the file.
+    ``no:name`` entry is kept (it disables a plugin, for the caller to leave out). Raises ValueError, naming where,
+    for an ``addopts`` of the wrong type or either with an unbalanced quote.
     """
-    args = [*(config.args("addopts") or []), *shlex.split(environ.get("PYTEST_ADDOPTS", ""))]
+    try:
+        from_environment = shlex.split(environ.get("PYTEST_ADDOPTS", ""))
+    except ValueError as err:  # an unbalanced quote; pytest refuses it too
+        raise ValueError(f"PYTEST_ADDOPTS: {err}") from err
+    args = [*(config.args("addopts") or []), *from_environment]
     plugins, following = [], iter(args)
     for arg in following:
         if arg == "-p":

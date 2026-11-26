@@ -517,3 +517,24 @@ def test_an_edit_to_a_plugin_loaded_with_dash_p_selects_every_test(
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [str((project.path / test).resolve()) for test in selected]
+
+
+@pytest.mark.parametrize(
+    ("addopts", "environment", "named"),
+    [
+        pytest.param('-k "foo', "", "addopts in ", id="addopts"),
+        pytest.param("", '-k "foo', "PYTEST_ADDOPTS: ", id="PYTEST_ADDOPTS"),
+    ],
+)
+def test_an_unbalanced_quote_where_dash_p_is_read_is_a_usage_error_naming_it(
+    calls, monkeypatch, addopts, environment, named
+):
+    """pytest refuses it too; the CLI says where it is, without a traceback."""
+    monkeypatch.setenv("PYTEST_ADDOPTS", environment)
+    write_config("[pytest]\nimpacted_module = app\n" + (f"addopts = {addopts}\n" if addopts else ""))
+
+    result = invoke()
+
+    assert result.exit_code == 2, result.output
+    assert f"{named}" in result.output and "No closing quotation" in result.output
+    assert "Traceback" not in result.output

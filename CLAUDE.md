@@ -294,8 +294,9 @@ conftest, test module or (transitively) plugin as an import by the declarer (so 
 declarer*) and flags targets with the `pytest_plugin` node attribute. `PytestImpactStrategy` marks *every* test
 impacted when a change reaches one, or a `-p` / `PYTEST_PLUGINS` plugin (`_session_wide_changes`): pytest
 registers plugins session-wide. Without a session the CLI reads `-p` where pytest does before a command line
-(`ini.dash_p_plugins`: `addopts`, `PYTEST_ADDOPTS`), handed in as `PytestImpactStrategy(plugins=)`. Editing a mere *declarer* is deliberately not session-wide (it over-selected every
-test module with `pytest_plugins = "pytester"`, and cannot see a removed declaration anyway).
+(`ini.dash_p_plugins`: `addopts`, `PYTEST_ADDOPTS`), handed in as `PytestImpactStrategy(plugins=)`. Editing a
+mere *declarer* is deliberately not session-wide (it over-selected every test module with
+`pytest_plugins = "pytester"`, and cannot see a removed declaration anyway).
 `parse_pytest_plugins` uses stdlib `ast` outside the backend (so it cannot break parity), behind a text pre-filter,
 warnings silenced so `-W error` cannot turn a `SyntaxWarning` into a lost declaration (`_quiet_parse` does the same
 for imports). `read_source` and `is_conftest_module` are the shared reader and conftest check — don't
