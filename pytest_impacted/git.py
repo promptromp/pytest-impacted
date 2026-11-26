@@ -327,9 +327,12 @@ def _name_status_diff(repo: Repo, *args: str) -> ChangeSet:
 
     Every diff in this module goes through here so the flags cannot drift
     between call sites. *args* follow the flags, so revisions produced by
-    :func:`rev_args` keep their ``--end-of-options`` guard in front of them.
+    :func:`rev_args` keep their ``--end-of-options`` guard in front of them,
+    and a ``--`` ends them: ``--end-of-options`` stops option parsing but not git's
+    revision-or-path guess, so a branch named like a file or directory (``docs``)
+    was "ambiguous" and fatal.
     """
-    return ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS, *args))
+    return ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS, *args, "--"))
 
 
 def _impactful_paths(change_set: ChangeSet) -> list[str]:
@@ -380,13 +383,9 @@ def impacted_files_for_branch_mode(
     is told why (by default it is only logged).
     """
 
-    try:
-        current_ref = repo.head.reference
-    except TypeError:
-        # Detached HEAD state (common in CI) — fall back to HEAD commit
-        current_ref = repo.head.commit
-
-    starts = _merge_bases(repo, base_branch, current_ref) if use_merge_base else [base_branch]
+    # HEAD, never the branch's short name: git resolves ``release`` to a tag of that name before the branch.
+    # (The base stays as the user spelled it: a tag sharing its name would only widen the diff.)
+    starts = _merge_bases(repo, base_branch) if use_merge_base else [base_branch]
     if not starts:
         cause = (
             "the clone is shallow — fetch more history, e.g. fetch-depth: 0"
@@ -398,14 +397,12 @@ def impacted_files_for_branch_mode(
             "instead, which may also select tests for its newer commits."
         )
         starts = [base_branch]
-    paths = {
-        path for start in starts for path in _impactful_paths(_name_status_diff(repo, *rev_args(start, current_ref)))
-    }
+    paths = {path for start in starts for path in _impactful_paths(_name_status_diff(repo, *rev_args(start, "HEAD")))}
     return sorted(paths)
 
 
-def _merge_bases(repo: Repo, base_branch: str, current_ref: object) -> list[str]:
-    """Every commit *current_ref* forked from *base_branch* at — usually one; none if unrelated.
+def _merge_bases(repo: Repo, base_branch: str) -> list[str]:
+    """Every commit HEAD forked from *base_branch* at — usually one; none if unrelated.
 
     ``--all``: with criss-cross merges there are several best common ancestors,
     and diffing from just one can miss a file that differs from another.
@@ -414,7 +411,7 @@ def _merge_bases(repo: Repo, base_branch: str, current_ref: object) -> list[str]
     a real error and propagates.
     """
     try:
-        return repo.git.merge_base("--all", *rev_args(base_branch, current_ref)).split()
+        return repo.git.merge_base("--all", *rev_args(base_branch, "HEAD")).split()
     except GitCommandError as err:
         if err.status == 1:
             return []
