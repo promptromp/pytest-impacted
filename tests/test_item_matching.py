@@ -287,3 +287,46 @@ def test_the_spellings_the_settings_accept_judge_the_tests_they_name(make_git_pr
 
     result.assert_outcomes(passed=1, deselected=1)
     assert "outside --impacted-module" not in result.stdout.str()
+
+
+UNNAMED = "pytest-impacted: 1 test in files no analysis names as test modules ran*"
+
+
+@pytest.mark.parametrize("workers", [[], ["-n", "2"]], ids=["serial", "xdist"])
+def test_a_test_a_python_files_pattern_collects_runs_unjudged(make_git_project, workers):
+    """``check_db.py`` is a module of the tests dir, not a test module by name: no analysis selects or leaves it out.
+    It was deselected on every run; it runs, and the summary says why (under xdist too: the controller hands the
+    workers the test files the walks name)."""
+    if workers:
+        pytest.importorskip("xdist")
+    files = {**TWO_TEST_DIRS, "suite/check_db.py": "def test_db():\n    assert True\n"}
+    files = {name: code for name, code in files.items() if not name.startswith("integration/")}
+    project = make_git_project(files, INI + "python_files = test_*.py check_*.py\n")
+    edit_file(project, "app/b.py")
+
+    result = run(project, *workers)
+
+    result.assert_outcomes(passed=2, deselected=0 if workers else 1)  # xdist's summary leaves deselection out
+    result.stdout.fnmatch_lines_random(
+        ["*test_b.py::test_b*", "*check_db.py::test_db*", "pytest-impacted: 1 test not impacted*", UNNAMED]
+    )
+    result.stdout.no_fnmatch_line("*test_a.py::test_a*")
+
+
+def test_a_test_in_a_directory_no_walk_enters_runs_unjudged(make_git_project):
+    """``app/my-dir`` is no identifier, so no walk names what is in it; pytest collects it all the same."""
+    files = {
+        "app/__init__.py": "",
+        "app/a.py": "def a():\n    return 1\n",
+        "app/my-dir/test_x.py": "def test_x():\n    assert True\n",
+        "app/tests/__init__.py": "",
+        "app/tests/test_a.py": "from app.a import a\n\ndef test_a():\n    assert a() == 1\n",
+        "README.md": "# app\n",
+    }
+    project = make_git_project(files, "[pytest]\npythonpath = .\nimpacted_module = app\n")
+    edit_file(project, "README.md")
+
+    result = run(project)
+
+    result.assert_outcomes(passed=1, deselected=1)
+    result.stdout.fnmatch_lines(["*my-dir/test_x.py::test_x PASSED*", UNNAMED])
