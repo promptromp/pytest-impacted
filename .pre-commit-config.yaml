@@ -73,9 +73,16 @@ repos:
     language: system
     types: [rust]
     pass_filenames: false
+  # Dogfoods the plugin: only the tests the staged change impacts (unstaged mode sees the index too), on every
+  # core, with the module and tests dir from pyproject.toml. Except when the change is to the plugin itself or
+  # the Rust backend: then the code deciding what to run is the code under test, and every test runs.
+  # Dependency files (pyproject.toml, uv.lock) run every test through the plugin's own rule. CI runs the whole
+  # suite on every Python and backend regardless.
   - id: pytest
-    name: pytest [with coverage, without slow]
-    entry: bash -ec "uv run python -m pytest --cov=pytest_impacted --cov-branch tests -m 'not slow'"
+    name: pytest [impacted, xdist]
+    entry: >-
+      bash -ec "uv run python -m pytest -n auto -q --impacted --impacted-git-mode=unstaged
+      --impacted-invalidate-all 'pytest_impacted/**' --impacted-invalidate-all 'rust/**'"
     language: system
-    types: [python]
+    files: '\.py$|\.toml$|^uv\.lock$|^rust/'
     pass_filenames: false

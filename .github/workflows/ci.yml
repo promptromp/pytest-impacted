@@ -5,13 +5,12 @@ name: CI
 
 permissions:
   contents: read
-  pull-requests: write
 
 on:
   push:
     branches: [ "main" ]
+  # Every base, so a pull request stacked on another one is linted and tested too.
   pull_request:
-    branches: [ "main" ]
 
 jobs:
   lint:
@@ -91,7 +90,7 @@ jobs:
       if: matrix.backend == 'fast'
       run: uv sync --all-extras --dev
     - name: Run tests
-      run: uv run pytest
+      run: uv run pytest -n auto
     # The CLI's config reader (ini.py) follows the installed pytest behind version gates, and the
     # steps above run only the locked pytest: this reruns its tests under the older ones it supports.
     - name: Run the config tests under older pytest
