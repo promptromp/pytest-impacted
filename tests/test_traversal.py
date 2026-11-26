@@ -945,3 +945,27 @@ def test_the_tests_walk_follows_a_symlinked_directory_inside_the_project(tmp_pat
 
     assert set(found) == {"tests.test_plain", "tests.linked.test_shared"}
     assert found["tests.linked.test_shared"] == str((project / "shared_tests" / "test_shared.py").resolve())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_the_tests_walk_enters_each_directory_once_however_it_is_linked(tmp_path):
+    """Two directories linking to each other (twice each) were walked back and forth: dozens of names, or a hang."""
+    write_files(tmp_path, {"tests/a/test_a.py": "", "tests/b/test_b.py": "", "tests/node_modules/x.py": ""})
+    for link, target in (("a/p", "b"), ("a/q", "b"), ("b/r", "a"), ("b/s", "a")):
+        os.symlink(tmp_path / "tests" / target, tmp_path / "tests" / link, target_is_directory=True)
+    os.symlink(tmp_path / "tests" / "node_modules", tmp_path / "tests" / "a" / "node_modules", target_is_directory=True)
+
+    found = discover_submodules("tests", require_init=False, root_dir=tmp_path)
+
+    assert set(found) == {"tests.a.test_a", "tests.b.test_b", "tests.node_modules.x"}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_link_from_the_tests_dir_into_the_package_keeps_it_application_code(tmp_path):
+    """The tests walk follows it, but the files are the package's: test code would make a conftest rule opt-out."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/db.py": "", "tests/test_x.py": ""})
+    os.symlink(tmp_path / "app", tmp_path / "tests" / "app_src", target_is_directory=True)
+
+    found = discover_application_files("app", "tests", root_dir=tmp_path)
+
+    assert found == {str((tmp_path / rel).resolve()) for rel in ("app/__init__.py", "app/db.py")}

@@ -2895,4 +2895,3 @@ def test_a_test_file_the_tests_walk_reaches_twice_is_one_node(tmp_path):
 
     nodes = [node for node in dep_tree if str(node).endswith("test_x")]
     assert nodes == ["tests.real.test_x"]
-    assert dep_tree.graph["aliases"]["tests.alias.test_x"] == "tests.real.test_x"
