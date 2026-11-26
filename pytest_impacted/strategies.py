@@ -26,7 +26,7 @@ from pytest_impacted.graph import (
     resolve_impacted_tests,
 )
 from pytest_impacted.graph_keys import Graph, Node, may_hold_reach_only_edges, only_reaches
-from pytest_impacted.parsing import is_conftest_module, normalize_path
+from pytest_impacted.parsing import is_package_file, normalize_path
 from pytest_impacted.traversal import (
     canonical_root,
     clear_discovery_cache,
@@ -340,16 +340,22 @@ def _test_modules_under(directories: set[Path], dep_tree: nx.DiGraph, root_dir: 
     return sorted(nodes_under({real_path(directory) for directory in directories}, paths))
 
 
-def _conftest_dirs(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path) -> set[Path]:
-    """Directories of the conftests among *nodes*."""
-    return {
-        path.parent
-        for node in nodes
-        # The name is a cheap pre-filter; the file name decides, as for changed
-        # files, so a package named ``conftest`` is not one.
-        if isinstance(node, str) and is_conftest_module(node)
-        if (path := _module_path(node, dep_tree, root_dir)) is not None and path.name == "conftest.py"
-    }
+def _setup_files(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path, roles: _CodeRoles) -> set[Path]:
+    """The files among *nodes* that run before every test beneath them, which no test names.
+
+    Conftests, and test packages' ``__init__.py``: pytest's default import mode imports ``suite/db/test_x.py`` as
+    ``suite.db.test_x``, running ``suite/__init__.py`` and ``suite/db/__init__.py`` first. Not an application
+    package's: its imports reach the tests importing them (and a changed one, its whole package: ``package_members``),
+    or every import of the package would depend on all it imports.
+    """
+    files = set()
+    for node in nodes:
+        if not isinstance(node, str) or (path := _module_path(node, dep_tree, root_dir)) is None:
+            continue
+        # The file name decides, as for changed files, so a package named ``conftest`` is not one.
+        if path.name == "conftest.py" or (is_package_file(str(path)) and not roles.is_application_code(path)):
+            files.add(path)
+    return files
 
 
 def _changed_conftest_dirs(changed_files: list[str], root_dir: Path) -> set[Path]:
@@ -624,11 +630,12 @@ class PytestImpactStrategy(ImpactStrategy):
         if root_dir is not None:
             # Tests never import their conftest — pytest injects its fixtures — so a
             # conftest that changed, or imports changed test code, impacts its directory.
-            test_code = _changes_by_role(
-                impacted_modules, dep_tree, ns_module, tests_package, root_dir, application=False
-            )
+            # The same for a test package's __init__.py, which every test beneath it runs first.
+            roles = _CodeRoles(ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
+            test_code = _changes_by_role(impacted_modules, dep_tree, roles, root_dir, application=False)
             conftest_dirs = _changed_conftest_dirs(changed_files, root_dir)
-            conftest_dirs |= _conftest_dirs(reached_from(test_code, dep_tree), dep_tree, root_dir)
+            setup_files = _setup_files(reached_from(test_code, dep_tree), dep_tree, root_dir, roles)
+            conftest_dirs |= {path.parent for path in setup_files}
             impacted_tests += _tests_under_conftests(conftest_dirs, dep_tree, root_dir)
         return sorted(set(impacted_tests))
 
@@ -662,15 +669,17 @@ class ConftestImportImpactStrategy(ImpactStrategy):
         """Return the tests under every conftest the changed application code reaches."""
         if root_dir is None:
             return []
-        application = _changes_by_role(impacted_modules, dep_tree, ns_module, tests_package, root_dir, application=True)
-        conftest_dirs = _conftest_dirs(reached_from(application, dep_tree), dep_tree, root_dir)
+        roles = _CodeRoles(ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
+        application = _changes_by_role(impacted_modules, dep_tree, roles, root_dir, application=True)
+        setup_files = _setup_files(reached_from(application, dep_tree), dep_tree, root_dir, roles)
         if not self.report_only:
-            return _tests_under_conftests(conftest_dirs, dep_tree, root_dir)
-        if conftest_dirs:
-            conftests = sorted(_relative(directory / "conftest.py", root_dir) for directory in conftest_dirs)
+            return _tests_under_conftests({path.parent for path in setup_files}, dep_tree, root_dir)
+        if setup_files:
+            conftests = sorted(_relative(path, root_dir) for path in setup_files)
             notify(
                 f"Changed application code is imported by {conftests}. Tests beneath them that use it only "
-                + "through fixtures are not selected unless another rule selects them; pass "
+                + "through them (fixtures, a test package's __init__.py) are not selected unless another rule "
+                + "selects them; pass "
                 + "--impacted-conftest-imports (impacted-tests CLI: --conftest-imports) to select them all.",
                 session,
             )
@@ -680,8 +689,7 @@ class ConftestImportImpactStrategy(ImpactStrategy):
 def _changes_by_role(
     impacted_modules: list[str],
     dep_tree: nx.DiGraph,
-    ns_module: str,
-    tests_package: str | None,
+    roles: _CodeRoles,
     root_dir: Path,
     *,
     application: bool,
@@ -694,7 +702,6 @@ def _changes_by_role(
     (:func:`~pytest_impacted.traversal.split_import_roots`): that may be a coincidence of
     names, and test code is the side that is followed.
     """
-    roles = _CodeRoles(ns_module=ns_module, tests_package=tests_package, root_dir=root_dir)
 
     def is_application_file(module: str) -> bool:
         # A node without a file cannot be placed: it counts as test code, which is followed.
