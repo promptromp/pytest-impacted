@@ -249,8 +249,12 @@ than returning `None`, because `None` means "nothing changed" and skips every te
 plugin catches it and **fails open** (runs everything), the CLI exits non-zero. Never
 collapse "unknown" into "no changes". The notice is printed exactly once: by
 `pytest_report_header` when git was missing at import (the controller writes the header,
-so it survives pytest-xdist), otherwise by the analysis. Never via `warnings.warn`,
-which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path.
+so it survives pytest-xdist; under `-q` or `--no-header`, which leave the header out, by
+`pytest_terminal_summary` from the same `_header_warnings`), otherwise by the analysis. Never via `warnings.warn`,
+which `filterwarnings = error` turns into an INTERNALERROR on the fail-open path. git that runs and refuses (no
+repository, `dubious ownership`, an unknown revision) is `GitError` instead, git's own words in one line: a usage
+error, never failed open. `validate_config` asks first (`check_repository`: `rev-parse --git-dir`), because in a
+repository git refuses, `git diff --cached` only says "unknown option `cached`".
 
 **Branch mode diffs from the merge base**, not the base tip: `_merge_bases` runs
 `git merge-base --all` (through `rev_args`) and the result is the union of the diffs from

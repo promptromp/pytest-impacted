@@ -255,6 +255,36 @@ def enabled_extension_metadata(disabled: Sequence[str] = ()) -> list[ExtensionMe
     return [ext for ext in discover_extension_metadata() if ext.name not in disabled]
 
 
+def _settings(ext: ExtensionMetadata, config: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """*ext*'s settings from *config*, converted to their types, and the required ones it lacks.
+
+    Namespaced keys first (``impacted_ext_<ext>_<option>``), then raw option names. A value that will not
+    convert is a ValueError naming the extension, the option and the value.
+    """
+    settings: dict[str, Any] = {}
+    missing: list[str] = []
+    for opt in ext.config_options:
+        ini_name = get_ext_ini_name(ext.name, opt.name)
+        # Empty is unset, as for the plugin's own settings (``getoption(name) or getini(name)``).
+        given = [config[key] for key in (ini_name, opt.name) if config.get(key) not in (None, "")]
+        if given:
+            settings[opt.name] = _coerced(ext.name, opt, given[0])
+        elif opt.default is not None:
+            settings[opt.name] = opt.default
+        elif opt.required:
+            missing.append(opt.name)
+    return settings, missing
+
+
+def check_ext_config(*, disabled: Sequence[str] = (), ext_config: dict[str, Any] | None = None) -> None:
+    """Raise ValueError for the first setting of an enabled extension that will not convert to its type.
+
+    So a front end can refuse it up front, as a usage error, rather than fail mid-run building the strategies.
+    """
+    for ext in enabled_extension_metadata(disabled):
+        _settings(ext, ext_config or {})
+
+
 def load_extensions(
     *,
     disabled: Sequence[str] = (),
@@ -279,20 +309,7 @@ def load_extensions(
             logger.info("Extension '%s' is disabled by configuration.", ext.name)
             continue
 
-        # Extract config for this extension: try namespaced keys first, then raw names
-        ext_cfg: dict[str, Any] = {}
-        missing_required: list[str] = []
-        for opt in ext.config_options:
-            ini_name = get_ext_ini_name(ext.name, opt.name)
-            # Empty is unset, as for the plugin's own settings (``getoption(name) or getini(name)``).
-            given = [config[key] for key in (ini_name, opt.name) if config.get(key) not in (None, "")]
-            if given:
-                ext_cfg[opt.name] = _coerced(ext.name, opt, given[0])
-            elif opt.default is not None:
-                ext_cfg[opt.name] = opt.default
-            elif opt.required:
-                missing_required.append(opt.name)
-
+        ext_cfg, missing_required = _settings(ext, config)
         if missing_required:
             logger.warning(
                 "Extension '%s': missing required config option(s): %s. Skipping.",

@@ -40,7 +40,7 @@ Like `ns_module` and `tests_dir`, pytest's `pythonpath` is never read from the c
 
 Since 0.38.1, `invalidate_all_patterns` (and `InvalidationFileImpactStrategy`) raise a `ValueError` for a glob Python cannot match (empty, `.`, `./`) when the strategy is built, rather than mid-run. If your extension matches globs of its own with `pytest_impacted.strategies.matches_any_glob`, check them first with `glob_refusal(glob)` (the reason, or `None`) and spell them with `normalise_glob(glob)`, as the built-in options do.
 
-`get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run".
+`get_impacted_tests()` returns the impacted test files, or `None` when nothing is impacted. It raises `pytest_impacted.git.GitUnavailableError` when git cannot run, because then the changes are *unknown* — treat that as "run everything", never as "nothing to run". It raises `pytest_impacted.git.GitError` (since 0.40.3) when git runs but refuses — no repository, a bare one, a checkout another user owns, an unknown base branch — in git's own words on one line: a configuration error to report, not to fail open on.
 
 The strategy you pass **replaces** the default pipeline — the AST, conftest and dependency-file strategies included, and `watch_dep_files` / `invalidate_all_patterns` / `conftest_imports` then have no effect (`file_map` still does: its paths join `changed_files`, which every strategy receives). To add to the defaults instead, pass `CompositeImpactStrategy([*get_default_strategies(), MyCustomStrategy()])` (both from `pytest_impacted.strategies`).
 
@@ -445,7 +445,7 @@ The extension system is designed to be fault-tolerant:
 - **Instantiation errors**: If a strategy's `__init__` raises an exception, the extension is skipped.
 - **Invalid classes**: If an entry point resolves to a class without `find_impacted_tests`, it is skipped with a warning.
 - **Missing required options**: A `ConfigOption(required=True)` with no value skips the extension with a warning.
-- **Option values**: An empty setting (`impacted_ext_demo_threshold =`) is unset, so the option's default applies. One that does not convert to the option's `type` fails the run with an error naming the extension, the option and the value (a usage error in the `impacted-tests` CLI).
+- **Option values**: An empty setting (`impacted_ext_demo_threshold =`) is unset, so the option's default applies. One that does not convert to the option's `type` is a usage error naming the extension, the option and the value, in the plugin and the `impacted-tests` CLI alike.
 - **Lifecycle hooks**: Exceptions from `enrich_dep_tree`, `setup` or `teardown` are logged and that phase is skipped for the strategy; the others carry on.
 
 A failure to load an entry point (an import error, or an entry point that is not a strategy class) happens while pytest registers options, before it configures logging, so it is printed to stderr on every run (an import error with its traceback). The other warnings are log records on the `pytest_impacted.extensions` / `pytest_impacted.strategies` loggers emitted during collection, not shown in pytest's terminal output by default (use `--log-cli-level=WARNING` to see them).
