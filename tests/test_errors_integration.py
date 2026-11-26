@@ -171,3 +171,90 @@ def test_help_is_shown_whatever_the_settings_and_wherever_it_runs(pytester):
 
     assert result.ret == pytest.ExitCode.OK, result.stdout.str() + result.stderr.str()
     result.stdout.fnmatch_lines(["*--impacted-module*"])
+
+
+class Failing(ImpactStrategy):
+    """An extension broken in one of the ways it can be: a required setting missing, or raising in a hook."""
+
+    config_options: ClassVar = [ConfigOption(name="fail", help="Where to fail.", type=str, default="enrich")]
+
+    def __init__(self, fail: str = "enrich"):
+        if fail == "init":
+            raise RuntimeError("boom in __init__")
+        self.fail = fail
+
+    def enrich_dep_tree(self, dep_tree, **kwargs):
+        if self.fail == "enrich":
+            raise RuntimeError("boom in enrich_dep_tree")
+
+    def setup(self, **kwargs):
+        if self.fail == "setup":
+            raise RuntimeError("boom in setup")
+
+    def teardown(self):
+        if self.fail == "teardown":
+            raise RuntimeError("boom in teardown")
+        if self.fail == "unprintable":
+            raise Unprintable()
+
+    def find_impacted_tests(self, changed_files, impacted_modules, ns_module, **kwargs):
+        return []
+
+
+class Unprintable(Exception):
+    def __str__(self):
+        raise AttributeError("never set")
+
+
+class NeedsAKey(Failing):
+    config_options: ClassVar = [ConfigOption(name="key", help="Required.", type=str, required=True)]
+
+    def __init__(self, key: str):
+        super().__init__(fail="none")
+
+
+@pytest.fixture
+def broken_extension(request, monkeypatch):
+    """Installs the extension class the test is parametrized with (``indirect``), as the entry point ``broken``."""
+    entry_point = MagicMock(value=f"{__name__}:{request.param.__name__}")
+    entry_point.name = "broken"
+    entry_point.load.return_value = request.param
+    monkeypatch.setattr("pytest_impacted.extensions.importlib.metadata.entry_points", lambda **_: [entry_point])
+    clear_extension_cache()
+    yield
+    clear_extension_cache()
+
+
+@pytest.mark.parametrize(
+    ("broken_extension", "args", "reason"),
+    [
+        (NeedsAKey, [], "missing required config option(s): key"),
+        (Failing, ["--impacted-ext-broken-fail=init"], "boom in __init__"),
+        (Failing, ["--impacted-ext-broken-fail=enrich"], "boom in enrich_dep_tree"),
+        (Failing, ["--impacted-ext-broken-fail=setup"], "boom in setup"),
+        (Failing, ["--impacted-ext-broken-fail=teardown"], "boom in teardown"),
+        (Failing, ["--impacted-ext-broken-fail=unprintable"], "Unprintable: <unprintable>"),
+    ],
+    ids=[
+        "a required setting missing",
+        "__init__ raises",
+        "enrich raises",
+        "setup raises",
+        "teardown raises",
+        "an exception that cannot be printed",
+    ],
+    indirect=["broken_extension"],
+)
+@pytest.mark.usefixtures("broken_extension")
+def test_a_broken_extension_is_named_on_the_terminal_and_the_run_goes_on(make_git_project, args, reason):
+    """Its rule then contributes nothing, so fewer tests may run: the user must see it, not only a log record."""
+    project = make_git_project(FILES, INI)
+    edit_file(project, "app/a.py")
+
+    result = project.runpytest("--impacted", "--impacted-git-mode=unstaged", "-p", "no:logging", *args)
+
+    result.assert_outcomes(passed=1)
+    # Named by its entry point when loading, by its class once loaded (the composite knows no entry points).
+    warnings = [line for line in result.stdout.lines if "WARNING" in line and ("'broken'" in line or "Failing" in line)]
+    assert len(warnings) == 1, result.stdout.str()
+    assert reason in warnings[0], warnings[0]

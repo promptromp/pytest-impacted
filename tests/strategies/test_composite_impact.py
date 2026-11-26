@@ -366,3 +366,13 @@ def test_duck_typed_strategy_without_lifecycle_hooks_runs_quietly(caplog):
 
     assert result == ["tests.test_duck"]
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_the_composite_keeps_no_session_past_its_teardown():
+    """setup hands teardown the session (for a warning); a composite reused for another run must not hold the old."""
+    composite = CompositeImpactStrategy([])
+    composite.setup(ns_module="app", session=object(), dep_tree=nx.DiGraph())
+
+    composite.teardown()
+
+    assert composite._session is None

@@ -15,11 +15,13 @@ from __future__ import annotations
 import importlib.metadata
 import inspect
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+
+from pytest_impacted.display import describe
 
 
 logger = logging.getLogger(__name__)
@@ -289,6 +291,7 @@ def load_extensions(
     *,
     disabled: Sequence[str] = (),
     ext_config: dict[str, Any] | None = None,
+    on_skip: Callable[[str], None] | None = None,
 ) -> list[Any]:
     """Discover and instantiate all registered strategy extensions.
 
@@ -297,12 +300,16 @@ def load_extensions(
         ext_config: Flat dict of config values. Keys can be either raw option names
             (e.g. ``"threshold"``) or namespaced ini names
             (e.g. ``"impacted_ext_coverage_threshold"``).
+        on_skip: Told, in one line, of each extension skipped because it lacks a required setting or raised on
+            loading. pytest passes its terminal: a log record is swallowed during collection, and a skipped
+            extension's rule selects nothing. By default it is logged, with the traceback (the CLI shows its log).
 
     Returns:
         List of instantiated strategy objects.
     """
     config = ext_config or {}
     instances: list[Any] = []
+    skipped = on_skip or logger.warning
 
     for ext in discover_extension_metadata():
         if ext.name in disabled:
@@ -311,17 +318,21 @@ def load_extensions(
 
         ext_cfg, missing_required = _settings(ext, config)
         if missing_required:
-            logger.warning(
-                "Extension '%s': missing required config option(s): %s. Skipping.",
-                ext.name,
-                ", ".join(missing_required),
+            skipped(
+                f"pytest-impacted: extension '{ext.name}' is skipped: missing required config option(s): "
+                f"{', '.join(missing_required)}."
             )
             continue
 
         try:
             instance = instantiate_strategy(ext, ext_cfg)
-        except Exception:
-            logger.exception("Extension '%s': failed to instantiate. Skipping.", ext.name)
+        except Exception as err:
+            message = f"pytest-impacted: extension '{ext.name}' is skipped: it raised on loading ({describe(err)})."
+            if on_skip is None:
+                logger.warning(message, exc_info=err)
+            else:
+                logger.debug("Extension '%s' failed to instantiate", ext.name, exc_info=err)
+                on_skip(message)
             continue
 
         instances.append(instance)
