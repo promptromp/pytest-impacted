@@ -8,7 +8,7 @@ from unittest.mock import ANY, MagicMock, patch
 import networkx as nx
 import pytest
 
-from pytest_impacted import graph
+from pytest_impacted import api as api_module, graph
 from pytest_impacted.api import _test_files, get_impacted_tests, matches_impacted_tests
 from pytest_impacted.git import GitMode
 from pytest_impacted.strategies import (
@@ -1677,3 +1677,18 @@ def test_a_changed_symlink_loop_named_like_a_conftest_or_a_config_file(tmp_path)
     )
 
     assert selected == ["tests/test_core.py"]
+
+
+@pytest.mark.parametrize("module", ["./app", "app/", "app"])
+def test_the_analysis_walks_the_package_a_module_path_names(tmp_path, monkeypatch, module):
+    """``./app`` was walked as ``//app``: no package modules, so every one was found only as an outside import."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/a.py": "X = 1\n", "tests/test_a.py": "from app.a import X\n"})
+    built = []
+    real = api_module.cached_build_dep_tree
+    monkeypatch.setattr(
+        api_module, "cached_build_dep_tree", lambda package, **kw: built.append(package) or real(package, **kw)
+    )
+
+    _run_with_notices(tmp_path, ["app/a.py"], ns_module=module, tests_dir="tests")
+
+    assert built == ["app"]

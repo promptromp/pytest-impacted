@@ -437,7 +437,7 @@ class TestImpactedTestsCLI:
         result = self.runner.invoke(impacted_tests_cli, ["--root-dir", str(tmp_path / "proj"), "--module", "pkg"])
 
         assert result.exit_code != 0
-        assert "does not exist under root-dir" in result.output
+        assert "Module 'pkg' not found" in result.output
 
     def test_cli_accepts_dotted_module_names(self, tmp_path):
         """src-layout projects are addressed as ``src.pkg``, as discover_submodules accepts."""
@@ -530,4 +530,19 @@ def test_a_directory_in_a_listable_but_unsearchable_one_is_a_bad_parameter(tmp_p
         locked.chmod(0o755)
 
     assert result.exit_code == 2, result.output
-    assert "does not exist under root-dir" in result.output
+    assert "not found" in result.output and "--module" in result.output
+
+
+@pytest.mark.parametrize("module", ["./pkg", "pkg/", "pkg"])
+def test_the_cli_and_the_plugin_read_a_module_path_alike(tmp_path, module):
+    """``./pkg`` passed the CLI and failed the plugin (read as ``//pkg``); one check now, and one spelling for the
+    analysis (``api.get_impacted_tests`` normalizes it)."""
+    from pytest_impacted.plugin import validate_module  # noqa: PLC0415 — the plugin's half of the comparison
+
+    (tmp_path / "pkg").mkdir()
+    validate_module(module, tmp_path)
+    with patch("pytest_impacted.cli.get_impacted_tests", return_value=[]) as run:
+        result = CliRunner().invoke(impacted_tests_cli, ["--root-dir", str(tmp_path), "--module", module])
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["ns_module"] == module  # normalized inside get_impacted_tests, for every caller

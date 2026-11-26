@@ -5,7 +5,6 @@ import sys
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from types import ModuleType
@@ -24,6 +23,7 @@ from pytest_impacted.extensions import (
     get_ext_ini_name,
 )
 from pytest_impacted.modes import GitMode
+from pytest_impacted.options import OPTIONS, Kind, Option, Unimpacted
 
 
 def _lazily(name: str) -> Callable[[], ModuleType]:
@@ -54,13 +54,7 @@ _file_map = _lazily("pytest_impacted.file_map")
 _git = _lazily("pytest_impacted.git")
 _strategies = _lazily("pytest_impacted.strategies")
 _traversal = _lazily("pytest_impacted.traversal")
-
-
-class Unimpacted(StrEnum):
-    """What becomes of the collected tests no change impacts."""
-
-    DESELECT = "deselect"
-    SKIP = "skip"
+_validation = _lazily("pytest_impacted.validation")
 
 
 NOT_IMPACTED = "not impacted by the changes"
@@ -93,222 +87,13 @@ _UNJUDGED_ITEMS = StashKey[set[pytest.Item]]()
 
 
 def pytest_addoption(parser: Parser):
-    """pytest hook to add command line options.
-
-    This is called before any tests are collected.
-
-    """
+    """pytest hook to add command line options: each of :data:`~pytest_impacted.options.OPTIONS`, with its ini key,
+    then the options of the extensions discovered."""
     group = parser.getgroup("impacted")
-    group.addoption(
-        "--impacted",
-        action="store_true",
-        default=None,
-        dest="impacted",
-        help="Run only tests impacted by the chosen git state.",
-    )
-    parser.addini(
-        "impacted",
-        help="default value for --impacted",
-        type="bool",
-        default=False,
-    )
-
-    group.addoption(
-        "--impacted-module",
-        default=None,
-        dest="impacted_module",
-        metavar="MODULE",
-        help="Module name to check for impacted tests, relative to the pytest rootdir.",
-    )
-    parser.addini(
-        "impacted_module",
-        help="default value for --impacted-module",
-        default=None,
-    )
-
-    group.addoption(
-        "--impacted-git-mode",
-        action="store",
-        dest="impacted_git_mode",
-        choices=GitMode.__members__.values(),
-        default=None,
-        nargs="?",
-        help=(
-            "Which changes count: 'unstaged' (uncommitted work, untracked files included) or "
-            + "'branch' (changes since forking from --impacted-base-branch)."
-        ),
-    )
-    parser.addini(
-        "impacted_git_mode",
-        help="default value for --impacted-git-mode",
-        default=GitMode.UNSTAGED,
-    )
-
-    group.addoption(
-        "--impacted-base-branch",
-        action="store",
-        default=None,
-        dest="impacted_base_branch",
-        help="Git reference for computing impacted files when running in 'branch' git mode.",
-    )
-    parser.addini(
-        "impacted_base_branch",
-        help="default value for --impacted-base-branch",
-        default=None,
-    )
-
-    group.addoption(
-        "--impacted-no-merge-base",
-        action="store_true",
-        default=None,
-        dest="impacted_no_merge_base",
-        help=(
-            "In 'branch' git mode, diff against the base branch's tip instead of the point this "
-            + "branch forked from, so commits the base gained since also count as changes."
-        ),
-    )
-    parser.addini(
-        "impacted_no_merge_base",
-        help="default value for --impacted-no-merge-base",
-        type="bool",
-        default=False,
-    )
-
-    group.addoption(
-        "--impacted-tests-dir",
-        action="store",
-        default=None,
-        dest="impacted_tests_dir",
-        help=(
-            "Directory containing the unit-test files, relative to the pytest rootdir. If not "
-            + "specified, tests will only be found under namespace module directory."
-        ),
-    )
-    parser.addini(
-        "impacted_tests_dir",
-        help="default value for --impacted-tests-dir",
-        default=None,
-    )
-
-    group.addoption(
-        "--no-impacted-dep-files",
-        action="store_true",
-        default=None,
-        dest="no_impacted_dep_files",
-        help="Disable dependency and test-config file change detection (uv.lock, requirements*.txt, pytest.ini, etc.).",
-    )
-    parser.addini(
-        "no_impacted_dep_files",
-        help="default value for --no-impacted-dep-files",
-        type="bool",
-        default=False,
-    )
-
-    group.addoption(
-        "--impacted-invalidate-all",
-        action="append",
-        default=[],
-        dest="impacted_invalidate_all",
-        metavar="PATTERN",
-        help=(
-            "Glob pattern for files that, when changed, mark ALL tests as impacted "
-            "(e.g. '*.json', 'config/*.yaml'). Repeatable."
-        ),
-    )
-    parser.addini(
-        "impacted_invalidate_all",
-        help="default value for --impacted-invalidate-all (list of glob patterns)",
-        type="args",
-        default=[],
-    )
-
-    group.addoption(
-        "--impacted-map",
-        action="append",
-        default=[],
-        dest="impacted_map",
-        metavar="GLOB=PATH",
-        help=(
-            "A changed file matching GLOB counts as a change to PATH (a file or directory, relative to the "
-            + "rootdir), e.g. 'reports/*.json=tests/test_bench.py'. Repeatable."
-        ),
-    )
-    parser.addini(
-        "impacted_map",
-        help="default value for --impacted-map (list of GLOB=PATH)",
-        type="args",
-        default=[],
-    )
-
-    group.addoption(
-        "--impacted-conftest-imports",
-        action="store_true",
-        default=None,
-        dest="impacted_conftest_imports",
-        help=(
-            "Also treat a conftest.py that imports changed application code (--impacted-module; directly "
-            + "or through other modules) as impacting every test in its directory and below, as it does for "
-            + "changed test code. Safer, but a top-level conftest importing the application selects almost "
-            + "every test."
-        ),
-    )
-    parser.addini(
-        "impacted_conftest_imports",
-        help="default value for --impacted-conftest-imports",
-        type="bool",
-        default=False,
-    )
-
-    group.addoption(
-        "--impacted-ignore-type-checking-imports",
-        action="store_true",
-        default=None,
-        dest="impacted_ignore_type_checking_imports",
-        help=(
-            "Leave application code's type-only imports out of the dependency graph: those in an "
-            + "'if TYPE_CHECKING:' block whose names the module uses only in annotations. They never run, but "
-            + "often close import cycles. Test code and package __init__.py files keep their own. Off by "
-            + "default, as a type checker, or code evaluating annotations, may still read the modules they name."
-        ),
-    )
-    parser.addini(
-        "impacted_ignore_type_checking_imports",
-        help="default value for --impacted-ignore-type-checking-imports",
-        type="bool",
-        default=False,
-    )
-
-    group.addoption(
-        "--impacted-unimpacted",
-        action="store",
-        default=None,
-        dest="impacted_unimpacted",
-        choices=[action.value for action in Unimpacted],
-        help=(
-            "What to do with the tests no change impacts: 'deselect' them (the default), or mark "
-            + "them 'skip'ped, as releases up to 0.35 did."
-        ),
-    )
-    parser.addini(
-        "impacted_unimpacted",
-        help="default value for --impacted-unimpacted",
-        default=Unimpacted.DESELECT,
-    )
-
-    # Extension management
-    group.addoption(
-        "--impacted-disable-ext",
-        action="append",
-        default=[],
-        dest="impacted_disable_ext",
-        help="Disable a strategy extension by name (repeatable).",
-    )
-    parser.addini(
-        "impacted_disable_ext",
-        help="Strategy extensions to disable",
-        type="args",
-        default=[],
-    )
+    for option in OPTIONS:
+        group.addoption(option.flag, dest=option.setting, help=option.help, **_option_kwargs(option))
+        listed = f" (list of {option.metavar})" if option.kind is Kind.LIST and option.metavar else ""
+        parser.addini(option.setting, help=f"default value for {option.flag}{listed}", **_ini_kwargs(option))
 
     # Register config options from discovered extensions
     for ext in discover_extension_metadata():
@@ -325,6 +110,31 @@ def pytest_addoption(parser: Parser):
             group.addoption(flag, **add_kwargs)
             ini_default = str(opt.default) if opt.default is not None else None
             parser.addini(ini_name, help=opt.help, default=ini_default)
+
+
+def _option_kwargs(option: Option) -> dict[str, Any]:
+    """How the command line takes *option*: ``None`` (or ``[]``) when it is not given, so the ini setting applies."""
+    match option.kind:
+        case Kind.FLAG:
+            return {"action": "store_true", "default": None}
+        case Kind.LIST:
+            return {"action": "append", "default": [], "metavar": option.metavar}
+        case Kind.CHOICE:
+            optional = {"nargs": "?"} if option.optional_value else {}
+            return {"choices": list(option.choices), "default": None} | optional
+        case _:
+            return {"default": None, "metavar": option.metavar}
+
+
+def _ini_kwargs(option: Option) -> dict[str, Any]:
+    """How the pytest configuration takes *option*."""
+    match option.kind:
+        case Kind.FLAG:
+            return {"type": "bool", "default": bool(option.default)}
+        case Kind.LIST:
+            return {"type": "args", "default": []}
+        case _:
+            return {"default": option.default}
 
 
 def pytest_configure(config: Config):
@@ -348,17 +158,7 @@ def pytest_report_header(config: Config) -> list[str]:
     ignore_type_checking_imports = get_option("impacted_ignore_type_checking_imports")
     ext_names = [e.name for e in discover_extension_metadata()]
     header = [
-        f"impacted_module={get_option('impacted_module')}",
-        f"impacted_git_mode={get_option('impacted_git_mode')}",
-        f"impacted_base_branch={get_option('impacted_base_branch')}",
-        f"impacted_no_merge_base={get_option('impacted_no_merge_base')}",
-        f"impacted_tests_dir={get_option('impacted_tests_dir')}",
-        f"no_impacted_dep_files={get_option('no_impacted_dep_files')}",
-        f"impacted_invalidate_all={get_option('impacted_invalidate_all')}",
-        f"impacted_map={get_option('impacted_map')}",
-        f"impacted_conftest_imports={get_option('impacted_conftest_imports')}",
-        f"impacted_ignore_type_checking_imports={ignore_type_checking_imports}",
-        f"impacted_unimpacted={get_option('impacted_unimpacted')}",
+        *(f"{option.setting}={get_option(option.setting)}" for option in OPTIONS if option.in_header),
         f"backend={_backend(bool(ignore_type_checking_imports))}",
     ]
     if ext_names:
@@ -799,34 +599,9 @@ def validate_repository(root_dir: Path) -> None:
 
 
 def validate_module(module_name: str, root_dir: Path) -> None:
-    """Validate that --impacted-module refers to a Python package under *root_dir*."""
-    module_dir = module_name.replace(".", os.sep)
-    # os.path, not Path.is_dir(): inside an unsearchable directory it is missing, rather than raising.
-    if os.path.isdir(root_dir / module_dir):
-        return
-
-    # The directory doesn't exist — try to give a helpful suggestion
-    if "-" in module_name:
-        suggestion = module_name.replace("-", "_")
-        suggestion_dir = suggestion.replace(".", os.sep)
-        if os.path.isdir(root_dir / suggestion_dir):
-            raise UsageError(
-                f"Module '{module_name}' not found. Python module names use underscores, not hyphens. "
-                f"Did you mean: --impacted-module={suggestion}"
-            )
-
-    # Check for src-layout: module might be under src/
-    src_dir = os.path.join("src", module_dir)
-    if os.path.isdir(root_dir / src_dir):
-        raise UsageError(
-            f"Module '{module_name}' not found under '{root_dir}', but found at '{src_dir}'. "
-            f"For src-layout projects, use: --impacted-module=src/{module_dir}"
-        )
-
-    raise UsageError(
-        f"Module '{module_name}' not found (no '{module_dir}/' directory under '{root_dir}'). "
-        f"Make sure --impacted-module is a valid Python package name relative to the pytest rootdir."
-    )
+    """Validate that --impacted-module names a package under *root_dir* (see :mod:`~pytest_impacted.validation`)."""
+    if problem := _validation().module_problem(module_name, root_dir, "--impacted-module"):
+        raise UsageError(problem)
 
 
 def _collect_ext_config(config: Config) -> dict[str, Any]:
@@ -842,14 +617,9 @@ def _collect_ext_config(config: Config) -> dict[str, Any]:
 
 
 def validate_tests_dir(tests_dir: str, root_dir: Path) -> None:
-    """Validate that --impacted-tests-dir refers to a directory under *root_dir*."""
-    if not os.path.isdir(root_dir / tests_dir):
-        raise UsageError(
-            f"Tests directory '{tests_dir}' does not exist under '{root_dir}'. "
-            f"Please check the path passed to --impacted-tests-dir."
-        )
-    if reason := _traversal().unnameable_tests_dir(tests_dir, root_dir):
-        raise UsageError(reason)
+    """Validate that --impacted-tests-dir is a directory under *root_dir* the analysis can walk."""
+    if problem := _validation().tests_dir_problem(tests_dir, root_dir, "--impacted-tests-dir"):
+        raise UsageError(problem)
 
 
 def validate_base_branch(base_branch: str, root_dir: str) -> None:

@@ -429,6 +429,12 @@ as a candidate, so a deleted module is linked whichever part it was. By-name can
 parallel (`parse_all_dynamic_imports`, reading `dynamic_imports.TABLE`: the backends hold one table), and the
 stdlib `ast` pass does when it is older or absent. Only literals count; a computed name is no import.
 
+**Every setting is one row of `options.OPTIONS`**: its pytest flag and ini key, its CLI spelling and help, its kind
+and default. The plugin's `addoption`/`addini` pairs, the report header, the CLI's click options and its map to pytest
+settings (`CLI_SETTINGS`) are generated from it — add a setting as a row, never by hand in one front end. The module
+and tests-dir checks are `validation.py`, shared by both front ends (they had diverged: `./app`, dotted tests dirs,
+suggestions); `api.get_impacted_tests` normalizes the module (`./app/` → `app`) for every caller.
+
 **The `impacted-tests` CLI reads the pytest configuration through `ini.py`, never a pytest
 `Config`**: building one imports the initial conftests, which is running project code. `ini.py`
 mirrors the installed pytest's search and conversions instead, and `tests/test_ini.py` holds it to
