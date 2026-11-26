@@ -32,7 +32,7 @@ Three kinds of test always run, as no analysis can judge them: items from non-Py
 
 To mark them skipped instead, as releases up to 0.35 did, pass `--impacted-unimpacted=skip` (ini: `impacted_unimpacted = "skip"`). Each then reports `SKIPPED (not impacted by the changes)`. `--impacted-unimpacted=deselect` restores the default when the ini says `skip`.
 
-Every test the analysis selects carries the `impacted` marker, set before `-k` and `-m` filter, so `-m impacted` and `-m "not impacted"` select by it too.
+The tests the analysis selects carry the `impacted` marker, for plugins and reports to read. Do not filter on it with `-m`: when the plugin runs every test instead (git cannot run, the analysis failed), no test carries it, so `-m impacted` would leave nothing to run; and the tests not impacted are deselected anyway.
 
 ## Git Modes
 
@@ -341,8 +341,9 @@ fi
 
 The CLI prints the impacted test files on stdout, one absolute path per line, and nothing else: its settings and
 notices go to stderr. It exits with status 0 whether or not a test is impacted (`No impacted tests found.` on stderr
-then), 1 when git cannot run, so the changes are unknown, and 2 on a usage error: a missing or misspelled option, a
-module or tests dir that is not there, a base branch git does not know.
+then); 1 when git cannot run, so the changes are unknown (or on an internal error, with a traceback); and 2 on a
+usage error: a missing or misspelled option, a module or tests dir that is not there, a configuration it cannot read,
+or git refusing (no repository, a base branch it does not know).
 
 If your tests live outside the package, pass `--tests-dir` here too — the CLI needs it
 for the same reason the pytest flag does, otherwise the dependency graph will not
@@ -516,11 +517,13 @@ The Rust extension:
 ### Benchmarks
 
 The benchmark script ships in the repository, not in the package. From your project's root, run it from a clone of
-pytest-impacted, in an environment with pytest-impacted (and pytest-impacted-rs) installed:
+pytest-impacted at the version you have installed, in an environment with pytest-impacted and pytest-impacted-rs:
 
 ```bash
 python /path/to/pytest-impacted/benchmarks/bench_parsing.py --module my_package --tests-dir tests
 ```
+
+`--module` is the package's path from there: `src/my_package` in a src layout.
 
 It times the pure-Python parser against the extension, sequential and parallel, and checks both find the same
 imports.

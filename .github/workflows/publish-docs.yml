@@ -3,8 +3,7 @@ name: Publish docs
 on:
   push:
     branches:
-      - main
-      - docs/**
+      - main  # only: gh-deploy publishes the site, so a docs/* branch pushed for review must not
 
 permissions:
   contents: write
@@ -28,8 +27,8 @@ jobs:
           path: .cache
           restore-keys: |
             mkdocs-material-
-      # Pinned: an unpinned theme release could change or break the site unseen.
-      - run: pip install mkdocs-material==9.8.2 markdown-callouts==0.4.0
+      # Pinned, the theme and what --strict depends on: a new warning from any of them would fail the deploy.
+      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.2 markdown-callouts==0.4.0 pymdown-extensions==13.1.2
       - name: copy README.md to docs/
         run: |
           cp README.md docs/
