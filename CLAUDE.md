@@ -282,8 +282,10 @@ them. Deletions count (`_NON_IMPACTFUL_STATUSES` drops only `X`/`B`), so `change
 routinely names paths that no longer exist, and files outside the project root arrive as
 absolute paths. A submodule
 reported by its own path is followed by the files changed inside it (`git._with_submodule_changes`: a diff between
-the commits the superproject records, or against the submodule's working tree; every file it tracks when that
-cannot be had), only for a gitlink in the index that is checked out — one that is not is a notice (`on_fallback`).
+the commits the superproject records, or against the submodule's working tree), for a gitlink the superproject
+records and has checked out — one not checked out is a notice (`on_fallback`). Precise or unknown, never a guess:
+what cannot be read there (an old commit not fetched, a gitdir gone, a removed or nested submodule) raises
+`GitUnavailableError`, which fails open. Two review rounds of per-corner fallbacks preceded that rule.
 
 **`canonical_root()` is the single origin for every path.** Discovery, graph building and
 the conftest walk all resolve against `root_dir` (the plugin passes `config.rootpath`),

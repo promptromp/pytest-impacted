@@ -71,8 +71,8 @@ def test_find_impacted_files_in_repo_unstaged_dirty(mock_repo):
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result == ["file1.py", "file2.py"]
     assert mock_repo.return_value.git.diff.call_args_list == [
-        call("--name-status", "-z", "--no-renames", "--cached", "--"),
-        call("--name-status", "-z", "--no-renames", "--"),
+        call("--name-status", "-z", "--no-renames", "--ignore-submodules=none", "--cached", "--"),
+        call("--name-status", "-z", "--no-renames", "--ignore-submodules=none", "--"),
     ]
 
 
@@ -388,7 +388,7 @@ def test_impacted_files_for_branch_mode_ends_the_diff_at_head():
     assert result == ["file1.py"]
     repo.git.merge_base.assert_called_once_with("--all", "--end-of-options", "main", "HEAD")
     repo.git.diff.assert_called_once_with(
-        "--name-status", "-z", "--no-renames", "--end-of-options", "fork456", "HEAD", "--"
+        "--name-status", "-z", "--no-renames", "--ignore-submodules=none", "--end-of-options", "fork456", "HEAD", "--"
     )
 
 
@@ -1054,3 +1054,39 @@ def test_a_submodule_added_on_the_branch_brings_its_files(real_repo, tmp_path):
     commit_all(repo, "add the submodule")
 
     assert branch(root, base) == [".gitmodules", "vendor", "vendor/lib/core.py"]
+
+
+def test_a_submodule_set_to_be_ignored_is_still_seen(repo_with_submodule):
+    """``ignore = dirty`` in .gitmodules hides an edit from ``git diff``; the analysis asks with none ignored."""
+    repo, root = repo_with_submodule
+    repo.git.config("-f", ".gitmodules", "submodule.vendor.ignore", "dirty")
+    commit_all(repo, "ignore dirty")
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+
+    assert unstaged(root) == ["vendor", "vendor/lib/core.py"]
+
+
+def _bump_on_a_branch(repo, root):
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "feature")
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    commit_all(Repo(root / "vendor"), "bump")
+    commit_all(repo, "bump the submodule")
+    return base
+
+
+@pytest.mark.parametrize("how", ["its gitdir gone", "removed"])
+def test_changes_a_submodule_cannot_tell_fail_open(repo_with_submodule, how):
+    """Precise, or unknown — then every test runs, as when git is missing — never a guess."""
+    repo, root = repo_with_submodule
+    if how == "removed":
+        base = repo.active_branch.name
+        repo.git.checkout("-b", "feature")
+        repo.git.rm("-q", "vendor")
+        commit_all(repo, "remove the submodule")
+    else:
+        base = _bump_on_a_branch(repo, root)
+        shutil.rmtree(root / ".git" / "modules" / "vendor")
+
+    with pytest.raises(git.GitUnavailableError, match="Submodule vendor was removed|inside submodule vendor"):
+        branch(root, base)
