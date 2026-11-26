@@ -78,7 +78,7 @@ def test_the_extension_hands_back_what_it_will_not_parse(tmp_path):
         "rejected.py": b"import os\nx = " + b"a if c else " * 203 + b"a\n",  # ruff's nesting limit is 202
         "keywords.py": b"import os\nf(a=1, a=2)\n",  # the compiler's error, not CPython's parser's
         "latin1.py": b"# -*- coding: latin-1 -*-\nimport os  # caf\xe9\n",
-        "large.py": b"import os\n" + b"# padding padding padding padding padding padding\n" * 50_000,
+        "large.py": b"import os\n" + b"# padding padding padding padding padding padding\n" * 90_000,  # over 4 MiB
     }
     for name, content in files.items():
         (tmp_path / name).write_bytes(content)
@@ -139,3 +139,44 @@ def test_a_deep_module_through_the_whole_run(tmp_path, ignore_type_checking_impo
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=300, check=False)
 
     assert result.returncode == 0, f"exit {result.returncode}: {result.stderr[-2000:]}"
+
+
+@pytest.mark.usefixtures("import_backend")
+def test_a_source_in_a_declared_encoding_keeps_its_imports(tmp_path):
+    """PEP 263: a latin-1 file declaring so is valid Python. The extension reads UTF-8 only, and hands it back."""
+    write_files(tmp_path, FILES)
+    (tmp_path / "tests").mkdir()
+    legacy = b"# -*- coding: latin-1 -*-\nfrom app.core import f  # caf\xe9\n"
+    (tmp_path / "tests" / "test_legacy.py").write_bytes(legacy)
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path)
+
+    assert dep_tree.has_edge("app.core", "tests.test_legacy")
+
+
+@pytest.mark.parametrize("import_backend", ["rust", "python"], indirect=True)
+def test_a_type_only_import_in_a_source_astroid_gives_up_on(tmp_path, import_backend):
+    """A documented parity exception: astroid gives up near 500 nested terms, and the fallback keeps every import
+    a runtime one; the extension tells type-only imports apart until DEEPEST (2,000). Only under
+    --impacted-ignore-type-checking-imports, and the Python backend errs on the safe side: an edge kept."""
+    source = (
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from app.core import f\n\n"
+        "def g(h: 'f'):\n    pass\n\nx = " + " + ".join(["a"] * 800) + "\n"
+    )
+    write_files(tmp_path, {**FILES, "app/user.py": source, "tests/test_user.py": "import app.user\n"})
+
+    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
+
+    assert dep_tree.has_edge("app.core", "app.user") is (import_backend == "python")
+
+
+@pytest.mark.skipif(not _rust.RUST_AVAILABLE, reason="pytest-impacted-rs is not installed")
+@pytest.mark.parametrize("function", ["rust_parse_all_imports", "rust_parse_all_imports_split"])
+def test_the_older_functions_still_read_a_large_file(tmp_path, function):
+    """An older pytest-impacted calls these, and cannot read a file handed back: they read it, however large."""
+    (tmp_path / "generated.py").write_bytes(b"import os\n" + b"x = 1\n" * 800_000)  # 4.8 MB, over the cap
+
+    found = getattr(_rust, function)([(str(tmp_path / "generated.py"), "app.generated", False)])
+
+    imports = found["app.generated"]
+    assert (imports if function == "rust_parse_all_imports" else imports[0]) == ["os"]

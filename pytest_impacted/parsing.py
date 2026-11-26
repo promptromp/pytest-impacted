@@ -1,8 +1,10 @@
 """Python code parsing (AST) utilities."""
 
 import ast
+import io
 import logging
 import os
+import tokenize
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -32,13 +34,16 @@ def normalize_path(path_like: str | os.PathLike[str]) -> Path:
 
 
 def read_source(file_path: str) -> str | None:
-    """A source file's text, or ``None`` if it cannot be read.
+    """A source file's text, decoded as Python decodes it, or ``None`` if it cannot be read.
 
-    ``utf-8-sig`` drops a BOM, as ruff does — a parity point with the Rust backend.
+    By its PEP 263 coding cookie (``# -*- coding: latin-1 -*-``), else as UTF-8, a BOM dropped as ruff drops it — a
+    parity point with the Rust backend, which hands a file not in UTF-8 back to this side.
     """
     try:
-        return Path(file_path).read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError):
+        data = Path(file_path).read_bytes()
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+        return data.decode(encoding)
+    except (OSError, SyntaxError, LookupError, UnicodeDecodeError):  # unreadable; an unknown or wrong encoding
         return None
 
 
@@ -200,8 +205,8 @@ def _imports_by_ast(source: str, file_path: str, package: str) -> list[str]:
     try:
         with _quiet_parse():
             module = ast.parse(source)
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
-        logger.warning("Could not parse %s: nested too deeply", file_path)
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as err:
+        logger.warning("Could not parse %s: %s", file_path, type(err).__name__)
         return []
     found: set[str] = set()
     for node in ast.walk(module):
