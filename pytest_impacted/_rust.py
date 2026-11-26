@@ -13,6 +13,7 @@ __all__ = [
     "rust_parse_all_dynamic_imports",
     "rust_parse_all_imports",
     "rust_parse_all_imports_split",
+    "takes",
     "uses_rust",
 ]
 
@@ -45,6 +46,20 @@ try:
 except ImportError:
     rust_parse_all_dynamic_imports = None  # type: ignore[assignment]
     RUST_PARSES_DYNAMIC_IMPORTS = False
+
+
+def takes(*texts: str) -> bool:
+    """Whether the extension can be handed these strings: a file's path and module name.
+
+    Its strings are UTF-8, so PyO3 raises UnicodeEncodeError on a surrogate escape, Python's spelling of a
+    file name that is not UTF-8 (on Linux, a Latin-1 ``café.py``). The Python backend reads such a file instead.
+    """
+    try:
+        for text in texts:
+            text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def uses_rust(ignore_type_checking_imports: bool = False) -> bool:

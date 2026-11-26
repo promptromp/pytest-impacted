@@ -421,7 +421,9 @@ Unicode version decides, and the Rust port of `importlib.util.resolve_name` must
 A file ruff rejects though CPython's parser accepts it (`f(a=1, a=2)`), or nested deeper than `DEEPEST` (the
 visitor recurses on a small rayon stack), is `None` from the extension, and the graph has the stdlib pass read
 it: never less than that pass. More, only where the running Python cannot parse the file (newer syntax). A table
-an older extension cannot read (a new kind or column: ValueError, TypeError) leaves every file to that pass. Check new rules over every file of a real
+an older extension cannot read (a new kind or column: ValueError, TypeError) leaves every file to that pass. Only
+UTF-8 crosses into the extension (`_rust.takes`): PyO3 raises UnicodeEncodeError on a surrogate escape, Python's
+spelling of a non-UTF-8 file name on Linux, so both dispatch points leave such a file, path or name, to Python. Check new rules over every file of a real
 clone too.
 The extension is a separate distribution and the `fast` extra is unpinned (a development build is
 `0.1.0`, which a pin would refuse), so an install may hold an older one: never change an existing
@@ -532,7 +534,9 @@ projects must not name their tests dir `tests` (it would clash with this repo's 
 
 **Every test must pass inside a pytest-xdist worker**: CI's impacted job reruns the impacted
 tests under `-n auto`. A test project's conftest tells a worker by `config.workerinput`, never
-`PYTEST_XDIST_WORKER`, which a nested run inherits from the suite's own worker.
+`PYTEST_XDIST_WORKER`, which a nested run inherits from the suite's own worker. Nor may a test's report hold a string that
+is not UTF-8 (a surrogate escape, in a captured log record or a message): execnet cannot send it back, and the
+whole xdist run fails with an INTERNALERROR.
 
 **The suite scrubs git's repo-locating variables** (`GIT_DIR`, `GIT_INDEX_FILE`, … — read
 from `git rev-parse --local-env-vars`, with a fallback copy) in `pytest_configure`, and
