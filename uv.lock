@@ -71,15 +71,6 @@ wheels = [
 ]
 
 [[package]]
-name = "astroid"
-version = "4.3.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2d/87/5732fa68bf100a095cfcbd108f919220d995db99e1a7502b8119a869fd62/astroid-4.3.4.tar.gz", hash = "sha256:d515a105722b72098bbe82d430d65e635f742b6cbac3bdfaf8b7c188b87c5e39", size = 444627, upload-time = "2026-10-08T09:36:44.122Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/d4/f23c0ac6e6de33ba5686cb21c672c95e0c2d3d4c9351f16d3b5fed818652/astroid-4.3.4-py3-none-any.whl", hash = "sha256:2bcd0d02648a443a4b818c952c3550091989daefac3c12d3b83b2289482e0818", size = 288310, upload-time = "2026-10-08T09:36:42.284Z" },
-]
-
-[[package]]
 name = "cfgv"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -620,7 +611,6 @@ wheels = [
 name = "pytest-impacted"
 source = { editable = "." }
 dependencies = [
-    { name = "astroid" },
     { name = "click" },
     { name = "gitpython" },
     { name = "iniconfig" },
@@ -646,7 +636,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "astroid", specifier = ">=4.1.2" },
     { name = "click", specifier = ">=8.2.0" },
     { name = "gitpython", specifier = ">=3.1.58" },
     { name = "iniconfig", specifier = ">=1.0.1" },

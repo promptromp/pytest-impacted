@@ -2,7 +2,7 @@
 
 The public names, and the submodules, load on first use (PEP 562): the plugin is a pytest11 entry point,
 imported by every pytest run, with --impacted or without, and ``import pytest_impacted.plugin`` imports this
-package first. Eager imports here made every pytest run load networkx, astroid and GitPython.
+package first. Eager imports here made every pytest run load networkx and GitPython.
 """
 
 import importlib as _importlib

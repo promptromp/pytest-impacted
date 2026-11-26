@@ -109,14 +109,14 @@ OUTDATED = (
     [
         pytest.param(True, True, True, "rust (ruff parser + rayon)", False, id="rust"),
         pytest.param(True, False, False, "rust (ruff parser + rayon)", False, id="older_rust_option_off"),
-        pytest.param(True, False, True, "python (astroid)", True, id="older_rust_option_on"),
-        pytest.param(False, False, True, "python (astroid)", False, id="no_rust"),
+        pytest.param(True, False, True, "python (ast)", True, id="older_rust_option_on"),
+        pytest.param(False, False, True, "python (ast)", False, id="no_rust"),
     ],
 )
 def test_the_header_names_the_parser_the_options_leave(
     pytestconfig, monkeypatch, available, accepts, ignore, backend, warning
 ):
-    """An installed pytest-impacted-rs older than the option leaves the parsing to astroid, many times slower
+    """An installed pytest-impacted-rs older than the option leaves the parsing to Python, several times slower
     on a large project: the header warns, as it does when git is missing (the controller writes it)."""
     monkeypatch.setattr(_rust, "RUST_AVAILABLE", available)
     monkeypatch.setattr(_rust, "RUST_SPLITS_TYPE_ONLY", accepts)
@@ -274,7 +274,7 @@ def test_plugin_imports_without_git_executable(tmp_path):
 
 
 def test_a_run_without_impacted_loads_none_of_the_analysis(tmp_path):
-    """A pytest11 entry point loads on every pytest run: networkx, astroid and GitPython (which runs ``git version``
+    """A pytest11 entry point loads on every pytest run: networkx and GitPython (which runs ``git version``
     as it loads) doubled the start-up of a run with one test, without --impacted. A whole session, not only the
     import: pytest probes every attribute of a plugin module for fixtures, which once imported them all."""
     (tmp_path / "test_one.py").write_text("def test_one():\n    pass\n")
@@ -285,7 +285,7 @@ def test_a_run_without_impacted_loads_none_of_the_analysis(tmp_path):
         "subprocess.Popen.__init__ = lambda self, *a, **k: spawned.append(a) or real(self, *a, **k)\n"
         "import pytest\n"
         "code = pytest.main(['-q', '-p', 'no:cacheprovider', 'test_one.py'])\n"
-        "heavy = ('git', 'networkx', 'astroid', 'pytest_impacted.graph', 'pytest_impacted.api')\n"
+        "heavy = ('git', 'networkx', 'pytest_impacted.graph', 'pytest_impacted.api')\n"
         "print('loaded:', [name for name in heavy if name in sys.modules], 'spawned:', spawned, 'exit:', int(code))\n"
     )
     if discover_extension_metadata():

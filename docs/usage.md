@@ -454,7 +454,7 @@ graph LR
 
 1. **Git introspection** identifies which files changed (uncommitted edits staged or not, untracked files and deletions, or a branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything; a module outside the analysed directories joins when an analysed module imports it, and a deleted one reaches whatever still imports it
-3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files: import statements, and [imports by name](#astimpactstrategy) (`importlib.import_module`, `mock.patch`, `monkeypatch.setattr`, …)
+3. **AST parsing** (via the standard library's `ast`, or the optional Rust extension using [ruff's hand-written recursive descent parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files: import statements, and [imports by name](#astimpactstrategy) (`importlib.import_module`, `mock.patch`, `monkeypatch.setattr`, …)
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules; a changed package `__init__.py` counts as a change to every module in its package, since Python runs it for any import from it
 5. **pytest-aware rules** — a `conftest.py` that changed, or imports changed test code, selects every test in its directory and below — and with `--impacted-conftest-imports`, so does one importing changed application code; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects every test
 6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
@@ -465,7 +465,7 @@ The philosophy is to **err on the side of caution**: false positives (running a 
 
 ## Performance: Rust Acceleration
 
-For large codebases with many modules, import parsing can become a bottleneck. An optional Rust extension can provide **up to 37-65x faster** import parsing on some large codebases (results vary by project and environment) using [ruff's Python parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing.
+For large codebases with many modules, import parsing can become a bottleneck. An optional Rust extension can provide **about 35-50x faster** import parsing on large codebases (pydantic, textual; results vary by project and machine) using [ruff's Python parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing.
 
 ### Installation
 
@@ -492,9 +492,9 @@ On macOS 27 and later, build with Rust 1.98 or newer (`rustup update`). An exten
 
 ### How It Works
 
-When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential astroid parsing. No configuration or flags are needed — the extension is detected at import time.
+When the Rust extension (`pytest_impacted_rs`) is installed, `build_dep_tree()` automatically uses parallel batch parsing instead of sequential parsing with the standard library's `ast` (astroid before 0.42, 6-7x slower). No configuration or flags are needed — the extension is detected at import time.
 
-Both backends extract the same imports from the same source, so switching backends does not change which tests run, with one known exception, grammar: astroid parses with the running interpreter's grammar, while ruff's parser accepts newer syntax on any interpreter. A module using syntax newer than your Python (for example PEP 695 `type` aliases on 3.11) logs a syntax-error warning and contributes no edges on the pure-Python backend; every test that imports it is then selected only through other paths.
+Both backends extract the same imports from the same source, so switching backends does not change which tests run, with one known exception, grammar: the pure-Python backend parses with the running interpreter's grammar, while ruff's parser accepts newer syntax on any interpreter. A module using syntax newer than your Python (for example PEP 695 `type` aliases on 3.11) logs a syntax-error warning and contributes no edges on the pure-Python backend; every test that imports it is then selected only through other paths.
 
 The Rust extension:
 
@@ -515,4 +515,4 @@ python -m benchmarks.bench_parsing --module my_package --tests-dir tests
 ```
 
 !!! note
-    The Rust extension is **completely optional**. When not installed, the pure-Python (astroid) implementation is used automatically. Apart from the grammar difference above, both modes select the same tests.
+    The Rust extension is **completely optional**. When not installed, the pure-Python implementation (the standard library's `ast`) is used automatically. Apart from the grammar difference above, both modes select the same tests.

@@ -28,7 +28,7 @@ pytest --impacted --impacted-module=my_package \
 | :package: | **Dependency-file aware** | Changes to `uv.lock`, `requirements*.txt`, `pyproject.toml`, `pytest.ini` etc. trigger all tests |
 | :dart: | **Custom invalidation rules** | Declare your own globs (`*.json`, `config/*.yaml`, `schemas/**/*.sql`, …) that trigger all tests |
 | :building_construction: | **CI-friendly** | Standalone `impacted-tests` CLI for two-stage CI pipelines |
-| :rocket: | **Rust-accelerated** | Optional Rust extension for up to 37-65x faster import parsing on large codebases |
+| :rocket: | **Rust-accelerated** | Optional Rust extension for about 35-50x faster import parsing on large codebases |
 | :electric_plug: | **Extensible** | Third-party strategies installable as plugins via Python entry points |
 | :shield: | **Helpful errors** | Validates config early with clear messages and suggestions |
 
@@ -49,7 +49,7 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add pytest-impacted
 ```
 
-For **up to 37-65x faster** import parsing on large codebases, install with the optional Rust extension:
+For **about 35-50x faster** import parsing on large codebases, install with the optional Rust extension:
 
 ```bash
 pip install pytest-impacted[fast]
@@ -206,7 +206,7 @@ Git diff → Changed files → Module resolution → AST import parsing → Depe
 
 1. **Git introspection** identifies which files changed (uncommitted edits staged or not, untracked files and deletions, or a branch diff)
 2. **Filesystem discovery** maps file paths to Python module names — without importing anything; a module outside the analysed directories joins when an analysed module imports it, and a deleted one reaches whatever still imports it
-3. **AST parsing** (via [astroid](https://pylint.pycqa.org/projects/astroid/en/latest/), or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files: import statements (a star import, `from pkg import *`, reaching each submodule `pkg.__all__` lists), and a literal module name passed to a call that imports by name (`importlib.import_module`, `mock.patch`, `monkeypatch.setattr`, …)
+3. **AST parsing** (via the standard library's `ast`, or the optional Rust extension using [ruff's parser](https://github.com/astral-sh/ruff)) extracts import relationships from source files: import statements (a star import, `from pkg import *`, reaching each submodule `pkg.__all__` lists), and a literal module name passed to a call that imports by name (`importlib.import_module`, `mock.patch`, `monkeypatch.setattr`, …)
 4. **Dependency graph** (via [NetworkX](https://networkx.org/)) traces transitive dependencies from changed modules to test modules; a changed package `__init__.py` counts as a change to every module in its package, since Python runs it for any import from it
 5. **pytest wiring** — a `conftest.py` that changed, or imports changed test code (a fixture module, another conftest), selects every test in its directory and below — and with `--impacted-conftest-imports`, so does one importing changed application code; a change reaching a `pytest_plugins`, `-p` or `PYTEST_PLUGINS` plugin selects all tests
 6. **Dependency file detection** — if files like `uv.lock`, `requirements*.txt`, `pyproject.toml` or `pytest.ini` changed, all tests are marked as impacted regardless of import analysis
@@ -267,13 +267,13 @@ Extensions can also be duck-typed (any class with a `find_impacted_tests` method
 
 ## Performance: Optional Rust Acceleration
 
-For large codebases, install the optional Rust extension to accelerate import parsing by **up to 37-65x** (results vary by project):
+For large codebases, install the optional Rust extension to accelerate import parsing by **about 35-50x** (pydantic, textual; results vary by project and machine):
 
 ```bash
 pip install pytest-impacted[fast]
 ```
 
-This installs `pytest-impacted-rs`, a pre-built Rust extension using [ruff's parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing. The extension is automatically detected at runtime — no configuration needed. When unavailable, the pure-Python (astroid) implementation is used.
+This installs `pytest-impacted-rs`, a pre-built Rust extension using [ruff's parser](https://github.com/astral-sh/ruff) and [rayon](https://github.com/rayon-rs/rayon) for parallel file processing. The extension is automatically detected at runtime — no configuration needed. When unavailable, the pure-Python implementation (the standard library's `ast`) is used.
 
 ---
 

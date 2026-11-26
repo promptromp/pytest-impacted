@@ -147,12 +147,19 @@ RUNTIME_USES = [
     pytest.param("def f(x=Thing): ...\n", id="default"),
     pytest.param("@Thing\ndef f(): ...\n", id="decorator"),
     pytest.param("class C(Thing): ...\n", id="base"),
-    # astroid keeps a metaclass out of its child walk; ruff, and the ``ast`` module, among the keywords.
+    # Among a class's keywords, to ruff and ``ast`` (astroid kept it out of its child walk).
     pytest.param("def f(x: Thing): ...\nclass C(metaclass=Thing): ...\n", id="metaclass"),
     pytest.param("def f(x: Thing): ...\nclass C(metaclass=make(lambda: 'Thing')): ...\n", id="metaclass_string"),
     pytest.param("label = f'{Thing}'\n", id="f_string_field"),
     pytest.param("match value:\n    case Thing():\n        pass\n", id="class_pattern"),
     pytest.param("if FLAG:\n    pass\nelse:\n    Thing.setup()\n", id="else_of_another_if"),
+    # The ``else`` of an ``if TYPE_CHECKING:`` is what runs.
+    pytest.param(
+        "def f(x: Thing): ...\nif TYPE_CHECKING:\n    pass\nelse:\n    Thing.setup()\n", id="else_of_the_guard"
+    ),
+    pytest.param(
+        "def f(x: Thing): ...\nif TYPE_CHECKING:\n    pass\nelif FLAG:\n    Thing.setup()\n", id="elif_of_the_guard"
+    ),
     # A string the code reads may name it for something to resolve at runtime.
     pytest.param("__all__ = ['Thing']\n", id="all"),
     pytest.param("_lazy = {'Thing': '.lazy'}\n", id="loader_table"),
@@ -341,7 +348,7 @@ def test_by_default_every_candidate_is_a_runtime_one_in_both_backends(tmp_path):
     ["msg = t'Thing {x}'\n", "msg = t'{x:Thing}'\n", "msg = t'{\"Thing\"}'\n"],
 )
 def test_a_t_string_s_text_is_no_string_of_its_own_to_either_backend(tmp_path, use):
-    """Like an f-string's: astroid keeps it in a ``Const`` under ``TemplateStr``, ruff in no string literal."""
+    """Like an f-string's: ``ast`` keeps it in a ``Constant`` under ``TemplateStr``, ruff in no string literal."""
     python, rust = both_backends(tmp_path, GUARD + "def f(x: Thing): ...\n" + use)
 
     assert python == rust

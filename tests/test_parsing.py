@@ -272,7 +272,7 @@ def test_parse_file_imports_never_executes_package_code(tmp_path, monkeypatch):
 
 
 def test_parse_file_imports_strips_utf8_bom(tmp_path):
-    """Editors on Windows often save a BOM; ruff ignores it, astroid must not choke on it."""
+    """Editors on Windows often save a BOM; ruff ignores it, and the Python side must not choke on it."""
     path = tmp_path / "mod.py"
     path.write_bytes(b"\xef\xbb\xbfimport foo\nfrom bar import baz\n")
 

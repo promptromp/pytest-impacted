@@ -2,7 +2,7 @@
 
 The Rust extension (pytest_impacted_rs) provides accelerated import parsing
 via ruff's Python parser and rayon for parallelism. When unavailable, the
-pure-Python astroid-based implementation is used as a fallback.
+pure-Python implementation (the standard library's ``ast``) is used as a fallback.
 """
 
 __all__ = [

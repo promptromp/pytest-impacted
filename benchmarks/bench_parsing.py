@@ -2,7 +2,7 @@
 """Benchmark: Rust vs Python import parsing.
 
 Compares the performance of the Rust extension (ruff parser + rayon parallelism)
-against the pure-Python implementation (astroid) for parsing imports from all
+against the pure-Python implementation (the standard library's ``ast``) for parsing imports from all
 modules in the pytest-impacted codebase.
 
 Usage:
@@ -19,7 +19,7 @@ from pytest_impacted.traversal import discover_submodules
 
 
 def bench_python_sequential(submodules: dict[str, str]) -> dict[str, list[str]]:
-    """Parse all modules using the Python (astroid) implementation."""
+    """Parse all modules using the Python (``ast``) implementation."""
     from pytest_impacted.parsing import parse_file_imports  # noqa: PLC0415
 
     results = {}
@@ -88,10 +88,10 @@ def main():
         print("WARNING: Rust extension not available. Install with: maturin develop --release")
         print()
 
-    # Benchmark Python (astroid)
-    print("Running Python (astroid) sequential benchmark...")
+    # Benchmark Python (ast)
+    print("Running Python (ast) sequential benchmark...")
     python_time, python_results = time_fn(bench_python_sequential, submodules, iterations=args.iterations)
-    print(f"  Python (astroid):      {python_time * 1000:8.2f} ms")
+    print(f"  Python (ast):          {python_time * 1000:8.2f} ms")
 
     if rust_available:
         # Benchmark Rust sequential

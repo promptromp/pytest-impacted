@@ -81,13 +81,13 @@ def _parse_imports(
     Every candidate is a runtime one unless *ignore_type_checking_imports* asks for the type-only ones
     (see :func:`~pytest_impacted.parsing.split_file_imports`). Uses the Rust extension (parallel batch via
     rayon) when available and new enough for the options (:func:`~pytest_impacted._rust.uses_rust`), but for a
-    file it cannot be handed (:func:`~pytest_impacted._rust.takes`); sequential astroid parsing reads the rest.
+    file it cannot be handed (:func:`~pytest_impacted._rust.takes`); sequential Python parsing reads the rest.
     """
     if not _rust.uses_rust(ignore_type_checking_imports):
         return _parse_imports_in_python(submodules, ignore_type_checking_imports)
     taken = {name: path for name, path in submodules.items() if _rust.takes(path, name)}
     runtime, type_only = _parse_imports_in_rust(taken, ignore_type_checking_imports)
-    # What the extension could not be handed, or handed back (a file ruff rejects: never fewer imports than astroid).
+    # What the extension could not be handed, or handed back (a file ruff rejects: never fewer imports than Python).
     if rest := {name: path for name, path in submodules.items() if name not in runtime}:
         rest_runtime, rest_type_only = _parse_imports_in_python(rest, ignore_type_checking_imports)
         runtime |= rest_runtime
@@ -99,7 +99,7 @@ def _parse_imports_in_rust(
     submodules: dict[str, str], ignore_type_checking_imports: bool
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """What the extension parses of *submodules*; a module it hands back (``None``, see
-    :data:`~pytest_impacted._rust.RUST_PARSES_EACH`) is in neither dict, for astroid to read."""
+    :data:`~pytest_impacted._rust.RUST_PARSES_EACH`) is in neither dict, for Python to read."""
     modules_info = [(path, name, is_package_file(path)) for name, path in submodules.items()]
     if _rust.RUST_PARSES_EACH:
         each = _rust.rust_parse_imports_each(modules_info, ignore_type_checking_imports)

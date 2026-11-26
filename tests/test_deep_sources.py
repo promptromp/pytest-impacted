@@ -1,8 +1,7 @@
 """Sources nested beyond what a parser's recursion takes: generated code with a long ``a + b + ...``, deep nesting.
 
 Neither backend may crash the run — the Rust extension once killed the whole pytest process, no traceback — and
-neither may find fewer imports than the other could: ruff refuses some sources CPython compiles, and astroid
-gives up long before CPython does.
+neither may find fewer imports than the other could: ruff refuses some sources CPython compiles.
 """
 
 import subprocess
@@ -107,8 +106,8 @@ FILES = {
     "source",
     [
         pytest.param("x = " + "a if c else " * 203 + "a\n", id="203 nested conditionals (ruff refuses them)"),
-        pytest.param("x = " + " + ".join(["a"] * 600) + "\n", id="a 600-term + chain (astroid gives up)"),
-        pytest.param("x = f" + ".a" * 600 + "\n", id="a 600-link attribute chain (astroid gives up)"),
+        pytest.param("x = " + " + ".join(["a"] * 2_500) + "\n", id="a 2,500-term + chain (astroid gave up at 500)"),
+        pytest.param("x = f" + ".a" * 2_500 + "\n", id="a 2,500-link attribute chain"),
     ],
 )
 @pytest.mark.parametrize("ignore_type_checking_imports", [False, True], ids=["", "type-only ignored"])
@@ -163,20 +162,33 @@ def test_a_source_in_a_declared_encoding_keeps_its_imports(tmp_path):
     assert dep_tree.has_edge("app.core", "tests.test_legacy")
 
 
+@pytest.mark.parametrize(
+    ("deepest", "terms", "type_only"),
+    [
+        ("a", 800, True),
+        ("a", 2_000, True),
+        ("a", 2_001, False),
+        # A placeholder is no expression to ruff, nor its format spec: ``b`` is one level below the f-string.
+        ("f'{b}'", 1_999, True),
+        ("f'{b}'", 2_000, False),
+        ("f'{c:{b}}'", 1_999, True),
+        ("f'{c:{b}}'", 2_000, False),
+    ],
+)
 @pytest.mark.parametrize("import_backend", ["rust", "python"], indirect=True)
-def test_a_type_only_import_in_a_source_astroid_gives_up_on(tmp_path, import_backend):
-    """A documented parity exception: astroid gives up near 500 nested terms, and the fallback keeps every import
-    a runtime one; the extension tells type-only imports apart until DEEPEST (2,000). Only under
-    --impacted-ignore-type-checking-imports, and the Python backend errs on the safe side: an edge kept."""
+def test_a_type_only_import_in_a_deep_source(tmp_path, import_backend, deepest, terms, type_only):
+    """Both backends tell type-only imports apart down to the same depth (``DEEPEST``, 2,000 nested expressions:
+    a chain of 2,001 terms nests its first one 2,000 deep), and past it keep every import, the safe side. astroid
+    gave up near 500, which kept a 500 to 2,000-deep file's type-only edges in Python alone."""
     source = (
         "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from app.core import f\n\n"
-        "def g(h: 'f'):\n    pass\n\nx = " + " + ".join(["a"] * 800) + "\n"
+        "def g(h: 'f'):\n    pass\n\nx = " + " + ".join([deepest] + ["a"] * (terms - 1)) + "\n"
     )
     write_files(tmp_path, {**FILES, "app/user.py": source, "tests/test_user.py": "import app.user\n"})
 
     dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path, ignore_type_checking_imports=True)
 
-    assert dep_tree.has_edge("app.core", "app.user") is (import_backend == "python")
+    assert dep_tree.has_edge("app.core", "app.user") is not type_only
 
 
 @pytest.mark.skipif(not _rust.RUST_AVAILABLE, reason="pytest-impacted-rs is not installed")
