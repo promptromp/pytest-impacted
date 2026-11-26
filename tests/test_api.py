@@ -1343,3 +1343,27 @@ def test_a_changed_lock_file_selects_every_test_unless_dependency_files_are_unwa
     )
 
     assert found == selected
+
+
+class _GhostTestStrategy:
+    """Names a test module no file holds, as a broken extension might."""
+
+    def find_impacted_tests(self, *args, **kwargs):
+        return ["suite.test_ghost"]
+
+
+def test_impacted_test_modules_without_files_impact_nothing(tmp_path):
+    """``None``, as for every "nothing impacted" outcome, never ``[]``: callers tell the two apart."""
+    write_files(tmp_path, {"app/__init__.py": "", "app/a.py": "", "suite/test_a.py": "import app.a\n"})
+
+    with patch("pytest_impacted.api.find_impacted_files_in_repo", return_value=["app/a.py"]):
+        result = get_impacted_tests(
+            impacted_git_mode=GitMode.UNSTAGED,
+            impacted_base_branch="main",
+            root_dir=tmp_path,
+            ns_module="app",
+            tests_dir="suite",
+            strategy=_GhostTestStrategy(),
+        )
+
+    assert result is None

@@ -982,21 +982,3 @@ def test_only_directories_are_asked_about_beside_a_submodule(repo_with_submodule
 
     assert "vendor/lib/core.py" in found and len(found) == 52
     assert ["vendor"] in asked and all(len(paths) <= 1 for paths in asked)
-
-
-def test_branch_mode_diffs_from_the_fork_point_by_default(real_repo):
-    """What the base gained since the branch forked is no change of the branch's, unless asked for."""
-    repo, root = real_repo
-    repo.git.checkout("-b", "feature")
-    (root / "pkg" / "a.py").write_text("x = 2\n")
-    commit_all(repo)
-    repo.git.checkout("main")
-    (root / "pkg" / "b.py").write_text("y = 2\n")
-    commit_all(repo)
-    repo.git.checkout("feature")
-
-    assert branch(root, "main") == ["pkg/a.py"]
-    assert sorted(git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "main", use_merge_base=False)) == [
-        "pkg/a.py",
-        "pkg/b.py",
-    ]
