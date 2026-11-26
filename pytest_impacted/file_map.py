@@ -20,7 +20,7 @@ from pathlib import Path
 
 from pytest_impacted.display import notify
 from pytest_impacted.git import files_git_knows
-from pytest_impacted.strategies import glob_refusal, matches_any_glob, normalise_glob
+from pytest_impacted.globs import glob_refusal, matches_any_glob, normalise_glob
 from pytest_impacted.traversal import _spelled_exactly, forget_listings
 
 

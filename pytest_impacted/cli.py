@@ -20,9 +20,9 @@ from pytest_impacted.extensions import (
 )
 from pytest_impacted.file_map import parse_file_map
 from pytest_impacted.git import GitError, GitUnavailableError
+from pytest_impacted.globs import parse_invalidation_patterns
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
 from pytest_impacted.options import CLI_SETTINGS, OPTIONS, Kind
-from pytest_impacted.strategies import parse_invalidation_patterns
 from pytest_impacted.validation import module_problem, tests_dir_problem
 
 

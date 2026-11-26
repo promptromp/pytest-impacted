@@ -431,11 +431,14 @@ untracked). Parent directories are resolved, the path itself not: a tracked syml
 points at a directory. A directory means every file git knows in it, not only Python files. A path git knows
 nothing at is warned of in the report header every run (from the controller, so xdist shows it).
 
-**All file globs go through `matches_any_glob`** (`PurePosixPath.match`, right-anchored, `*` never spans `/`; a
+**All file globs go through `globs.matches_any_glob`** (`PurePosixPath.match`, right-anchored, `*` never spans `/`; a
 `**` segment matches any number of segments, none included, which `pathlib` cannot do before 3.13 — tried only
 after `match`, so it only widens: never route a glob past `match`, whose matches, version quirks included, must
 all stay), and every "this directory and below" match (the conftest rule's `find_test_modules_under`, a changed
-package's members) goes through `graph.nodes_under`. Do not add a second matcher or directory walk.
+package's members) goes through `graph.nodes_under`. Do not add a second matcher or directory walk. `globs.py`
+holds the matcher, the dependency-file patterns and the glob parsing (`normalise_glob`, `glob_refusal`,
+`parse_invalidation_patterns`), standard library only, so the plugin, CLI and `file_map.py` check globs without
+loading the strategies or the graph; `strategies.py` re-exports its public names, the path `docs/extensions.md` documents.
 
 Third-party strategies are discovered via the `pytest_impacted.strategies` entry point group and composed in by
 `api.build_strategy_with_extensions()` — the composition root, and the only module that knows both built-ins and
