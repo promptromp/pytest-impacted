@@ -1,6 +1,7 @@
 """Tests for the traversal module."""
 
 import importlib
+import importlib.machinery
 import os
 import pkgutil
 import sys
@@ -738,6 +739,118 @@ def test_symlinked_namespace_portions(tmp_path, links, expected):
     found = set(discover_submodules("pkg", root_dir=root))
 
     assert found - {"pkg", "pkg.ns.mod", "pkg.a.mod_a", "pkg.b.mod_b"} == expected
+
+
+# --- the package walk lists what pkgutil.iter_modules lists ------------------------------------
+
+
+def test_the_package_walk_lists_modules_as_pkgutil_does(tmp_path, caplog):
+    """Only a ``<name>.py`` is read: an extension module or a bare ``.pyc`` is listed, but has no source (warned of).
+    A dotted name is no module. A package (an ``__init__`` of any suffix) comes before a same-named module, and is
+    named only by an ``__init__.py``. A directory needs no identifier name to be a package, only no dot. Names come
+    in ``pkgutil``'s order: the package, then its sorted entries depth first, then its namespace portions."""
+    ext = importlib.machinery.EXTENSION_SUFFIXES[0]
+    write_files(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/both.py": "",
+            f"pkg/both{ext}": "",
+            f"pkg/fast{ext}": "",
+            "pkg/stale.pyc": "",
+            "pkg/a.b.py": "",
+            "pkg/dir.py/x.py": "",
+            "pkg/shadow/__init__.py": "",
+            "pkg/shadow.py": "",
+            "pkg/compiled/__init__.pyc": "",
+            "pkg/compiled/core.py": "",
+            "pkg/my-dir/__init__.py": "",
+            "pkg/my-dir/x.py": "",
+            "pkg/zns/z.py": "",
+        },
+    )
+
+    with caplog.at_level("WARNING", logger="pytest_impacted.traversal"):
+        found = discover_submodules("pkg", root_dir=tmp_path)
+
+    expected = {
+        "pkg": "pkg/__init__.py",
+        "pkg.both": "pkg/both.py",
+        "pkg.compiled.core": "pkg/compiled/core.py",
+        "pkg.my-dir": "pkg/my-dir/__init__.py",
+        "pkg.my-dir.x": "pkg/my-dir/x.py",
+        "pkg.shadow": "pkg/shadow/__init__.py",
+        "pkg.zns.z": "pkg/zns/z.py",
+    }
+    assert list(found.items()) == [(name, str((tmp_path / rel).resolve())) for name, rel in expected.items()]
+    assert sorted(record.args[0] for record in caplog.records) == ["pkg.dir", "pkg.fast", "pkg.stale"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_linked_package_is_followed_out_of_the_project_but_none_of_its_namespace_portions(tmp_path):
+    """``pkgutil`` lists a regular package wherever its link points, as the import system follows it; a namespace
+    portion is walked only inside the project, so below a package outside it, none is. A linked module file is
+    named by its real path."""
+    root, outside = tmp_path / "project", tmp_path / "outside"
+    write_files(root, {"pkg/__init__.py": "", "shared/helper.py": ""})
+    write_files(outside, {"ext/__init__.py": "", "ext/ns/far.py": "", "ext/sub/__init__.py": "", "ext/sub/deep.py": ""})
+    os.symlink(outside / "ext", root / "pkg" / "ext", target_is_directory=True)
+    os.symlink(root / "shared" / "helper.py", root / "pkg" / "helper.py")
+
+    found = discover_submodules("pkg", root_dir=root)
+
+    assert found == {
+        "pkg": str((root / "pkg/__init__.py").resolve()),
+        "pkg.ext": str((outside / "ext/__init__.py").resolve()),
+        "pkg.ext.sub": str((outside / "ext/sub/__init__.py").resolve()),
+        "pkg.ext.sub.deep": str((outside / "ext/sub/deep.py").resolve()),
+        "pkg.helper": str((root / "shared/helper.py").resolve()),
+    }
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
+@pytest.mark.parametrize(
+    ("locked", "expected"),
+    [
+        pytest.param("pkg", ["pkg"], id="the_analysed_package"),
+        pytest.param("pkg/sub", ["pkg", "pkg.core"], id="a_subpackage"),
+    ],
+)
+def test_a_package_directory_that_cannot_be_listed_still_has_its_init(tmp_path, locked, expected):
+    """Mode 311 (searchable, not readable): its ``__init__.py`` is a file to ``os.path`` though no listing shows it,
+    so the analysed package is named, but holds no modules; a sub-package like it is not entered, being neither a
+    package to ``pkgutil``, which cannot list it, nor a namespace portion, which has no ``__init__.py``."""
+    write_files(tmp_path, {"pkg/__init__.py": "", "pkg/core.py": "", "pkg/sub/__init__.py": "", "pkg/sub/x.py": ""})
+    (tmp_path / locked).chmod(0o311)
+    try:
+        found = discover_submodules("pkg", root_dir=tmp_path)
+    finally:
+        (tmp_path / locked).chmod(0o755)
+
+    assert sorted(found) == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the real paths are taken from the directory's on POSIX only")
+def test_the_package_walk_lists_each_directory_once_and_resolves_only_its_top(tmp_path, monkeypatch):
+    """On Django the walk took 0.5 s against 0.05 s for ``os.walk``: it listed each directory three times and
+    resolved every file and directory, an ``lstat`` per path component. An entry that is no link takes its real
+    path from its directory's."""
+    write_files(
+        tmp_path,
+        {"pkg/__init__.py": "", "pkg/a.py": "", "pkg/sub/__init__.py": "", "pkg/sub/b.py": "", "pkg/ns/deep/d.py": ""},
+    )
+    root = tmp_path.resolve()
+    listed: list[str] = []
+    resolved: list[str] = []
+    listdir, realpath = os.listdir, os.path.realpath
+    monkeypatch.setattr(os, "listdir", lambda path: listed.append(str(path)) or listdir(path))
+    monkeypatch.setattr(os.path, "realpath", lambda path, **kw: resolved.append(str(path)) or realpath(path, **kw))
+
+    found = discover_submodules("pkg", root_dir=root)
+
+    assert set(found) == {"pkg", "pkg.a", "pkg.sub", "pkg.sub.b", "pkg.ns.deep.d"}
+    assert sorted(listed) == [str(root / rel) for rel in ("pkg", "pkg/ns", "pkg/ns/deep", "pkg/sub")]
+    assert [path for path in resolved if path.startswith(str(root / "pkg"))] == [str(root / "pkg")]
 
 
 @pytest.mark.parametrize(

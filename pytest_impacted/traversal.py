@@ -1,5 +1,6 @@
 """Python package and module traversal utilities."""
 
+import importlib.machinery
 import logging
 import os
 import pkgutil
@@ -102,7 +103,8 @@ def find_non_package_prefix(fs_path: str, root: Path) -> tuple[str, str]:
 
 
 def iter_namespace(ns_package: str, *, scan_path: str) -> list[pkgutil.ModuleInfo]:
-    """Iterate over all submodules of a namespace package.
+    """Iterate over all submodules of a namespace package: ``pkgutil``'s listing of one directory, which the package
+    walk mirrors without calling it (:class:`_PackageWalk`).
 
     :param ns_package: dotted package name, used only for the module-name prefix
     :param scan_path: absolute filesystem path to scan
@@ -116,113 +118,186 @@ def iter_namespace(ns_package: str, *, scan_path: str) -> list[pkgutil.ModuleInf
     return module_infos
 
 
-def _discover_via_pkgutil(package: str, root: Path) -> dict[str, str]:
-    """Discover *package* and the modules importable under it, the way the import system names them.
-
-    ``pkgutil`` lists modules and regular packages; :func:`_namespace_portions` adds
-    the sub-directories without ``__init__.py`` it skips. Handles src-layout
-    projects by detecting non-package prefix directories (e.g. ``src/``) and
-    stripping them from module names while keeping them in filesystem paths.
-    """
-    fs_path = package_name_to_path(package)
-    non_pkg_prefix, importable_path = find_non_package_prefix(fs_path, root)
-    importable_name = path_to_package_name(importable_path)
-    return _discover_pkgutil_impl(importable_name, fs_path, non_pkg_prefix, root, ancestors=frozenset())
-
-
-def _discover_pkgutil_impl(
-    module_name: str, scan_path: str, non_pkg_prefix: str, root: Path, *, ancestors: frozenset[str]
-) -> dict[str, str]:
-    """Recursive implementation of pkgutil-based submodule discovery.
-
-    Each call names the package it walks, from its own ``__init__.py``, before its
-    children: ``pkgutil`` lists only children, and the analysed package — run by
-    every ``import pkg`` — has no parent walk to list it.
-
-    Args:
-        module_name: Dotted importable module name used as prefix (e.g. ``"predicated"``).
-        scan_path: Path to scan, relative to *root* (e.g. ``"src/predicated"``).
-        non_pkg_prefix: Non-package path prefix to prepend when constructing file paths
-            (e.g. ``"src"``).  Empty string when there is no prefix.
-        root: Project root every path is resolved against.
-        ancestors: Real paths of the directories above this one in the walk. A directory
-            symlinked to one of them would recurse forever, so it is not entered again;
-            a symlink elsewhere is followed, as the import system follows it.
-    """
-    real_dir = os.path.realpath(root / scan_path)
-    if real_dir in ancestors:
-        return {}
-    ancestors |= {real_dir}
-    # os.path, not Path.is_file(): an unsearchable directory has no __init__.py, rather than raising.
-    init = root / scan_path / "__init__.py"
-    results = {module_name: str(real_path(init))} if os.path.isfile(init) else {}
-    for module_info in iter_namespace(module_name, scan_path=str(root / scan_path)):
-        name = module_info.name
-        if name in results:
-            continue
-        module_parts = name.split(".")
-        if module_info.ispkg:
-            sub_scan_path = os.path.join(scan_path, module_parts[-1])
-            results.update(_discover_pkgutil_impl(name, sub_scan_path, non_pkg_prefix, root, ancestors=ancestors))
-            continue
-
-        # Construct file path: prepend the non-package prefix to module parts
-        file_parts = list(Path(non_pkg_prefix).parts) + module_parts if non_pkg_prefix else module_parts
-        base = root.joinpath(*file_parts)
-        # Not with_suffix(): it would truncate at a dot in the final component.
-        file_path = base.parent / f"{base.name}.py"
-
-        # os.path, not Path.exists(): a file in an unsearchable directory is missing, rather than raising.
-        if os.path.isfile(file_path):
-            results[name] = str(real_path(file_path))
-        else:
-            logger.warning("Module %s not found at expected path %s", name, file_path)
-
-    for portion in _namespace_portions(root / scan_path, root):
-        sub_scan_path = os.path.join(scan_path, portion)
-        results.update(
-            _discover_pkgutil_impl(f"{module_name}.{portion}", sub_scan_path, non_pkg_prefix, root, ancestors=ancestors)
-        )
-
-    return results
-
-
 #: Identifier-named directories that never hold the project's own modules: walking
 #: them costs time and adds phantom graph nodes (``node_modules`` holds thousands).
 _NEVER_PACKAGES = frozenset({"__pycache__", "node_modules"})
 
+#: Whether the package walk may take an entry's real path from its directory's: ``realpath(d/name)`` is
+#: ``realpath(d)/name`` when ``name`` is no link, without the ``lstat`` per path component ``realpath`` costs. Not on
+#: Windows, whose ``realpath`` also resolves junctions, which ``os.path.islink`` does not report.
+_DERIVE_REAL_PATHS = os.name == "posix"
 
-def _namespace_portions(directory: Path, root: Path) -> list[str]:
-    """Sub-directories of *directory* that ``pkgutil`` skips but the import system resolves.
 
-    ``pkgutil.iter_modules`` lists only regular packages, those with an ``__init__.py``.
-    Since PEP 420, any directory inside a package whose name is an identifier imports
-    as an implicit namespace package — ``import pkg.processors.ocr`` works when
-    ``processors/`` has no ``__init__.py`` — so its modules are part of the package.
-    A directory shadowed by a same-named module (``tests.py`` beside ``tests/``) is
-    walked all the same: pytest still collects tests from it, and a phantom module
-    can only add tests, never hide one.
+def _discover_importable(package: str, root: Path) -> dict[str, str]:
+    """Discover *package* and the modules importable under it, the way the import system names them (see
+    :class:`_PackageWalk`).
 
-    Like ``pkgutil``, a directory that cannot be listed — missing, or unreadable, such
-    as a container's bind-mounted data directory — has no modules; the ``os.path``
-    checks likewise treat an unreadable entry as absent rather than raising. A
-    symlinked portion is followed only while it stays inside the project and does
-    not point back up the tree (see :func:`_is_walkable_link_target`).
+    Handles src-layout projects by detecting non-package prefix directories (e.g. ``src/``) and
+    stripping them from module names while keeping them in filesystem paths.
     """
+    fs_path = package_name_to_path(package)
+    _non_package_prefix, importable_path = find_non_package_prefix(fs_path, root)
+    path = str(root / fs_path)
+    real = os.path.realpath(path)
+    top = _Directory(path, real, inside=Path(real).is_relative_to(root), derived=False)
+    return _PackageWalk(root).walk(path_to_package_name(importable_path), top, ancestors=frozenset())
+
+
+class _Directory(NamedTuple):
+    """A directory the package walk enters."""
+
+    #: As the walk spells it: the rootdir, the analysed package's path, then each entry's name.
+    path: str
+    #: ``os.path.realpath(path)``.
+    real: str
+    #: Whether *real* is inside the rootdir.
+    inside: bool
+    #: Whether *real* was taken from the parent's, the entry being no link (see :data:`_DERIVE_REAL_PATHS`).
+    derived: bool
+
+
+class _PackageWalk:
+    """One walk of an importable package, naming each module the way the import system does.
+
+    In each directory, the modules ``pkgutil.iter_modules`` lists (:func:`iter_namespace`), by the rules of
+    ``pkgutil._iter_file_finder_modules`` — a directory holding an ``__init__`` of any suffix is a package, one with
+    a dot in its name is none, an entry ``<name><module suffix>`` is a module if ``<name>.py`` is a regular file —
+    plus the namespace portions it skips (:meth:`namespace_portions`). Not ``pkgutil`` itself: it lists each
+    sub-directory twice (once from its parent, looking for an ``__init__``), and with the portions' own listing and
+    a ``realpath`` per file and directory (an ``lstat`` per path component), Django's walk took 0.45 s against
+    0.05 s for ``os.walk``. Here each directory is listed once per walk, and an entry that is no link takes its
+    real path from its directory's (0.08 s).
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        # inspect.getmodulename's suffixes, longest first, read once per walk rather than once per entry
+        self.suffixes = sorted((-len(suffix), suffix) for suffix in importlib.machinery.all_suffixes())
+        # The names in each sub-directory, listed by its parent looking for an ``__init__``, for its own walk.
+        self.listings: dict[str, list[str]] = {}
+
+    def getmodulename(self, file_name: str) -> str | None:
+        """``inspect.getmodulename(file_name)``."""
+        for neglen, suffix in self.suffixes:
+            if file_name.endswith(suffix):
+                return file_name[:neglen]
+        return None
+
+    def names(self, directory: str) -> list[str]:
+        """The names in *directory*, sorted (``pkgutil`` lists packages before same-named modules)."""
+        listing = self.listings.pop(directory, None)
+        return sorted(_listing(directory) if listing is None else listing)
+
+    def is_package(self, directory: str) -> bool:
+        """``pkgutil``'s test: *directory* holds an entry named ``__init__`` with any module suffix."""
+        listing = self.listings[directory] = _listing(directory)
+        return any(self.getmodulename(name) == "__init__" for name in listing)
+
+    def enter(self, parent: _Directory, name: str) -> _Directory:
+        """The sub-directory *name* of *parent*."""
+        path = os.path.join(parent.path, name)
+        if _DERIVE_REAL_PATHS and not os.path.islink(path):
+            real = os.path.join(parent.real, name)
+            return _Directory(path, real, inside=parent.inside or Path(real).is_relative_to(self.root), derived=True)
+        real = os.path.realpath(path)
+        return _Directory(path, real, inside=Path(real).is_relative_to(self.root), derived=False)
+
+    def file(self, directory: _Directory, name: str) -> str:
+        """The real path of the file *name* in *directory*."""
+        path = os.path.join(directory.path, name)
+        if _DERIVE_REAL_PATHS and not os.path.islink(path):
+            return os.path.join(directory.real, name)
+        return str(real_path(path))
+
+    def walk(self, module_name: str, directory: _Directory, *, ancestors: frozenset[str]) -> dict[str, str]:
+        """The package *module_name*, from its own ``__init__.py``, and every module under it.
+
+        The package is named before its children: ``pkgutil`` lists only children, and the analysed package — run
+        by every ``import pkg`` — has no parent walk to list it.
+
+        *ancestors* are the real paths of the directories above this one in the walk. A directory symlinked to one
+        of them would recurse forever, so it is not entered again; a symlink elsewhere is followed, as the import
+        system follows it.
+        """
+        if directory.real in ancestors:
+            return {}
+        ancestors |= {directory.real}
+        # os.path, never DirEntry or Path: in a listable but unsearchable directory, every entry is missing, rather
+        # than taken from the listing or raising.
+        init = os.path.join(directory.path, "__init__.py")
+        results = {module_name: self.file(directory, "__init__.py")} if os.path.isfile(init) else {}
+        names = self.names(directory.path)
+        # every entry pkgutil's rules or the namespace portions may ask about: those with no dot in their name
+        is_dir = {name: os.path.isdir(os.path.join(directory.path, name)) for name in names if "." not in name}
+
+        yielded: set[str] = set()
+        for file_name in names:  # pkgutil._iter_file_finder_modules, then each module it yields
+            modname = self.getmodulename(file_name)
+            if modname == "__init__" or modname in yielded:
+                continue
+            ispkg = False
+            if not modname and "." not in file_name and is_dir[file_name]:
+                modname = file_name
+                ispkg = self.is_package(os.path.join(directory.path, file_name))
+                if not ispkg:
+                    continue
+            if not modname or "." in modname:
+                continue
+            yielded.add(modname)
+            name = f"{module_name}.{modname}"
+            if name in results:
+                continue
+            if ispkg:
+                results.update(self.walk(name, self.enter(directory, file_name), ancestors=ancestors))
+                continue
+            file_path = os.path.join(directory.path, f"{modname}.py")
+            if os.path.isfile(file_path):
+                results[name] = self.file(directory, f"{modname}.py")
+            else:
+                logger.warning("Module %s not found at expected path %s", name, file_path)
+
+        for name, portion in self.namespace_portions(directory, names, is_dir):
+            results.update(self.walk(f"{module_name}.{name}", portion, ancestors=ancestors))
+        return results
+
+    def namespace_portions(
+        self, directory: _Directory, names: list[str], is_dir: dict[str, bool]
+    ) -> list[tuple[str, _Directory]]:
+        """Sub-directories of *directory* that ``pkgutil`` skips but the import system resolves.
+
+        ``pkgutil.iter_modules`` lists only regular packages, those with an ``__init__.py``.
+        Since PEP 420, any directory inside a package whose name is an identifier imports
+        as an implicit namespace package — ``import pkg.processors.ocr`` works when
+        ``processors/`` has no ``__init__.py`` — so its modules are part of the package.
+        A directory shadowed by a same-named module (``tests.py`` beside ``tests/``) is
+        walked all the same: pytest still collects tests from it, and a phantom module
+        can only add tests, never hide one.
+
+        Like ``pkgutil``, a directory that cannot be listed — missing, or unreadable, such
+        as a container's bind-mounted data directory — has no modules; the ``os.path``
+        checks likewise treat an unreadable entry as absent rather than raising. A
+        symlinked portion is followed only while it stays inside the project and does
+        not point back up the tree (see :func:`_is_walkable_link_target`).
+        """
+        portions = []
+        for name in names:
+            if not name.isidentifier() or name in _NEVER_PACKAGES or not is_dir[name]:
+                continue
+            if os.path.isfile(os.path.join(directory.path, name, "__init__.py")):
+                continue
+            portion = self.enter(directory, name)
+            # _is_walkable_link_target, from the real paths at hand: a directory is never inside its own child.
+            if portion.inside and (portion.derived or not Path(directory.real).is_relative_to(portion.real)):
+                portions.append((name, portion))
+        return portions
+
+
+def _listing(directory: str) -> list[str]:
+    """The names in *directory*; none when it cannot be listed, which ``pkgutil`` ignores "like import does"."""
     try:
-        entries = set(os.listdir(directory))
+        return os.listdir(directory)
     except OSError:
         return []
-    real_directory = Path(os.path.realpath(directory))
-    return [
-        name
-        for name in sorted(entries)
-        if name.isidentifier()
-        and name not in _NEVER_PACKAGES
-        and os.path.isdir(directory / name)
-        and not os.path.isfile(directory / name / "__init__.py")
-        and _is_walkable_link_target(directory / name, real_directory, root)
-    ]
 
 
 def _is_walkable_link_target(path: Path, real_parent: Path, root: Path) -> bool:
@@ -299,7 +374,7 @@ def _add_test_file(results: dict[str, str], named: set[str], file: Path, base_pa
 def _discover_submodules(package: str, require_init: bool, root: Path) -> dict[str, str]:
     """Cached discovery, keyed on the canonical *root* so two projects cannot share an entry."""
     if require_init:
-        return _discover_via_pkgutil(package, root)
+        return _discover_importable(package, root)
     return _discover_via_filesystem(package, root)
 
 

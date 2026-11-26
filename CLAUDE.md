@@ -66,18 +66,23 @@ layer (lazy imports, above); `test_the_header_names_the_backend_the_analysis_cho
 a parser as a backend, never as a branch in `graph.py`.
 
 **`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an importable package:
-`pkgutil.iter_modules`, a non-package prefix like `src/` dropped, plus the package's own `__init__.py` (`pkgutil`
-lists children only; without it `from pkg import X` had no edge). `False` walks test directories, naming modules
+what `pkgutil.iter_modules` lists, a non-package prefix like `src/` dropped, plus the package's own `__init__.py`
+(`pkgutil` lists children only; without it `from pkg import X` had no edge). `_PackageWalk` mirrors
+`pkgutil._iter_file_finder_modules` rule for rule (an `__init__` of any suffix makes a package, only a dot bars a
+directory, a module needs a regular `<name>.py`) rather than calling it, listing each directory once and taking a
+non-link's real path from its directory's (POSIX only: Windows' `realpath` resolves junctions): `pkgutil` and a
+`realpath` per entry took 0.45 s of Django's 1.0 s build (0.08 s now). `False` walks test directories, naming modules
 by path (`os.walk`, following symlinked directories as pytest does, under the package walk's guards; a file reached
 twice is one node, named not through the link). The wrong mode silently names modules differently (`app.tests.x`
 vs `tests.x`) or skips non-identifier directories (`my-dir/`). `True` also walks directories *without*
-`__init__.py` (`_namespace_portions`: PEP 420, which `pkgutil` skips) and ones shadowed by a same-named module
+`__init__.py` (`namespace_portions`: PEP 420, which `pkgutil` skips) and ones shadowed by a same-named module
 (`tests.py` beside `tests/`: pytest still collects there). It must stay as forgiving as `pkgutil`: an unreadable
 directory has no modules (never raise: an INTERNALERROR), and a symlinked portion is followed only while inside the
 project and not pointing back up the tree. Use `os.path.isfile`/`exists`, never `Path.exists()`/`is_file()` (on
-3.11–3.13 they raise `PermissionError` in a listable but unsearchable directory); `traversal.real_path`, never
-`Path.resolve()` (it raises on a symlink loop before 3.13, and git reports an untracked loop like any file);
-`parsing.is_package_file`, never `endswith("__init__.py")` (`test__init__.py`).
+3.11–3.13 they raise `PermissionError` in a listable but unsearchable directory) nor a `DirEntry`'s type (there it
+answers from the listing, or raises); `traversal.real_path`, never `Path.resolve()` (it raises on a symlink loop
+before 3.13, and git reports an untracked loop like any file); `parsing.is_package_file`, never
+`endswith("__init__.py")` (`test__init__.py`).
 
 **One file is one graph node, under one canonical name.** `_discover_project` (behind `discover_project_modules`)
 is the only place the package walk, tests-dir walk and ancestor conftests merge; `build_dep_tree`,
