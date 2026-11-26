@@ -265,7 +265,9 @@ lost, so the analysis runs on the controller (below), and the rest must be writt
 **Every diff goes through `_name_status_diff` with fixed `--name-status -z --no-renames`.**
 `-z` stops git C-quoting non-ASCII paths (`core.quotePath`), which would never match a
 file on disk; `--no-renames` turns a rename into a delete plus an add, so no record
-carries two paths and results do not depend on the developer's `diff.renames`. Unstaged
+carries two paths and results do not depend on the developer's `diff.renames`. A `--` ends
+the revisions (`--end-of-options` does not stop git guessing whether `docs` is a branch or a path),
+and branch mode diffs to `HEAD`, never the branch's name, which a tag may share. Unstaged
 mode is the union of three views — `git diff --cached`, `git diff`, and
 `git ls-files --others` — because a staged edit reverted on disk appears in only one of
 them. Deletions count (`_NON_IMPACTFUL_STATUSES` drops only `X`/`B`), so `changed_files`

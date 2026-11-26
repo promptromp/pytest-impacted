@@ -327,9 +327,12 @@ def _name_status_diff(repo: Repo, *args: str) -> ChangeSet:
 
     Every diff in this module goes through here so the flags cannot drift
     between call sites. *args* follow the flags, so revisions produced by
-    :func:`rev_args` keep their ``--end-of-options`` guard in front of them.
+    :func:`rev_args` keep their ``--end-of-options`` guard in front of them,
+    and a ``--`` ends them: ``--end-of-options`` stops option parsing but not git's
+    revision-or-path guess, so a branch named like a file or directory (``docs``)
+    was "ambiguous" and fatal.
     """
-    return ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS, *args))
+    return ChangeSet.from_git_diff_name_status_output(repo.git.diff(*_DIFF_FLAGS, *args, "--"))
 
 
 def _impactful_paths(change_set: ChangeSet) -> list[str]:
@@ -380,12 +383,8 @@ def impacted_files_for_branch_mode(
     is told why (by default it is only logged).
     """
 
-    try:
-        current_ref = repo.head.reference
-    except TypeError:
-        # Detached HEAD state (common in CI) — fall back to HEAD commit
-        current_ref = repo.head.commit
-
+    # HEAD, never the branch's short name: git resolves ``release`` to a tag of that name before the branch.
+    current_ref = "HEAD"
     starts = _merge_bases(repo, base_branch, current_ref) if use_merge_base else [base_branch]
     if not starts:
         cause = (

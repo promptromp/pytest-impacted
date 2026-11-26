@@ -36,7 +36,6 @@ class DummyRepo:
         unstaged="",
         untracked_files=(),
         diff_branch_result="",
-        current_branch="feature/some-feature-branch",
         working_tree_dir=None,
     ):
         self.bare = False
@@ -46,8 +45,6 @@ class DummyRepo:
         # The base has not moved since the fork, so the fork point *is* the base ref
         # (merge-base is called as: --all --end-of-options <base> <head>).
         self.git.merge_base = MagicMock(side_effect=lambda *args: args[-2])
-        self.head = MagicMock()
-        self.head.reference = current_branch
         self.working_tree_dir = working_tree_dir or str(Path.cwd())
         self._staged, self._unstaged, self._branch = staged, unstaged, diff_branch_result
 
@@ -74,8 +71,8 @@ def test_find_impacted_files_in_repo_unstaged_dirty(mock_repo):
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result == ["file1.py", "file2.py"]
     assert mock_repo.return_value.git.diff.call_args_list == [
-        call("--name-status", "-z", "--no-renames", "--cached"),
-        call("--name-status", "-z", "--no-renames"),
+        call("--name-status", "-z", "--no-renames", "--cached", "--"),
+        call("--name-status", "-z", "--no-renames", "--"),
     ]
 
 
@@ -381,26 +378,17 @@ def test_impacted_files_for_branch_mode_with_renamed_files():
     assert set(result) == {"old_name.py", "new_name.py", "modified.py"}
 
 
-def test_impacted_files_for_branch_mode_detached_head():
-    """Test impacted_files_for_branch_mode handles detached HEAD (common in CI)."""
-    diff_output = name_status_z(("M", "file1.py"))
-    repo = DummyRepo(diff_branch_result=diff_output)
-
-    # Simulate detached HEAD: accessing head.reference raises TypeError
-    def _raise_type_error(self):
-        raise TypeError("HEAD is a detached symbolic reference")
-
-    type(repo.head).reference = property(_raise_type_error)
-    repo.head.commit = "abc123"
+def test_impacted_files_for_branch_mode_ends_the_diff_at_head():
+    """HEAD, not the branch's name (a tag may share it), in the merge base and the diff; ``--`` ends the revisions."""
+    repo = DummyRepo(diff_branch_result=name_status_z(("M", "file1.py")))
     repo.git.merge_base = MagicMock(return_value="fork456\n")
 
     result = git.impacted_files_for_branch_mode(repo, "main")
 
     assert result == ["file1.py"]
-    # The commit hash stands in for the detached branch, in the merge base and the diff
-    repo.git.merge_base.assert_called_once_with("--all", "--end-of-options", "main", "abc123")
+    repo.git.merge_base.assert_called_once_with("--all", "--end-of-options", "main", "HEAD")
     repo.git.diff.assert_called_once_with(
-        "--name-status", "-z", "--no-renames", "--end-of-options", "fork456", "abc123"
+        "--name-status", "-z", "--no-renames", "--end-of-options", "fork456", "HEAD", "--"
     )
 
 
@@ -453,17 +441,6 @@ def test_rev_args_rejects_option_like_revisions(rev):
     """validate_rev is applied to every revision, not just the first."""
     with pytest.raises(git.InvalidGitRefError):
         git.rev_args("main", rev)
-
-
-def test_rev_args_validates_every_revision_including_the_current_ref():
-    """The second operand is guarded too — the guard is uniform, not per-call-site."""
-    repo = DummyRepo(diff_branch_result=name_status_z(("M", "file1.py")))
-    repo.head.reference = "--output=/tmp/pwned"
-
-    with pytest.raises(git.InvalidGitRefError):
-        git.impacted_files_for_branch_mode(repo, "main")
-
-    repo.git.diff.assert_not_called()
 
 
 # --- Tests for find_repo and normalize_git_paths (monorepo support) ---
@@ -833,6 +810,43 @@ def test_branch_mode_works_on_detached_head(real_repo):
     (root / "pkg" / "a.py").write_text("x = 2\n")
     commit_all(repo)
     repo.git.checkout("--detach")
+
+    assert branch(root, base) == ["pkg/a.py"]
+
+
+@pytest.mark.parametrize("detached", [False, True], ids=["on the branch", "detached"])
+def test_branch_mode_on_a_branch_named_like_a_directory(real_repo, detached):
+    """``git diff <rev> pkg`` is ambiguous when ``pkg`` is a branch and a path too: the revisions end at ``--``."""
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.checkout("-b", "pkg")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+    if detached:
+        repo.git.checkout("--detach")
+
+    assert branch(root, base) == ["pkg/a.py"]
+
+
+def test_branch_mode_against_a_base_named_like_a_directory(real_repo):
+    """The base tip, diffed directly (no merge base), is no path either."""
+    repo, root = real_repo
+    repo.git.branch("-m", "pkg")
+    repo.git.checkout("-b", "feature")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
+
+    assert git.find_impacted_files_in_repo(root, git.GitMode.BRANCH, "pkg", use_merge_base=False) == ["pkg/a.py"]
+
+
+def test_branch_mode_on_a_branch_that_shares_its_name_with_a_tag(real_repo):
+    """git resolves a short name to the tag before the branch: the diff must end at HEAD, not at the tag."""
+    repo, root = real_repo
+    base = repo.active_branch.name
+    repo.git.tag("release")
+    repo.git.checkout("-b", "release")
+    (root / "pkg" / "a.py").write_text("x = 2\n")
+    commit_all(repo)
 
     assert branch(root, base) == ["pkg/a.py"]
 
