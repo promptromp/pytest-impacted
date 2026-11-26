@@ -71,8 +71,8 @@ def test_find_impacted_files_in_repo_unstaged_dirty(mock_repo):
     result = git.find_impacted_files_in_repo(".", git.GitMode.UNSTAGED, None)
     assert result == ["file1.py", "file2.py"]
     assert mock_repo.return_value.git.diff.call_args_list == [
-        call("--name-status", "-z", "--no-renames", "--ignore-submodules=none", "--cached", "--"),
-        call("--name-status", "-z", "--no-renames", "--ignore-submodules=none", "--"),
+        call("--name-status", "-z", "--no-renames", "--cached", "--"),
+        call("--name-status", "-z", "--no-renames", "--"),
     ]
 
 
@@ -388,7 +388,7 @@ def test_impacted_files_for_branch_mode_ends_the_diff_at_head():
     assert result == ["file1.py"]
     repo.git.merge_base.assert_called_once_with("--all", "--end-of-options", "main", "HEAD")
     repo.git.diff.assert_called_once_with(
-        "--name-status", "-z", "--no-renames", "--ignore-submodules=none", "--end-of-options", "fork456", "HEAD", "--"
+        "--name-status", "-z", "--no-renames", "--end-of-options", "fork456", "HEAD", "--"
     )
 
 
@@ -1056,14 +1056,15 @@ def test_a_submodule_added_on_the_branch_brings_its_files(real_repo, tmp_path):
     assert branch(root, base) == [".gitmodules", "vendor", "vendor/lib/core.py"]
 
 
-def test_a_submodule_set_to_be_ignored_is_still_seen(repo_with_submodule):
-    """``ignore = dirty`` in .gitmodules hides an edit from ``git diff``; the analysis asks with none ignored."""
+def test_a_submodule_set_to_be_ignored_is_ignored(repo_with_submodule):
+    """``ignore = all`` in .gitmodules tells git to look away, for a large vendored tree or a broken one: so do we."""
     repo, root = repo_with_submodule
-    repo.git.config("-f", ".gitmodules", "submodule.vendor.ignore", "dirty")
-    commit_all(repo, "ignore dirty")
-    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    repo.git.config("-f", ".gitmodules", "submodule.vendor.ignore", "all")
+    commit_all(repo, "ignore the submodule")
+    shutil.rmtree(root / ".git" / "modules" / "vendor")  # broken, as main never minded
+    (root / "pkg" / "a.py").write_text("x = 2\n")
 
-    assert unstaged(root) == ["vendor", "vendor/lib/core.py"]
+    assert unstaged(root) == ["pkg/a.py"]
 
 
 def _bump_on_a_branch(repo, root):
@@ -1114,7 +1115,25 @@ def test_without_submodules_no_git_call_is_spent_on_them(real_repo, monkeypatch)
     for index in range(50):
         (root / "pkg" / f"new{index}.py").write_text("")
     calls = []
-    monkeypatch.setattr(git, "_gitlinks", lambda *args: calls.append(args) or frozenset())
+    monkeypatch.setattr(git, "_gitlinks", lambda *args: calls.append(args) or frozenset())  # no .gitmodules: none
 
     assert len(unstaged(root)) == 50
     assert calls == []
+
+
+def test_only_directories_are_asked_about_beside_a_submodule(repo_with_submodule, monkeypatch):
+    """A changed file is no submodule: git is asked about candidate paths alone, never the whole index or tree."""
+    _, root = repo_with_submodule
+    for index in range(50):
+        (root / "pkg" / f"new{index}.py").write_text("")
+    (root / "vendor" / "lib" / "core.py").write_text("x = 2\n")
+    asked = []
+    real = git._gitlinks
+    monkeypatch.setattr(
+        git, "_gitlinks", lambda repo, revision, paths: asked.append(list(paths)) or real(repo, revision, paths)
+    )
+
+    found = unstaged(root)
+
+    assert "vendor/lib/core.py" in found and len(found) == 52
+    assert ["vendor"] in asked and all(len(paths) <= 1 for paths in asked)
