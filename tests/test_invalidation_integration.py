@@ -10,7 +10,7 @@ from click.testing import CliRunner
 
 from pytest_impacted.cli import impacted_tests_cli
 
-from .git_helpers import edit_file, isolated_git_env
+from .git_helpers import assert_selected, edit_file, isolated_git_env
 
 
 INI = textwrap.dedent(
@@ -157,10 +157,12 @@ def test_deleted_conftest_impacts_the_tests_below_it(git_project):
     git_project.git("commit", "-q", "-m", "add conftest")
     git_project.git("rm", "-q", "tests/unit/conftest.py")
 
-    result = run(git_project)
+    result = run(git_project, "-v")
 
     # The unit test is selected and errors on the missing fixture; the integration test is deselected.
     result.assert_outcomes(errors=1, deselected=1)
+    result.stdout.fnmatch_lines(["*test_core.py::test_add ERROR*"])
+    result.stdout.no_fnmatch_line("*test_api.py::*")
 
 
 @pytest.mark.parametrize("rel", ["pytest.ini", "requirements-dev.txt", "backend/requirements.in", "constraints.txt"])
@@ -202,7 +204,7 @@ def test_branch_mode_ignores_what_the_base_gained_since_the_fork(git_project):
     git_project.git("checkout", "-q", "feature")
     branch_mode = ("--impacted-git-mode=branch", "--impacted-base-branch=trunk")
 
-    run(git_project, *branch_mode).assert_outcomes(passed=1, deselected=1)
+    assert_selected(run(git_project, *branch_mode, "-v"), passed=["test_core.py"], deselected=["test_api.py"])
     run(git_project, *branch_mode, "--impacted-no-merge-base").assert_outcomes(passed=2)
 
 

@@ -12,7 +12,7 @@ from click.testing import CliRunner
 from pytest_impacted.cli import impacted_tests_cli
 from pytest_impacted.plugin import _pythonpath
 
-from .git_helpers import edit_file as edit, run
+from .git_helpers import assert_selected, edit_file as edit, run
 
 
 FILES = {
@@ -96,17 +96,17 @@ SHARED = {
 
 
 @pytest.mark.parametrize(
-    ("args", "passed"), [([], 1), (["--impacted-conftest-imports"], 2)], ids=["default", "opted_in"]
+    ("args", "passed", "deselected"),
+    [([], ["test_a.py"], ["test_b.py"]), (["--impacted-conftest-imports"], ["test_a.py", "test_b.py"], [])],
+    ids=["default", "opted_in"],
 )
-def test_a_library_on_the_pythonpath_the_app_imports_is_application_code(make_git_project, args, passed):
+def test_a_library_on_the_pythonpath_the_app_imports_is_application_code(make_git_project, args, passed, deselected):
     """``lib/util.py`` is certainly the ``util`` the app imports, so it is application code: the conftest
     reaching it through the app selects the tests beneath it only on request, as for any such library."""
     project = make_git_project(SHARED, SHARED_INI)
     edit(project, "lib/util.py")
 
-    result = run(project, *args)
-
-    result.assert_outcomes(passed=passed, deselected=2 - passed)
+    assert_selected(run(project, *args), passed=passed, deselected=deselected)
 
 
 def test_without_the_python_path_plugin_the_run_goes_on(make_git_project):
