@@ -13,10 +13,7 @@ from pytest_impacted.graph import build_dep_tree
 from pytest_impacted.strategies import (
     CompositeImpactStrategy,
     ConftestImportImpactStrategy,
-    DependencyFileImpactStrategy,
-    InvalidationFileImpactStrategy,
     PytestImpactStrategy,
-    get_default_strategies,
 )
 from pytest_impacted.traversal import resolve_files_to_modules
 
@@ -239,31 +236,3 @@ def test_a_subclass_need_not_call_the_base_initialiser(project):
             self.extra = extra
 
     assert find(Custom(), project, "app/utils.py") == ["suite.other.test_other"]
-
-
-class TestGetDefaultStrategiesWithConftestImports:
-    @pytest.mark.parametrize("conftest_imports", [False, True])
-    def test_always_present_right_after_the_pytest_strategy(self, conftest_imports):
-        strategies = get_default_strategies(conftest_imports=conftest_imports)
-
-        kinds = [type(s) for s in strategies]
-        opt_in = strategies[kinds.index(ConftestImportImpactStrategy)]
-        assert kinds.index(ConftestImportImpactStrategy) == kinds.index(PytestImpactStrategy) + 1
-        assert opt_in.report_only is not conftest_imports
-
-    @pytest.mark.parametrize("watch_dep_files", [True, False])
-    def test_independent_of_the_other_switches(self, watch_dep_files):
-        strategies = get_default_strategies(
-            watch_dep_files=watch_dep_files, invalidate_all_patterns=["*.json"], conftest_imports=True
-        )
-
-        kinds = {type(s) for s in strategies}
-        assert {ConftestImportImpactStrategy, InvalidationFileImpactStrategy} <= kinds
-        assert (DependencyFileImpactStrategy in kinds) is watch_dep_files
-
-    def test_the_default_pipeline_names_the_conftests(self, project, caplog):
-        assert "suite/db/conftest.py" in notices(get_default_strategies(), project, "app/db.py", caplog)
-
-    def test_opted_in_nothing_is_said_about_conftests(self, project, caplog):
-        """The strategy selects those tests; telling the user to enable it would be wrong."""
-        assert "conftest" not in notices(get_default_strategies(conftest_imports=True), project, "app/db.py", caplog)

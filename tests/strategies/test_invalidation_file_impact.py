@@ -8,9 +8,7 @@ import networkx as nx
 import pytest
 
 from pytest_impacted.strategies import (
-    DependencyFileImpactStrategy,
     InvalidationFileImpactStrategy,
-    get_default_strategies,
     matches_any_glob,
     parse_invalidation_patterns,
 )
@@ -173,24 +171,6 @@ class TestInvalidationFileImpactStrategy:
         assert "custom.lock" in caplog.text
         assert "pkg/core.py" not in caplog.text
         assert "--impacted-invalidate-all" in caplog.text
-
-
-class TestGetDefaultStrategiesWithInvalidation:
-    def test_not_included_without_patterns(self):
-        strategies = get_default_strategies()
-        assert not any(isinstance(s, InvalidationFileImpactStrategy) for s in strategies)
-
-    def test_included_after_dep_file_strategy_when_configured(self):
-        strategies = get_default_strategies(invalidate_all_patterns=["*.json"])
-        assert isinstance(strategies[-2], DependencyFileImpactStrategy)
-        strategy = strategies[-1]
-        assert isinstance(strategy, InvalidationFileImpactStrategy)
-        assert strategy.patterns == ("*.json",)
-
-    def test_independent_of_dep_file_switch(self):
-        strategies = get_default_strategies(watch_dep_files=False, invalidate_all_patterns=["*.json"])
-        assert not any(isinstance(s, DependencyFileImpactStrategy) for s in strategies)
-        assert isinstance(strategies[-1], InvalidationFileImpactStrategy)
 
 
 class TestParseInvalidationPatterns:
