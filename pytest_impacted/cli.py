@@ -22,6 +22,7 @@ from pytest_impacted.file_map import parse_file_map
 from pytest_impacted.git import GitMode, GitUnavailableError
 from pytest_impacted.ini import PytestConfig, find_pytest_config, load_pytest_config
 from pytest_impacted.strategies import parse_invalidation_patterns
+from pytest_impacted.traversal import unnameable_tests_dir
 
 
 # The pytest setting each option defaults to; an extension's option is named as its setting.
@@ -277,6 +278,8 @@ def _run(
             raise click.BadParameter(
                 f"Directory '{value}' does not exist under root-dir '{root_dir}'.", param_hint=sources.get(name, option)
             )
+    if tests_dir and (reason := unnameable_tests_dir(tests_dir, Path(root_dir))):
+        raise click.BadParameter(reason, param_hint=sources.get("tests_dir", "--tests-dir"))
 
     try:
         mappings = parse_file_map(file_map)

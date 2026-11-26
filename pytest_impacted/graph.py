@@ -14,6 +14,7 @@ from pytest_impacted import _rust
 from pytest_impacted.dynamic_imports import TABLE, DynamicImports, parse_dynamic_imports
 from pytest_impacted.parsing import (
     is_conftest_module,
+    is_package_file,
     is_test_module,
     parse_file_imports,
     parse_pytest_plugins,
@@ -34,6 +35,7 @@ from pytest_impacted.traversal import (
     modules_for_files,
     package_name_to_path,
     pythonpath_roots,
+    real_path,
     rootless_test_dirs,
     split_import_roots,
 )
@@ -92,7 +94,7 @@ def _parse_imports(
 def _parse_imports_in_rust(
     submodules: dict[str, str], ignore_type_checking_imports: bool
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    modules_info = [(path, name, path.endswith("__init__.py")) for name, path in submodules.items()]
+    modules_info = [(path, name, is_package_file(path)) for name, path in submodules.items()]
     if not ignore_type_checking_imports:
         return _rust.rust_parse_all_imports(modules_info), {}
     split = _rust.rust_parse_all_imports_split(modules_info)
@@ -106,7 +108,7 @@ def _parse_imports_in_python(
     type_only: dict[str, list[str]] = {}
     for name, file_path in submodules.items():
         logger.debug("Processing submodule: %s", name)
-        is_pkg = file_path.endswith("__init__.py")
+        is_pkg = is_package_file(file_path)
         if ignore_type_checking_imports:
             runtime[name], type_only[name] = split_file_imports(file_path, name, is_package=is_pkg)
         else:
@@ -134,7 +136,12 @@ def is_test_node(dep_tree: nx.DiGraph, node: str) -> bool:
 
 
 def _is_test_file(path: Path, root: Path) -> bool:
-    """Whether the file at *path* is a test module, judged by its name from the rootdir, as a walk would."""
+    """Whether the file at *path* is a test module, judged by its name from the rootdir, as a walk would.
+
+    A file outside the rootdir is none: the package walk follows a symlinked directory out of it.
+    """
+    if not path.is_relative_to(root):
+        return False
     parts = module_parts(path.relative_to(root))
     return bool(parts) and os.path.exists(path) and is_test_module(".".join((*parts[:-1], _importable_stem(path))))
 
@@ -221,7 +228,7 @@ def package_members(filenames: Iterable[str], dep_tree: nx.DiGraph, root_dir: st
         directory
         for file in filenames
         if PurePosixPath(file).name == "__init__.py"
-        if _runs_for_the_project(directory := (root / file).parent.resolve(), root)
+        if _runs_for_the_project(directory := real_path((root / file).parent), root)
     }
     if not directories:
         return []
@@ -653,7 +660,7 @@ def link_changed_files(filenames: list[str], dep_tree: nx.DiGraph, root_dir: str
     basedir_paths = [Path(directory) for directory in dep_tree.graph.get("rootless_test_dirs", ())]
     added = []
     for file in filenames:
-        path = (root / file).resolve()
+        path = real_path(root / file)  # git reports an untracked symlink loop, whatever its name
         if not file.endswith(".py") or not path.is_relative_to(root):
             continue
         # The names the project's roots imply first, so a node is named as its path reads.
@@ -845,7 +852,7 @@ def _parse_all_dynamic_imports(submodules: dict[str, str]) -> dict[str, DynamicI
     it, so the extension never finds less. A conftest with no free name is parsed under its
     :func:`~pytest_impacted.traversal.import_base`, as for its import statements.
     """
-    modules = [(path, import_base(name), os.path.basename(path) == "__init__.py") for name, path in submodules.items()]
+    modules = [(path, import_base(name), is_package_file(path)) for name, path in submodules.items()]
     by_rust = _rust_dynamic_imports(modules) if _rust.RUST_PARSES_DYNAMIC_IMPORTS else [None] * len(modules)
     # A file the extension leaves (None: ruff rejects it, or it nests too deep) is the stdlib pass's.
     found = [
@@ -921,7 +928,11 @@ def _narrowed_files(package: str, tests_package: str | None, root: Path) -> froz
     return frozenset(
         path
         for path in discover_application_files(package, tests_package, root)
-        if os.path.basename(path) not in {"conftest.py", "__init__.py"} and not _is_test_file(Path(path), root)
+        # Inside the rootdir only: the package walk follows a symlinked sub-package out of it, where a test module's
+        # path no longer reads as one, and narrowing a test loses tests. Keeping an import only selects more.
+        if Path(path).is_relative_to(root)
+        and os.path.basename(path) not in {"conftest.py", "__init__.py"}
+        and not _is_test_file(Path(path), root)
     )
 
 
@@ -955,7 +966,7 @@ def _may_name_a_module(candidate: str, walked: _Discovered) -> bool:
         return False
     parent = candidate.rpartition(".")[0]
     parent_path = walked.modules.get(walked.aliases.get(parent, parent))
-    return parent_path is None or parent_path.endswith("__init__.py")
+    return parent_path is None or is_package_file(parent_path)
 
 
 def build_dep_tree(

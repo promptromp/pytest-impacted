@@ -6,6 +6,7 @@ import textwrap
 
 import pytest
 
+from pytest_impacted import _rust
 from pytest_impacted.strategies import clear_dep_tree_cache
 
 from .git_helpers import isolated_git_env
@@ -107,3 +108,13 @@ def make_git_project(pytester, monkeypatch):
         return pytester
 
     return make
+
+
+@pytest.fixture(params=["rust", "python"])
+def import_backend(request, monkeypatch):
+    """Run the test with each backend parsing the import statements: the Rust extension, then astroid."""
+    if request.param == "python":
+        monkeypatch.setattr(_rust, "RUST_AVAILABLE", False)
+    elif not _rust.RUST_AVAILABLE:
+        pytest.skip("pytest-impacted-rs is not installed")
+    return request.param

@@ -919,3 +919,12 @@ def test_a_directory_above_the_package_that_a_name_is_rooted_at_is_implied_not_a
 
 def test_import_roots_of_nothing_analysed_are_the_rootdir(tmp_path):
     assert import_roots([], {}, {}, tmp_path) == [tmp_path.resolve()]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_the_tests_walk_lists_only_regular_files(tmp_path):
+    """A named pipe called ``*.py`` is no module: reading it would block the run for good."""
+    write_files(tmp_path, {"tests/test_core.py": ""})
+    os.mkfifo(tmp_path / "tests" / "test_pipe.py")
+
+    assert set(discover_submodules("tests", require_init=False, root_dir=tmp_path)) == {"tests.test_core"}

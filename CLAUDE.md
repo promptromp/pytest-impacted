@@ -20,7 +20,8 @@ default), and it is one rule, `type_only.py` (mirrored in `rust/src/type_only.rs
 or another such block. A name used at runtime, mentioned in a string the code reads, or never used
 keeps it — and so do all test code and every package `__init__.py` (`graph._narrowed_files`: the option
 narrows only `discover_application_files` less conftests, test modules judged by path — which catches tests
-inside the package with no tests dir configured — and `__init__.py` files). Nothing imports a test, so its
+inside the package with no tests dir configured — `__init__.py` files, and files outside the rootdir, where a
+symlinked sub-package's test module no longer reads as one by its path). Nothing imports a test, so its
 type-only imports close no cycle, but `def test_x(user: "User")` with `user` from a conftest depends on
 `User`'s module through that annotation alone, which the oracle (subtracting what a bare conftest loads)
 could never show. `from pkg import X` runs `pkg/__init__.py`, which may provide `X` by a name it computes
@@ -71,7 +72,10 @@ That walk must stay as forgiving as `pkgutil`: an unreadable directory has no
 modules (never raise — it would be an INTERNALERROR), and a symlinked portion is followed
 only while it stays inside the project and does not point back up the tree. Check files with
 `os.path.isfile`/`exists`, never `Path.exists()`/`is_file()`: on Python 3.11–3.13 those raise
-`PermissionError` inside a listable but unsearchable directory, where `os.path` says False.
+`PermissionError` inside a listable but unsearchable directory, where `os.path` says False. Likewise resolve a
+project or changed file with `traversal.real_path`, never `Path.resolve()`, which raises on a symlink loop before
+3.13 (git reports an untracked loop like any file), and
+tell a package by `parsing.is_package_file` (the basename), never `endswith("__init__.py")` (`test__init__.py`).
 
 **One file is one graph node, under one canonical name.** `_discover_project` (behind the
 public `discover_project_modules`) is the only place the package walk, the tests-dir walk

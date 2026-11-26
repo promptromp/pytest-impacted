@@ -56,6 +56,11 @@ def _quiet_parse() -> Iterator[None]:
         yield
 
 
+def is_package_file(path: str) -> bool:
+    """Whether the file at *path* is a package's ``__init__.py`` — by its name, not a suffix (``test__init__.py``)."""
+    return os.path.basename(path) == "__init__.py"
+
+
 def is_conftest_module(module_name: str) -> bool:
     """Whether a dotted module name names a ``conftest`` (by name; callers check the file where it matters)."""
     return module_name.rpartition(".")[2] == "conftest"

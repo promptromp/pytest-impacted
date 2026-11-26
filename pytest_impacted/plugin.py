@@ -29,7 +29,7 @@ from pytest_impacted.git import (
     rev_args,
 )
 from pytest_impacted.strategies import parse_invalidation_patterns
-from pytest_impacted.traversal import canonical_root
+from pytest_impacted.traversal import canonical_root, real_path, unnameable_tests_dir
 
 
 class Unimpacted(StrEnum):
@@ -607,12 +607,12 @@ def _impacted_items(items: list[pytest.Item], impacted_tests: list[str], root_di
     items from non-Python files (a ``--doctest-glob`` text file, a YAML collector)
     and doctests (``--doctest-modules`` collects them from source modules too).
     """
-    impacted = {(root_dir / test).resolve() for test in impacted_tests}
+    impacted = {real_path(root_dir / test) for test in impacted_tests}
     resolved: dict[Path, Path] = {}
 
     def is_impacted(path: Path) -> bool:
         if path not in resolved:
-            resolved[path] = path.resolve()
+            resolved[path] = real_path(path)
         return resolved[path] in impacted
 
     return {
@@ -727,6 +727,8 @@ def validate_tests_dir(tests_dir: str, root_dir: Path) -> None:
             f"Tests directory '{tests_dir}' does not exist under '{root_dir}'. "
             f"Please check the path passed to --impacted-tests-dir."
         )
+    if reason := unnameable_tests_dir(tests_dir, root_dir):
+        raise UsageError(reason)
 
 
 def validate_base_branch(base_branch: str, root_dir: str) -> None:

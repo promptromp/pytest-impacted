@@ -451,6 +451,28 @@ class TestImpactedTestsCLI:
         assert result.exit_code == 0, result.output
 
 
+@pytest.mark.parametrize(
+    ("directory", "tests_dir", "accepted"),
+    [
+        ("tests/unit", "tests.unit", True),  # a dotted spelling of a real path
+        ("tests.unit", "tests.unit", False),  # a directory with a dot in its name: walked as tests/unit
+        (".tests", ".tests", False),
+    ],
+    ids=["dotted spelling", "dot in the name", "hidden directory"],
+)
+def test_the_cli_refuses_a_tests_dir_the_analysis_cannot_name(tmp_path, directory, tests_dir, accepted):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / directory).mkdir(parents=True)
+
+    with patch("pytest_impacted.cli.get_impacted_tests", return_value=[]):
+        result = CliRunner().invoke(
+            impacted_tests_cli, ["--root-dir", str(tmp_path), "--module", "pkg", "--tests-dir", tests_dir]
+        )
+
+    assert (result.exit_code == 0) is accepted, result.output
+    assert accepted or "its path inside the" in result.output
+
+
 @pytest.mark.parametrize("tests_dir", ["suite", "./suite", "suite/"])
 def test_the_cli_prints_the_impacted_test_files_of_a_real_repo(make_git_project, monkeypatch, tmp_path, tests_dir):
     """End to end, from elsewhere: ``--root-dir`` is honoured, and only test paths reach stdout."""
