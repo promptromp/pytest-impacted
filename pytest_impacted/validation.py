@@ -21,7 +21,7 @@ def module_problem(module: str, root: Path, flag: str) -> str | None:
     normalized = normalized_module(module)
     module_dir = package_name_to_path(normalized)
     # ``.``, ``.app``, ``../app`` (their dots turn into separators) and an absolute path all name a directory outside.
-    if not normalized or os.path.isabs(module_dir):
+    if not normalized or module_dir.startswith("/") or os.path.isabs(module_dir):  # a root-only path on Windows too
         return f"Module '{module}' names no package inside '{root}': give its path inside the rootdir ({flag}=app)."
     # os.path, not Path.is_dir(): inside an unsearchable directory it is missing, rather than raising.
     if os.path.isdir(root / module_dir):
