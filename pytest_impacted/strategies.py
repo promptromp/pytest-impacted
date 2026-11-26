@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 
 import networkx as nx
 
-from pytest_impacted.display import notify
+from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import ConfigOption, StrategyProtocol
 from pytest_impacted.graph import (
     build_dep_tree,
@@ -892,6 +892,16 @@ def get_default_strategies(
     return strategies
 
 
+def _hook_failed(strategy: object, hook: str, err: Exception, consequence: str, session: Any) -> None:
+    """Say on the terminal that *strategy* raised in *hook*, and what that costs; the traceback goes to the log.
+
+    A log record alone is swallowed during collection: a broken extension then meant fewer tests, exit 0, unseen.
+    """
+    name = f"{type(strategy).__module__}.{type(strategy).__qualname__}"
+    logger.debug("Strategy %s raised in %s()", name, hook, exc_info=err)
+    warn(f"pytest-impacted: strategy {name} raised in {hook}() ({type(err).__name__}: {err}); {consequence}.", session)
+
+
 class CompositeImpactStrategy(ImpactStrategy):
     """Strategy that combines multiple strategies."""
 
@@ -933,13 +943,8 @@ class CompositeImpactStrategy(ImpactStrategy):
                     root_dir=root_dir,
                     session=session,
                 )
-            except Exception:
-                logger.warning(
-                    "Strategy %s.%s raised in enrich_dep_tree(); skipping its enrichment phase.",
-                    strategy.__class__.__module__,
-                    strategy.__class__.__qualname__,
-                    exc_info=True,
-                )
+            except Exception as err:  # noqa: BLE001 — one misbehaving extension must not block the others
+                _hook_failed(strategy, "enrich_dep_tree", err, "the edges it adds are missing", session)
 
     def setup(
         self,
@@ -957,6 +962,7 @@ class CompositeImpactStrategy(ImpactStrategy):
         others from running. This matches the fault-tolerance applied to
         entry-point discovery in :mod:`pytest_impacted.extensions`.
         """
+        self._session = session  # for teardown, which gets none
         for strategy in self.strategies:
             if (strategy_setup := getattr(strategy, "setup", None)) is None:
                 continue
@@ -968,13 +974,8 @@ class CompositeImpactStrategy(ImpactStrategy):
                     session=session,
                     dep_tree=dep_tree,
                 )
-            except Exception:
-                logger.warning(
-                    "Strategy %s.%s raised in setup(); skipping its setup phase.",
-                    strategy.__class__.__module__,
-                    strategy.__class__.__qualname__,
-                    exc_info=True,
-                )
+            except Exception as err:  # noqa: BLE001 — one misbehaving extension must not block the others
+                _hook_failed(strategy, "setup", err, "its selection may be incomplete", session)
 
     def teardown(self) -> None:
         """Propagate :meth:`teardown` to every sub-strategy in reverse order.
@@ -989,13 +990,8 @@ class CompositeImpactStrategy(ImpactStrategy):
                 continue
             try:
                 strategy_teardown()
-            except Exception:
-                logger.warning(
-                    "Strategy %s.%s raised in teardown(); continuing with remaining strategies.",
-                    strategy.__class__.__module__,
-                    strategy.__class__.__qualname__,
-                    exc_info=True,
-                )
+            except Exception as err:  # noqa: BLE001 — every strategy gets its teardown
+                _hook_failed(strategy, "teardown", err, "the others still tear down", getattr(self, "_session", None))
 
     def find_impacted_tests(
         self,

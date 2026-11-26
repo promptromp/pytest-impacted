@@ -432,6 +432,7 @@ def _analyse(session: pytest.Session, config: Config) -> list[str] | None:
         conftest_imports=get_option("impacted_conftest_imports"),
         disabled=get_option("impacted_disable_ext") or [],
         ext_config=_collect_ext_config(config),
+        session=session,
     )
     try:
         impacted_tests = get_impacted_tests(

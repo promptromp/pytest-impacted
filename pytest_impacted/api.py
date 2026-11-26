@@ -55,6 +55,7 @@ def build_strategy_with_extensions(
     disabled: Sequence[str] = (),
     ext_config: dict[str, Any] | None = None,
     config_file: Path | None = None,
+    session: Any = None,
 ) -> ImpactStrategy:
     """Build a composite strategy combining built-in and extension strategies.
 
@@ -74,6 +75,7 @@ def build_strategy_with_extensions(
         ext_config: Configuration values for extensions.
         config_file: The pytest configuration file read without a pytest session
             (the ``impacted-tests`` CLI), whose edits impact every test.
+        session: The pytest session, whose terminal is told of an extension skipped on loading.
 
     Returns:
         A CompositeImpactStrategy wrapping all strategies.
@@ -84,7 +86,9 @@ def build_strategy_with_extensions(
         conftest_imports=conftest_imports,
         config_file=config_file,
     )
-    ext_strategies = load_extensions(disabled=disabled, ext_config=ext_config)
+    ext_strategies = load_extensions(
+        disabled=disabled, ext_config=ext_config, on_skip=lambda message: warn(message, session)
+    )
 
     # Sort extensions by priority (built-ins keep their fixed order)
     ext_strategies.sort(key=lambda s: getattr(s, "priority", 100))
