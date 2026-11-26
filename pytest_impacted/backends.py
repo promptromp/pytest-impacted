@@ -56,11 +56,9 @@ class Backend(Protocol):
     def imports(self, sources: Sequence[Source], *, find_type_only: bool) -> list[Split | None]:
         """Each file's import statements' candidates (``from pkg import name``: ``pkg`` and ``pkg.name``), split
         into runtime and type-only ones when *find_type_only* (see ``type_only``), all runtime ones otherwise."""
-        ...
 
     def imports_by_name(self, sources: Sequence[Source]) -> list[DynamicImports | None]:
         """What each file's calls import by name (see ``dynamic_imports``)."""
-        ...
 
 
 class PythonBackend:
