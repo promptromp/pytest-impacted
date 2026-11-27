@@ -120,6 +120,34 @@ def _notify_untested(linked: dict[str, str], dep_tree: nx.DiGraph, root_dir: str
         notify(f"Import analysis selects no tests for {untested}: no test depends on {pronoun}.", session)
 
 
+def _directories_as_packages(files: list[str], root_dir: str | Path, session: Any) -> list[str]:
+    """The ``__init__.py`` path of each changed path that is a directory.
+
+    git reports a change inside a submodule — a new commit recorded, or edits not committed there — by the
+    submodule's path (``vendor``), which names no module. Read as ``vendor/__init__.py`` changed, every module
+    under it counts as changed (:func:`~pytest_impacted.graph.package_members`), and a module importing a name
+    gone from it is reached (:func:`~pytest_impacted.graph.link_changed_files`). An empty one is a submodule not
+    checked out, said so: nothing in it can be analysed.
+    """
+    root = canonical_root(root_dir)
+    directories = [file.rstrip("/") for file in files if os.path.isdir(root / file)]
+    if empty := [directory for directory in directories if not _lists_anything(root / directory)]:
+        notify(
+            f"{empty} changed but holds no files, so nothing in it is analysed: a submodule not checked out? "
+            "(actions/checkout: submodules: true)",
+            session,
+        )
+    return [f"{directory}/__init__.py" for directory in directories]
+
+
+def _lists_anything(directory: Path) -> bool:
+    try:
+        with os.scandir(directory) as entries:
+            return any(True for _ in entries)
+    except OSError:  # unreadable: not said to be empty
+        return True
+
+
 def _test_files(
     modules: list[str], dep_tree: nx.DiGraph, ns_module: str, tests_package: str | None, root_dir: str | Path
 ) -> list[str]:
@@ -278,6 +306,10 @@ def get_impacted_tests(
         node: Path(dep_tree.nodes[node][Node.PATH]).relative_to(canonical_root(root_dir)).as_posix()
         for node in link_changed_files(impacted_files, dep_tree, root_dir=root_dir)
     }
+    # A changed directory — git's report of a change inside a submodule — counts as its __init__.py changed:
+    # every module under it, and every importer of a name gone from it (not named in the notice below).
+    as_packages = _directories_as_packages(impacted_files, root_dir, session)
+    link_changed_files(as_packages, dep_tree, root_dir=root_dir)
 
     # Resolved through the graph, before enrichment, so every changed module is one of its nodes.
     changed_modules = resolve_files_to_nodes(impacted_files, dep_tree, root_dir=root_dir)
@@ -296,7 +328,9 @@ def get_impacted_tests(
     # Importing any module of a package runs its __init__.py first: a changed one changes them
     # all — after enrichment, so a node an extension added inside the package counts too.
     changed = set(changed_modules)
-    inside = [module for module in package_members(impacted_files, dep_tree, root_dir) if module not in changed]
+    inside = [
+        module for module in package_members(impacted_files + as_packages, dep_tree, root_dir) if module not in changed
+    ]
     impacted_modules = changed_modules + inside
     # Say so for a linked file no test depends on — judged on the enriched graph.
     _notify_untested(linked, dep_tree, root_dir, session)

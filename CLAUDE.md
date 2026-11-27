@@ -227,13 +227,10 @@ no record has two paths and `diff.renames` cannot matter. A `--` ends the revisi
 stop git guessing whether `docs` is a branch or a path); branch mode diffs to `HEAD`, never the branch name, which a
 tag may share. Unstaged mode unions `git diff --cached`, `git diff` and `git ls-files --others`: a staged edit
 reverted on disk shows in only one. Deletions count (`_NON_IMPACTFUL_STATUSES` drops only `X`/`B`), so
-`changed_files` names missing paths, and files outside the root arrive absolute. A changed submodule (a recorded,
-checked-out gitlink) is followed by the files changed inside it (`git._with_submodule_changes`); this never fails
-the run nor yields less than the plain paths: anything unexpected is a notice (`on_fallback`) plus the plain paths,
-and no old commit to diff from means every tracked file. Only changed directories are asked about (`_gitlinks`,
-chunked; none without a `.gitmodules`) — never one git call per path, a whole-tree listing, or deleted paths as
-pathspecs (23 s, "argument list too long"). Its commands drop a hook's `GIT_INDEX_FILE` (`_own_git_environment`)
-and respect a submodule's `ignore` setting (`--ignore-submodules=none` fails on a broken submodule).
+`changed_files` names missing paths, and files outside the root arrive absolute. git reports a change inside a
+submodule by its path, a directory: `api._directories_as_packages` reads each changed directory as its `__init__.py`
+changed (`package_members`, `link_changed_files`), never running git inside it — coarse, and blind to non-Python
+files there (`--impacted-invalidate-all 'vendor/**'`), chosen over 180 lines diffing inside submodules.
 
 **`canonical_root()` is the single origin for every path.** Discovery, graph building and the conftest walk
 resolve against `root_dir` (the plugin passes `config.rootpath`), never the CWD (from a subdirectory nothing
