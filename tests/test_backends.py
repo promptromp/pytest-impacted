@@ -163,25 +163,10 @@ def test_the_rust_backend_leaves_every_file_out_without_an_extension_that_can(mo
     assert RUST.imports_by_name(SOURCES) == [None, None, None]
 
 
-def test_a_backend_of_the_caller_s_has_python_behind_it(tmp_path):
-    """A backend may leave a file out (``None``); handed to ``build_dep_tree``, the file is still read."""
-    write_files(
-        tmp_path,
-        {"app/__init__.py": "", "app/a.py": "import app.b\n", "app/b.py": "", "tests/test_a.py": "import app.a\n"},
-    )
-    leaves_all_out = Recording(reads=set())
-
-    dep_tree = graph.build_dep_tree("app", tests_package="tests", root_dir=tmp_path, backend=leaves_all_out)
-
-    assert leaves_all_out.asked
-    assert dep_tree.has_edge("app.b", "app.a")
-    assert dep_tree.has_edge("app.a", "tests.test_a")
-
-
 def test_none_asks_for_the_default_and_an_unknown_name_fails_before_git(tmp_path, monkeypatch):
     from pytest_impacted import api  # noqa: PLC0415
 
-    assert backends.resolve_backend(None).name == backend_for().name
+    assert backend_for(requested=None).name == backend_for().name
     asked_git = []
     monkeypatch.setattr(api, "find_impacted_files_in_repo", lambda *a, **k: asked_git.append(a) or [])
     with pytest.raises(ValueError, match="auto, python"):
@@ -223,12 +208,3 @@ def test_an_empty_choice_setting_is_its_default_in_the_header_too(pytester):
     header = pytest_report_header(pytester.parseconfig("--impacted"))[0]
 
     assert "impacted_backend=auto" in header and "impacted_git_mode=unstaged" in header
-
-
-def test_a_backend_of_the_caller_s_need_not_name_itself():
-    class Nameless:
-        imports = Recording.imports
-        imports_by_name = Recording.imports_by_name
-
-    assert WithFallback(Nameless(), PYTHON).name == "Nameless"
-    assert backends.resolve_backend(PYTHON) is PYTHON

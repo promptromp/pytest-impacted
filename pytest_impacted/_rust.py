@@ -6,11 +6,14 @@ pure-Python implementation (the standard library's ``ast``) is used as a fallbac
 """
 
 __all__ = [
+    "PYTHON_LABEL",
     "RUST_AVAILABLE",
+    "RUST_LABEL",
     "RUST_PARSES_DYNAMIC_IMPORTS",
     "RUST_PARSES_EACH",
     "RUST_SPLITS_TYPE_ONLY",
     "outdated_for",
+    "parses_with_rust",
     "rust_parse_all_dynamic_imports",
     "rust_parse_all_imports",
     "rust_parse_all_imports_split",
@@ -79,6 +82,18 @@ def takes(*texts: str) -> bool:
 def uses_rust(ignore_type_checking_imports: bool = False) -> bool:
     """Whether the Rust extension parses with these options: installed, and new enough for them."""
     return RUST_AVAILABLE and (RUST_SPLITS_TYPE_ONLY or not ignore_type_checking_imports)
+
+
+#: How the report header names each backend (``backend=``): here, not in ``backends``, as the header is written on
+#: every run and must not load the parsers.
+RUST_LABEL = "rust (ruff parser + rayon)"
+PYTHON_LABEL = "python (ast)"
+
+
+def parses_with_rust(ignore_type_checking_imports: bool = False, requested: str = "auto") -> bool:
+    """Whether a run parses with the extension: :func:`uses_rust`, unless ``--impacted-backend=python`` asks for
+    Python (``backends.backend_for`` and the report header both decide here)."""
+    return requested != "python" and uses_rust(ignore_type_checking_imports)
 
 
 def outdated_for(ignore_type_checking_imports: bool) -> str | None:
