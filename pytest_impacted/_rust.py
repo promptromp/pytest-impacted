@@ -6,11 +6,14 @@ pure-Python implementation (the standard library's ``ast``) is used as a fallbac
 """
 
 __all__ = [
+    "PYTHON_LABEL",
     "RUST_AVAILABLE",
+    "RUST_LABEL",
     "RUST_PARSES_DYNAMIC_IMPORTS",
     "RUST_PARSES_EACH",
     "RUST_SPLITS_TYPE_ONLY",
     "outdated_for",
+    "parses_with_rust",
     "rust_parse_all_dynamic_imports",
     "rust_parse_all_imports",
     "rust_parse_all_imports_split",
