@@ -10,7 +10,7 @@ from typing import NamedTuple
 
 import networkx as nx
 
-from pytest_impacted.backends import Backend, Source, resolve_backend
+from pytest_impacted.backends import Backend, Source, backend_for
 from pytest_impacted.dynamic_imports import DynamicImports
 from pytest_impacted.graph_keys import AssumedRoot, Edge, Graph, Node
 from pytest_impacted.parsing import (
@@ -928,7 +928,7 @@ def build_dep_tree(
     root_dir: str | Path | None = None,
     pythonpath: str | Path | Iterable[str | Path] = (),
     ignore_type_checking_imports: bool = False,
-    backend: str | Backend = "auto",
+    backend: str | None = "auto",
 ) -> nx.DiGraph:
     """Build a dependency tree using filesystem discovery (no imports).
 
@@ -983,7 +983,7 @@ def build_dep_tree(
 
     # Only application code loses its type-only imports, and not a package's __init__.py (see _narrowed_files).
     narrowed = _narrowed_files(package, tests_package, root) if ignore_type_checking_imports else frozenset()
-    parser = resolve_backend(backend, ignore_type_checking_imports)
+    parser = backend_for(ignore_type_checking_imports, backend)
     imports, plugin_edges = _parse_project(linker, parser, ignore_type_checking_imports, narrowed)
 
     digraph = nx.DiGraph()

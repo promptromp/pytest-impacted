@@ -248,12 +248,11 @@ def _handoff(session: pytest.Session, config: Config) -> _Handoff | None:
 
 def _backend(ignore_type_checking_imports: bool, requested: str) -> str:
     """The parser the analysis uses, for the report header, which pytest writes on every run, ``--impacted`` or not:
-    decided from ``_rust``'s flags, as ``backends.backend_for`` decides, without loading the parsers that module
-    imports (``test_plugin`` holds the two to the same answer). An invalid *requested* is validate_config's."""
+    decided in ``_rust``, as ``backends.backend_for`` decides, without loading the parsers. An invalid *requested*
+    is validate_config's."""
     if requested not in OPTIONS_BACKENDS:
         return requested
-    rust = requested != "python" and _rust.uses_rust(ignore_type_checking_imports)
-    return "rust (ruff parser + rayon)" if rust else "python (ast)"
+    return _rust.RUST_LABEL if _rust.parses_with_rust(ignore_type_checking_imports, requested) else _rust.PYTHON_LABEL
 
 
 def _analyse(session: pytest.Session, config: Config) -> list[str] | None:

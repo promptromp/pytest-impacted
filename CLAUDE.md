@@ -60,10 +60,9 @@ for a file it leaves to another (`imports`, `imports_by_name`): `PythonBackend` 
 out what it cannot read or an older extension cannot do, and `WithFallback` is the "extension, then Python for what
 it leaves" rule — never fewer imports than Python. `backend_for` is the one place a run's backend is chosen (the
 extension with Python behind it; Python alone when the extension is absent, too old for the options, or
-`--impacted-backend=python`), and part of the graph cache's key; a backend of the caller's gets Python behind it
-(`resolve_backend`). The report header, written on every run, decides from `_rust`'s flags without loading the
-layer (lazy imports, above); `test_the_header_names_the_backend_the_analysis_chooses` holds it to `backend_for`. Add
-a parser as a backend, never as a branch in `graph.py`.
+`--impacted-backend=python`), by name only, and part of the graph cache's key. The decision and the backends' names
+are `_rust.parses_with_rust` and its labels, which the report header (written on every run, without loading the
+layer: lazy imports, above) reads too. Add a parser as a backend, never as a branch in `graph.py`.
 
 **`discover_submodules(..., require_init=)` has two distinct modes.** `True` walks an importable package:
 `pkgutil.iter_modules`, a non-package prefix like `src/` dropped, plus the package's own `__init__.py` (`pkgutil`

@@ -12,7 +12,7 @@ from typing import Any
 
 import networkx as nx
 
-from pytest_impacted.backends import resolve_backend
+from pytest_impacted.backends import backend_for
 from pytest_impacted.display import notify, warn
 from pytest_impacted.extensions import StrategyProtocol, load_extensions
 from pytest_impacted.file_map import map_changed_files
@@ -212,7 +212,7 @@ def get_impacted_tests(
     git_mode = impacted_git_mode
     base_branch = impacted_base_branch
     ns_module = normalized_module(ns_module)  # ``./app/`` names ``app``: the analysis reads dots as separators
-    resolve_backend(backend, ignore_type_checking_imports)  # an unknown name fails here, before git runs
+    backend_for(ignore_type_checking_imports, backend)  # an unknown name fails here, before git runs
     # Each run analyses the project as it is now: an earlier run in this process (``pytest.main`` again, an IDE
     # runner, a watch tool) built its graph and listings before files were edited, added or committed.
     clear_dep_tree_cache()
