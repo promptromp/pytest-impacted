@@ -85,7 +85,7 @@ class _Handoff:
 # The controller's handoff, or None for none: each worker then analyses for itself.
 _HANDOFF = StashKey[_Handoff | None]()
 # The items this plugin judged not impacted, for pytest_deselect_unimpacted to deselect, and those no analysis
-# judged (outside the analysed directories), for it to count once -k and -m have filtered.
+# judged (see _unjudged_items), for it to count once -k and -m have filtered.
 _UNIMPACTED_ITEMS = StashKey[set[pytest.Item]]()
 _UNJUDGED_ITEMS = StashKey[set[pytest.Item]]()
 
@@ -528,9 +528,9 @@ def pytest_terminal_summary(terminalreporter, config: Config) -> None:
         terminalreporter.write_line(
             f"pytest-impacted: {unjudged} {tests} that no analysis judges ran: in files outside --impacted-module and "
             "--impacted-tests-dir, or not known as test modules (collected by a python_files pattern though named "
-            "neither test_*.py nor *_test.py outside a tests directory, or under a directory whose name is no "
-            "identifier). Point --impacted-tests-dir at a directory holding them, or rename them, to select among "
-            "them.",
+            "neither test_*.py nor *_test.py and outside any tests directory, or under a directory whose name is no "
+            "identifier). Point --impacted-tests-dir at a directory holding them, or rename or move such files or "
+            "directories, to select among them.",
             yellow=True,
         )
     # pytest leaves the report header out under -q and --no-header; a warning it carries is said here instead.
