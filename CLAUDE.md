@@ -262,8 +262,8 @@ always run, even when nothing is impacted: from non-Python files (`--doctest-glo
 `DoctestItem`s, Python test files outside both analysed directories (no node, as nothing imports a test), and
 tests in a file the walks do not name as a test module (a `python_files` pattern, a non-identifier directory):
 `plugin._unjudged_items` judges an item only when its file is one of `_known_tests` (discovery, no parsing), which
-the controller hands pytest-xdist workers with the impacted files. The two Python kinds are each counted in the summary
-(via `workeroutput`).
+the controller hands pytest-xdist workers with the impacted files. The two Python kinds are counted together, on one
+summary line (via `workeroutput`).
 
 **Unselected items are deselected, unless `--impacted-unimpacted=skip`.** A run emptied by this plugin's
 deselection turns pytest's exit 5 into 0 in `pytest_sessionfinish` (a docs-only commit must pass, as must a shard
