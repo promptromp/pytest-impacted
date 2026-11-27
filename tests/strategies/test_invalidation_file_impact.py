@@ -181,7 +181,7 @@ class TestParseInvalidationPatterns:
 
     def test_the_platform_separator_is_git_s(self, monkeypatch):
         """On Windows ``config\\**`` is what a user types for ``config/**``, which is how git spells the path."""
-        monkeypatch.setattr("pytest_impacted.strategies._SEP", "\\")
+        monkeypatch.setattr("pytest_impacted.globs._SEP", "\\")
 
         assert parse_invalidation_patterns(["config\\**\\*.yaml"]) == ("config/**/*.yaml",)
 
@@ -205,6 +205,6 @@ class TestParseInvalidationPatterns:
             parse_invalidation_patterns(["."], "impacted_invalidate_all in pyproject.toml")
 
     def test_the_strategy_reads_its_globs_so(self, monkeypatch):
-        monkeypatch.setattr("pytest_impacted.strategies._SEP", "\\")
+        monkeypatch.setattr("pytest_impacted.globs._SEP", "\\")
 
         assert InvalidationFileImpactStrategy(["config\\x.json"]).patterns == ("config/x.json",)

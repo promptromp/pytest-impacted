@@ -52,7 +52,7 @@ def _lazily(name: str) -> Callable[[], ModuleType]:
 _api = _lazily("pytest_impacted.api")
 _file_map = _lazily("pytest_impacted.file_map")
 _git = _lazily("pytest_impacted.git")
-_strategies = _lazily("pytest_impacted.strategies")
+_globs = _lazily("pytest_impacted.globs")
 _parsing = _lazily("pytest_impacted.parsing")
 _traversal = _lazily("pytest_impacted.traversal")
 _validation = _lazily("pytest_impacted.validation")
@@ -609,7 +609,7 @@ def validate_config(config: Config):
         # Named where the globs came from: the option given, else the setting and its file.
         given = config.getoption("impacted_invalidate_all", default=None)
         source = "--impacted-invalidate-all" if given else f"impacted_invalidate_all in {config.inipath}"
-        _strategies().parse_invalidation_patterns(get_option("impacted_invalidate_all") or [], source)
+        _globs().parse_invalidation_patterns(get_option("impacted_invalidate_all") or [], source)
         check_ext_config(disabled=get_option("impacted_disable_ext") or [], ext_config=_collect_ext_config(config))
     except ValueError as err:
         raise UsageError(str(err)) from err
