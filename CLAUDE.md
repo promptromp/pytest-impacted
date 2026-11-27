@@ -166,8 +166,8 @@ discovered modules.
 
 **`api.get_impacted_tests` copies the dependency graph before enrichment** (`cached_build_dep_tree → run_copy →
 link_changed_files → resolve_files_to_nodes → enrich_dep_tree → package_members → setup → find_impacted_tests →
-teardown`): otherwise extension enrichment pollutes the LRU-cached base graph for the next run in the
-process. `run_copy`, not `DiGraph.copy()`, which shares graph-level values such as `graph["aliases"]`; `teardown`
+teardown`): otherwise enrichment leaks into the cached graph every other `cached_build_dep_tree` caller of the
+run reads. `run_copy`, not `DiGraph.copy()`, which shares graph-level values such as `graph["aliases"]`; `teardown`
 runs in a `finally`. Changed files and impacted test modules resolve through the graph's node `path`s, not a second
 discovery: a changed module the cached graph lacks would read as production code outside it, and
 `resolve_impacted_tests` would select every test.
@@ -179,8 +179,10 @@ decide — which is why `DependencyFileImpactStrategy` (non-Python files) needs 
 **The dependency graph is built once** and passed to every strategy as a required keyword-only `dep_tree`. Both
 caches sit on *private* inner functions (`_cached_build_dep_tree`, maxsize=8; `_discover_submodules`) because the
 public wrappers canonicalize `root_dir` first. `clear_dep_tree_cache()` clears both (via
-`traversal.clear_discovery_cache()`); `discover_submodules.cache_clear` is a back-compat alias. Every
-`build_dep_tree` drops cached directory listings (`forget_listings`), so a long-lived process sees new files.
+`traversal.clear_discovery_cache()`); `discover_submodules.cache_clear` is a back-compat alias. Both last one run:
+`get_impacted_tests` clears them as it starts, so a second `pytest.main` in one process sees what was edited,
+added or committed since the first; within a run they serve the strategies and extensions. Every `build_dep_tree`
+drops cached directory listings (`forget_listings`) too, for its own callers.
 
 **Every revision passed to the git CLI goes through `git.rev_args()`** — never hand a ref straight to
 `repo.git.<cmd>(...)`. It validates each ref (`validate_rev`, rejecting option-like values) *and* prefixes

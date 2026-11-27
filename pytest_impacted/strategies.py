@@ -189,9 +189,9 @@ def _cached_build_dep_tree(
     """Cached graph construction, keyed on the canonical *root*, the resolved *pythonpath* and the options.
 
     Note:
-        maxsize=8 keeps recent dependency trees without unbounded growth. The
-        common case is the same ns_module/tests_package/root used repeatedly
-        across runs in one process (in-process ``pytest.main``, pytester).
+        A run's graph, for its strategies and extensions: ``get_impacted_tests`` clears the cache as it starts,
+        so a later run in the process (``pytest.main`` again, pytester) never sees the files as an earlier one
+        found them. maxsize=8 bounds what calls with other options keep within a run.
     """
     return build_dep_tree(
         ns_module,
@@ -224,8 +224,8 @@ def cached_build_dep_tree(
         backend: Which parser reads the imports (see :mod:`pytest_impacted.backends`): ``auto`` or ``python``.
 
     Returns:
-        NetworkX dependency graph. Do not mutate it — it is shared between
-        runs; callers take a :func:`run_copy`.
+        NetworkX dependency graph. Do not mutate it — it is shared by every
+        caller until the next run clears the cache; callers take a :func:`run_copy`.
 
     Note:
         The root is canonicalized *before* the cache lookup, so the default
