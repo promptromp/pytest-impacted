@@ -409,8 +409,9 @@ rather than skip.
 
 `strategies.py` defines `ImpactStrategy` (ABC) and: `ASTImpactStrategy`; `PytestImpactStrategy` (a conftest edited
 or importing changed *test* code impacts every test in its directory and below — tests never import their conftest,
-so import analysis cannot see it; a test package's `__init__.py`, which every test beneath runs first, is one for this
-and the opt-in rule, never an application package's: `_setup_files`); `ConftestImportImpactStrategy` (the same for changed *application* code, per
+so import analysis cannot see it; so is a test package's `__init__.py`, which pytest runs before every test beneath
+it, for this and the opt-in rule — only the tests walk's, never an application package's nor an `external` one, both
+facades: `_setup_files`); `ConftestImportImpactStrategy` (the same for changed *application* code, per
 `traversal.discover_application_files`: the `--impacted-module` walk less the `--impacted-tests-dir` walk,
 conftests excluded — by discovery, never by path, which a symlinked subpackage resolves elsewhere; in the default
 pipeline but `report_only` unless `--impacted-conftest-imports`, since with a root conftest importing the app

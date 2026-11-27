@@ -343,17 +343,23 @@ def _test_modules_under(directories: set[Path], dep_tree: nx.DiGraph, root_dir: 
 def _setup_files(nodes: Iterable[str], dep_tree: nx.DiGraph, root_dir: Path, roles: _CodeRoles) -> set[Path]:
     """The files among *nodes* that run before every test beneath them, which no test names.
 
-    Conftests, and test packages' ``__init__.py``: pytest's default import mode imports ``suite/db/test_x.py`` as
-    ``suite.db.test_x``, running ``suite/__init__.py`` and ``suite/db/__init__.py`` first. Not an application
-    package's: its imports reach the tests importing them (and a changed one, its whole package: ``package_members``),
-    or every import of the package would depend on all it imports.
+    Conftests, and test packages' ``__init__.py``: pytest imports ``suite/db/test_x.py`` as ``suite.db.test_x``,
+    running ``suite/__init__.py`` and ``suite/db/__init__.py`` first. Only those a walk found that are not application
+    code: the tests directory's. Not an application package's: its imports reach the tests importing them (and a
+    changed one, its whole package: ``package_members``), or every import of the package would depend on all it
+    imports. Nor one only found by import (``external``): a library's, or a package holding the analysed one
+    (``app/__init__.py`` above ``--impacted-module=app/core``), as much a facade.
     """
     files = set()
     for node in nodes:
         if not isinstance(node, str) or (path := _module_path(node, dep_tree, root_dir)) is None:
             continue
         # The file name decides, as for changed files, so a package named ``conftest`` is not one.
-        if path.name == "conftest.py" or (is_package_file(str(path)) and not roles.is_application_code(path)):
+        if path.name == "conftest.py" or (
+            is_package_file(str(path))
+            and not dep_tree.nodes[node].get(Node.EXTERNAL)
+            and not roles.is_application_code(path)
+        ):
             files.add(path)
     return files
 
