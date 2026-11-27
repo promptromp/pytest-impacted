@@ -180,6 +180,7 @@ def test_doctests_in_a_changed_source_module_run(make_git_project):
 
 # --- tests outside the analysed directories -----------------------------------------
 
+UNJUDGED = "pytest-impacted: 1 test that no analysis judges ran*"
 TWO_TEST_DIRS = {
     "app/__init__.py": "",
     "app/a.py": "def a():\n    return 1\n",
@@ -219,7 +220,7 @@ def test_a_test_no_analysis_judges_runs_and_is_counted(make_git_project, ini, ed
         assert_selected(result, passed=passed, deselected=deselected)
     unjudged = 1 if "impacted_tests_dir" in ini else 3
     expected = "test" if unjudged == 1 else "tests"
-    result.stdout.fnmatch_lines([f"pytest-impacted: {unjudged} {expected} outside --impacted-module and *"])
+    result.stdout.fnmatch_lines([f"pytest-impacted: {unjudged} {expected} that no analysis judges ran*"])
 
 
 def test_the_count_is_of_the_unjudged_tests_that_ran(make_git_project):
@@ -230,7 +231,7 @@ def test_the_count_is_of_the_unjudged_tests_that_ran(make_git_project):
     result = run(project, "-k", "flow or test_a")
 
     assert_selected(result, passed=["test_a.py", "test_flow.py"], deselected=["test_b.py", "test_other.py"])
-    result.stdout.fnmatch_lines(["pytest-impacted: 1 test outside --impacted-module and *"])
+    result.stdout.fnmatch_lines([UNJUDGED])
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink") or sys.platform == "win32", reason="needs symlinks")
@@ -250,7 +251,7 @@ def test_a_test_reached_through_a_symlink_inside_the_package_is_judged(make_git_
 
     result = run(project, "app")
 
-    assert "outside --impacted-module" not in result.stdout.str()
+    assert "no analysis judges" not in result.stdout.str()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
@@ -266,7 +267,7 @@ def test_a_test_reached_through_a_link_out_of_the_project_runs(make_git_project,
     result = run(project, "suite")
 
     result.assert_outcomes(passed=2, deselected=1)
-    result.stdout.fnmatch_lines(["*test_far.py::test_far PASSED*", "pytest-impacted: 1 test outside *"])
+    result.stdout.fnmatch_lines(["*test_far.py::test_far PASSED*", UNJUDGED])
 
 
 @pytest.mark.parametrize(
@@ -286,10 +287,7 @@ def test_the_spellings_the_settings_accept_judge_the_tests_they_name(make_git_pr
     result = run(project, f"--impacted-module={module}", f"--impacted-tests-dir={tests_dir}")
 
     result.assert_outcomes(passed=1, deselected=1)
-    assert "outside --impacted-module" not in result.stdout.str()
-
-
-UNNAMED = "pytest-impacted: 1 test in files no analysis names as test modules ran*"
+    assert "no analysis judges" not in result.stdout.str()
 
 
 @pytest.mark.parametrize("workers", [[], ["-n", "2"]], ids=["serial", "xdist"])
@@ -308,9 +306,26 @@ def test_a_test_a_python_files_pattern_collects_runs_unjudged(make_git_project, 
 
     result.assert_outcomes(passed=2, deselected=0 if workers else 1)  # xdist's summary leaves deselection out
     result.stdout.fnmatch_lines_random(
-        ["*test_b.py::test_b*", "*check_db.py::test_db*", "pytest-impacted: 1 test not impacted*", UNNAMED]
+        ["*test_b.py::test_b*", "*check_db.py::test_db*", "pytest-impacted: 1 test not impacted*", UNJUDGED]
     )
     result.stdout.no_fnmatch_line("*test_a.py::test_a*")
+
+
+@pytest.mark.parametrize("workers", [[], ["-n", "2"]], ids=["serial", "xdist"])
+def test_both_kinds_of_unjudged_test_are_one_count(make_git_project, workers):
+    """A test outside the analysed directories and one no walk names as a test module: one line, their sum (each
+    pytest-xdist worker reports one count)."""
+    if workers:
+        pytest.importorskip("xdist")
+    files = {**TWO_TEST_DIRS, "suite/check_db.py": "def test_db():\n    assert True\n"}
+    project = make_git_project(files, INI + "python_files = test_*.py check_*.py\n")
+    edit_file(project, "app/b.py")
+
+    result = run(project, "suite", "integration", *workers)
+
+    result.assert_outcomes(passed=3, deselected=0 if workers else 1)
+    result.stdout.fnmatch_lines(["pytest-impacted: 2 tests that no analysis judges ran*"])
+    assert result.stdout.str().count("no analysis judges") == 1
 
 
 def test_a_test_in_a_directory_no_walk_enters_runs_unjudged(make_git_project):
@@ -329,7 +344,7 @@ def test_a_test_in_a_directory_no_walk_enters_runs_unjudged(make_git_project):
     result = run(project)
 
     result.assert_outcomes(passed=1, deselected=1)
-    result.stdout.fnmatch_lines(["*my-dir/test_x.py::test_x PASSED*", UNNAMED])
+    result.stdout.fnmatch_lines(["*my-dir/test_x.py::test_x PASSED*", UNJUDGED])
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
