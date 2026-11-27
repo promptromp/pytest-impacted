@@ -6,8 +6,11 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 
+mod bodies;
 mod dynamic_imports;
 mod type_only;
+
+use bodies::{for_each_body, Bodies};
 
 /// The stack of each thread a batch runs on. Freeing a parsed tree recurses down an expression's left spine
 /// (`a + b + ...`, `x.a.b...`, `f()()...`: ruff parses those in a loop, so its nesting limit does not apply),
@@ -191,7 +194,7 @@ impl Walk<'_> {
 /// Recursively collect import statements from a list of statements.
 ///
 /// Python imports can appear inside if/try/with/for/while/match/function/class bodies,
-/// so we must recurse into all compound statement bodies.
+/// so we must recurse into all compound statement bodies (`Bodies::All`).
 fn collect_imports_from_stmts(stmts: &[Stmt], walk: &mut Walk) {
     for stmt in stmts {
         match stmt {
@@ -200,45 +203,9 @@ fn collect_imports_from_stmts(stmts: &[Stmt], walk: &mut Walk) {
                 let candidates = extract_from_import_from(node, walk.module_name, walk.is_package);
                 walk.add(stmt, candidates);
             }
-            // Recurse into compound statement bodies
-            Stmt::If(node) => {
-                collect_imports_from_stmts(&node.body, walk);
-                for clause in &node.elif_else_clauses {
-                    collect_imports_from_stmts(&clause.body, walk);
-                }
-            }
-            Stmt::Try(node) => {
-                collect_imports_from_stmts(&node.body, walk);
-                for handler in &node.handlers {
-                    let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
-                    collect_imports_from_stmts(&h.body, walk);
-                }
-                collect_imports_from_stmts(&node.orelse, walk);
-                collect_imports_from_stmts(&node.finalbody, walk);
-            }
-            Stmt::With(node) => {
-                collect_imports_from_stmts(&node.body, walk);
-            }
-            Stmt::For(node) => {
-                collect_imports_from_stmts(&node.body, walk);
-                collect_imports_from_stmts(&node.orelse, walk);
-            }
-            Stmt::While(node) => {
-                collect_imports_from_stmts(&node.body, walk);
-                collect_imports_from_stmts(&node.orelse, walk);
-            }
-            Stmt::FunctionDef(node) => {
-                collect_imports_from_stmts(&node.body, walk);
-            }
-            Stmt::ClassDef(node) => {
-                collect_imports_from_stmts(&node.body, walk);
-            }
-            Stmt::Match(node) => {
-                for case in &node.cases {
-                    collect_imports_from_stmts(&case.body, walk);
-                }
-            }
-            _ => {}
+            _ => for_each_body(stmt, Bodies::All, &mut |body| {
+                collect_imports_from_stmts(body, walk);
+            }),
         }
     }
 }

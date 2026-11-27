@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{Alias, Expr, ExprContext, Stmt};
 
+use crate::bodies::{for_each_body, Bodies};
 use crate::dynamic_imports::DEEPEST;
 
 /// The addresses (see `address`) of the import statements in `suite` whose names only annotations use.
@@ -100,38 +101,9 @@ fn module_names(suite: &[Stmt]) -> HashSet<String> {
 fn for_module_level<'a, F: FnMut(&'a Stmt)>(stmts: &'a [Stmt], f: &mut F) {
     for stmt in stmts {
         f(stmt);
-        match stmt {
-            Stmt::If(node) => {
-                for_module_level(&node.body, f);
-                for clause in &node.elif_else_clauses {
-                    for_module_level(&clause.body, f);
-                }
-            }
-            Stmt::Try(node) => {
-                for_module_level(&node.body, f);
-                for handler in &node.handlers {
-                    let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
-                    for_module_level(&h.body, f);
-                }
-                for_module_level(&node.orelse, f);
-                for_module_level(&node.finalbody, f);
-            }
-            Stmt::With(node) => for_module_level(&node.body, f),
-            Stmt::For(node) => {
-                for_module_level(&node.body, f);
-                for_module_level(&node.orelse, f);
-            }
-            Stmt::While(node) => {
-                for_module_level(&node.body, f);
-                for_module_level(&node.orelse, f);
-            }
-            Stmt::Match(node) => {
-                for case in &node.cases {
-                    for_module_level(&case.body, f);
-                }
-            }
-            _ => {}
-        }
+        for_each_body(stmt, Bodies::ModuleLevel, &mut |body| {
+            for_module_level(body, f);
+        });
     }
 }
 
